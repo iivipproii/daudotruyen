@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import React, { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import './styles.css';
@@ -348,10 +348,12 @@ function PublicHeaderEnhanced() {
   const [open, setOpen] = useState(false);
   const [categoryOpen, setCategoryOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('all');
   const [keyword, setKeyword] = useState('');
   const [categories, setCategories] = useState([]);
   const [allStories, setAllStories] = useState([]);
+  const profileMenuRef = useRef(null);
 
   const normalizeText = value =>
     String(value || '')
@@ -376,10 +378,21 @@ function PublicHeaderEnhanced() {
       if (event.key === 'Escape') {
         setCategoryOpen(false);
         setSearchOpen(false);
+        setProfileOpen(false);
       }
     };
     window.addEventListener('keydown', closeByEsc);
     return () => window.removeEventListener('keydown', closeByEsc);
+  }, []);
+
+  useEffect(() => {
+    const closeByOutsideClick = event => {
+      if (!profileMenuRef.current?.contains(event.target)) {
+        setProfileOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', closeByOutsideClick);
+    return () => document.removeEventListener('mousedown', closeByOutsideClick);
   }, []);
 
   const authors = useMemo(() => Array.from(new Set(allStories.map(story => story.author).filter(Boolean))).sort(), [allStories]);
@@ -408,6 +421,7 @@ function PublicHeaderEnhanced() {
   const closeMenu = () => {
     setOpen(false);
     setCategoryOpen(false);
+    setProfileOpen(false);
   };
 
   const handleTopNavClick = () => {
@@ -456,6 +470,16 @@ function PublicHeaderEnhanced() {
     closeSearch();
     navigate(`/truyen/${story.slug}`);
   };
+
+  const profileMenuItems = [
+    { icon: '◉', label: 'Hồ sơ cá nhân', to: '/ho-so' },
+    { icon: '▰', label: 'Tủ truyện', to: '/bookmarks' },
+    { icon: '◒', label: 'Đăng truyện mới', to: '/dang-truyen', adminOnly: true },
+    { icon: '▣', label: 'Quản lý truyện', to: '/admin', adminOnly: true },
+    { icon: '▭', label: 'Ví của tôi', to: '/vi-hat' },
+    { icon: '♜', label: 'Bảng xếp hạng', to: '/xep-hang' },
+    { icon: '□', label: 'Mời bạn bè', to: '/ho-so' }
+  ].filter(item => !item.adminOnly || user?.role === 'admin');
 
   const handleEnterSearch = event => {
     if (event.key !== 'Enter') return;
@@ -569,10 +593,47 @@ function PublicHeaderEnhanced() {
             {user ? (
               <>
                 <Link to="/bookmarks" className="dd-icon-btn" onClick={closeMenu}>♡</Link>
-                <Link to="/ho-so" className="dd-avatar" onClick={closeMenu}>
-                  <img src={user.avatar || '/images/logo.png'} alt={user.name} />
-                </Link>
-                <button onClick={() => { logout(); closeMenu(); }} className="dd-logout">Thoát</button>
+                <div className="dd-profile-menu-wrap" ref={profileMenuRef}>
+                  <button
+                    type="button"
+                    className={profileOpen ? 'dd-avatar active' : 'dd-avatar'}
+                    onClick={() => setProfileOpen(value => !value)}
+                    aria-label="Mở menu tài khoản"
+                    aria-expanded={profileOpen}
+                    aria-haspopup="menu"
+                  >
+                    <img src={user.avatar || '/images/logo.png'} alt={user.name} />
+                  </button>
+                  {profileOpen && (
+                    <div className="dd-profile-menu">
+                      <div className="dd-profile-card">
+                        <img src={user.avatar || '/images/logo.png'} alt={user.name} />
+                        <div>
+                          <strong>{user.name || 'Độc giả'}</strong>
+                          <div className="dd-profile-meta">
+                            <span>☁ {formatNumber(user.seeds || 0)} hạt</span>
+                            <span>★ Lv.{user.level || 1}</span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="dd-profile-list">
+                        {profileMenuItems.map(({ icon, label, to }) => (
+                          <Link key={label} to={to} onClick={closeMenu}>
+                            <span>{icon}</span>
+                            <strong>{label}</strong>
+                          </Link>
+                        ))}
+                      </div>
+                      <div className="dd-profile-list dd-profile-footer-list">
+                        <Link to="/ho-so" onClick={closeMenu}><span>⚙</span><strong>Cài đặt</strong></Link>
+                        <button type="button" onClick={() => { logout(); closeMenu(); }}>
+                          <span>↵</span>
+                          <strong>Đăng xuất</strong>
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </>
             ) : (
               <Link to="/dang-nhap" className="dd-login-box" onClick={closeMenu}>
