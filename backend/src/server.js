@@ -621,19 +621,23 @@ async function handle(req, res) {
       if (!user) return;
       const body = await parseBody(req);
       const packs = {
-        'seed-10': 10,
-        'seed-20': 22,
-        'seed-50': 58,
-        'seed-100': 120,
-        'seed-200': 250,
-        'seed-500': 650
+        'seed-10': { seeds: 10, bonus: 0, price: 10000 },
+        'seed-20': { seeds: 20, bonus: 2, price: 20000 },
+        'seed-50': { seeds: 50, bonus: 8, price: 50000 },
+        'seed-100': { seeds: 100, bonus: 20, price: 100000 },
+        'seed-200': { seeds: 200, bonus: 50, price: 200000 },
+        'seed-500': { seeds: 500, bonus: 150, price: 500000 }
       };
-      const seeds = packs[body.packageId];
-      if (!seeds) return badRequest(res, 'Gói nạp không hợp lệ.');
-      user.seeds += seeds;
-      db.transactions.push({ id: uid('txn'), userId: user.id, type: 'topup', amount: seeds, note: `Nạp ${seeds} Đậu`, createdAt: now() });
+      const pack = packs[body.packageId];
+      if (!pack) return badRequest(res, 'Gói nạp không hợp lệ.');
+      const method = String(body.method || 'Thanh toán').trim().slice(0, 40);
+      const amount = pack.seeds + pack.bonus;
+      user.seeds += amount;
+      db.transactions.push({ id: uid('txn'), userId: user.id, type: 'topup', amount: pack.seeds, note: `Nạp ${pack.seeds} Đậu qua ${method}`, price: pack.price, method, createdAt: now() });
+      if (pack.bonus > 0) db.transactions.push({ id: uid('txn'), userId: user.id, type: 'bonus', amount: pack.bonus, note: `Thưởng gói nạp ${body.packageId}`, price: 0, method, createdAt: now() });
+      db.notifications.push({ id: uid('noti'), userId: user.id, type: 'wallet', title: 'Nạp Đậu thành công', body: `Bạn đã nhận ${amount} Đậu qua ${method}.`, read: false, createdAt: now() });
       writeDb(db);
-      return send(res, 200, { user: safeUser(user), balance: user.seeds });
+      return send(res, 200, { user: safeUser(user), balance: user.seeds, amount });
     }
 
     const unlockParams = match(pathname, '/api/chapters/:id/unlock');
