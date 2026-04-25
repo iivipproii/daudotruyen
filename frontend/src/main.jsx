@@ -273,7 +273,7 @@ function PublicHeader() {
       <div className="userbar">
         {user ? (
           <>
-            <Link to="/ho-so" className="pill">🌱 {user.seeds} Hạt</Link>
+            <Link to="/ho-so" className="pill">🌱 {user.seeds} Đậu</Link>
             {user.role === 'admin' && <Link to="/dang-truyen" className="pill admin-pill">Đăng truyện</Link>}
             {user.role === 'admin' && <Link to="/admin" className="pill admin-pill">Admin</Link>}
             <button onClick={logout} className="ghost">Thoát</button>
@@ -288,7 +288,7 @@ function PublicHeader() {
 
 
 function Footer() {
-  const readerLinks = ['Trang chủ', 'Danh sách truyện', 'Thể loại', 'Bảng xếp hạng', 'Truyện ngắn', 'Hoàn thành', 'Ví Hạt Đậu'];
+  const readerLinks = ['Trang chủ', 'Danh sách truyện', 'Thể loại', 'Bảng xếp hạng', 'Truyện ngắn', 'Hoàn thành', 'Ví Đậu'];
   const authorLinks = ['Khu vực tác giả', 'Đăng truyện mới', 'Quản lý truyện', 'Thống kê doanh thu', 'AI Tools Beta', 'Vinh danh dịch giả'];
   const supportLinks = ['Liên hệ', 'Phản hồi / Báo lỗi', 'Câu hỏi thường gặp', 'Điều khoản sử dụng', 'Chính sách bảo mật', 'Xóa dữ liệu', 'Quy định nội dung'];
 
@@ -611,7 +611,7 @@ function PublicHeaderEnhanced() {
                         <div>
                           <strong>{user.name || 'Độc giả'}</strong>
                           <div className="dd-profile-meta">
-                            <span>☁ {formatNumber(user.seeds || 0)} hạt</span>
+                            <span>☁ {formatNumber(user.seeds || 0)} Đậu</span>
                             <span>★ Lv.{user.level || 1}</span>
                           </div>
                         </div>
@@ -833,7 +833,7 @@ function HomePremiumBlock({ stories }) {
   if (!stories.length) return null;
   return (
     <section className="section premium-home">
-      <div className="section-head"><div><SectionKicker>Premium</SectionKicker><h2>Truyện Trả Phí</h2><p>Mua từng chương hoặc combo trọn bộ — không cần đăng ký gói</p></div><Link to="/vi-hat" className="small-link">Nạp Hạt Đậu ➜</Link></div>
+      <div className="section-head"><div><SectionKicker>Premium</SectionKicker><h2>Truyện Trả Phí</h2><p>Mua từng chương hoặc combo trọn bộ — không cần đăng ký gói</p></div><Link to="/vi-hat" className="small-link">Nạp Đậu ➜</Link></div>
       <div className="premium-benefits"><span>📖 Đọc miễn phí chương đầu</span><span>🎁 Mua từng chương</span><span>📦 Combo trọn bộ</span></div>
       <div className="grid stories">{stories.map(story => <StoryCard key={story.id} story={story} />)}</div>
     </section>
@@ -1327,7 +1327,7 @@ function StoryDetail() {
     try {
       const result = await api(`/stories/${data.story.id}/unlock-combo`, { method: 'POST' });
       updateUser(result.user);
-      setNotice(result.price ? `Đã mua combo với ${result.price} Hạt.` : 'Combo đã được mở khóa.');
+      setNotice(result.price ? `Đã mua combo với ${result.price} Đậu.` : 'Combo đã được mở khóa.');
     } catch (err) {
       setError(err.message);
     }
@@ -1353,15 +1353,15 @@ function StoryDetail() {
           <div className="story-author">Tác giả: <Link to={`/tac-gia/${encodeURIComponent(story.author)}`}><strong>{story.author}</strong></Link></div>
           <div className="story-inline-stats"><span>★ {story.rating}/5</span><span>👁 {formatNumber(story.views)} lượt đọc</span><span>▣ {chapters.length} chương</span><span className="green">⦿ {statusLabel(story.status)}</span></div>
           <p className="story-description">{story.description}</p>
-          <div className="purchase-strip"><span>📖 Miễn phí<br /><b>{freeCount} chương đầu</b></span><span>🪙 Mua lẻ<br /><b>{story.price || 1} Hạt/chương</b></span><span>🎁 Combo trọn bộ<br /><b>{Math.max(49, (story.price || 1) * chapters.length)} Hạt</b></span></div>
-          <div className="hero-actions"><Link className="button" to={`/truyen/${story.slug}/chuong/1`}>◎ Đọc từ đầu</Link><button className="button gold" onClick={buyCombo}>🪙 Mua combo {Math.max(49, (story.price || 1) * chapters.length)} Hạt</button><button className="ghost light" onClick={() => toggle('follow')}>{story.followed ? '✓ Đang theo dõi' : '♡ Theo dõi'}</button><button className="ghost light" onClick={() => toggle('bookmark')}>{story.bookmarked ? '✓ Đã lưu' : '🔖 Lưu'}</button><button className="ghost light" onClick={reportStory}>⚑ Báo cáo</button></div>
+          <div className="purchase-strip"><span>📖 Miễn phí<br /><b>{freeCount} chương đầu</b></span><span>🪙 Mua lẻ<br /><b>{story.price || 1} Đậu/chương</b></span><span>🎁 Combo trọn bộ<br /><b>{Math.max(49, (story.price || 1) * chapters.length)} Đậu</b></span></div>
+          <div className="hero-actions"><Link className="button" to={`/truyen/${story.slug}/chuong/1`}>◎ Đọc từ đầu</Link><button className="button gold" onClick={buyCombo}>🪙 Mua combo {Math.max(49, (story.price || 1) * chapters.length)} Đậu</button><button className="ghost light" onClick={() => toggle('follow')}>{story.followed ? '✓ Đang theo dõi' : '♡ Theo dõi'}</button><button className="ghost light" onClick={() => toggle('bookmark')}>{story.bookmarked ? '✓ Đã lưu' : '🔖 Lưu'}</button><button className="ghost light" onClick={reportStory}>⚑ Báo cáo</button></div>
           {notice && <div className="success-box">{notice}</div>}
         </div>
       </section>
 
       <section className="story-section chapter-section-readdy">
         <div className="story-section-head"><h2>▰ Danh sách chương <small>({chapters.length} chương)</small></h2><div className="chapter-tabs"><button className="active">Tất cả</button><button>Miễn phí</button><button>Trả phí</button><button>Mới nhất</button></div></div>
-        <div className="free-note">📚 {freeCount} chương đầu miễn phí — Từ chương {freeCount + 1} trở đi cần <b>{story.price || 1} Hạt Đậu/chương</b></div>
+        <div className="free-note">📚 {freeCount} chương đầu miễn phí — Từ chương {freeCount + 1} trở đi cần <b>{story.price || 1} Đậu/chương</b></div>
         <div className="chapter-grid-readdy">
           {orderedChapters.map(chapter => (
             <Link key={chapter.id} to={`/truyen/${story.slug}/chuong/${chapter.number}`}>
@@ -1386,7 +1386,7 @@ function StoryDetail() {
       </section>
 
       {related.length > 0 && <HomeSection title="Truyện liên quan" subtitle="Các tác phẩm cùng thể loại" kicker="Related" to={`/the-loai/${encodeURIComponent(story.categories[0])}`}><div className="related-list-column">{related.slice(0, 6).map(item => <MiniStoryRow key={item.id} story={item} compact />)}</div></HomeSection>}
-      <div className="combo-banner">Mua combo tiết kiệm hơn! <b>Mở khóa toàn bộ {chapters.length} chương chỉ với {Math.max(49, (story.price || 1) * chapters.length)} Hạt Đậu</b><button onClick={buyCombo}>Mua combo ngay</button></div>
+      <div className="combo-banner">Mua combo tiết kiệm hơn! <b>Mở khóa toàn bộ {chapters.length} chương chỉ với {Math.max(49, (story.price || 1) * chapters.length)} Đậu</b><button onClick={buyCombo}>Mua combo ngay</button></div>
       {related.length > 0 && <HomeSection title="Có thể bạn thích" subtitle="Gợi ý thêm cho bạn" kicker="Suggest"><div className="grid stories">{related.map(item => <StoryCard key={item.id} story={item} />)}</div></HomeSection>}
     </div>
   );
@@ -1605,7 +1605,7 @@ function StaticPage({ type }) {
   const pages = {
     contact: ['Liên hệ', 'Gửi phản hồi, báo lỗi hoặc yêu cầu gỡ nội dung qua email support@daudotruyen.vn. Đội ngũ quản trị sẽ phản hồi trong thời gian sớm nhất.'],
     terms: ['Điều khoản sử dụng', 'Người dùng chịu trách nhiệm với nội dung đăng tải, không đăng nội dung vi phạm bản quyền, pháp luật hoặc gây hại cho cộng đồng. Admin có quyền ẩn hoặc gỡ nội dung khi cần.'],
-    privacy: ['Chính sách bảo mật', 'Đậu Đỏ Truyện lưu thông tin tài khoản, lịch sử đọc và giao dịch Hạt để vận hành dịch vụ demo. Không chia sẻ dữ liệu cá nhân cho bên thứ ba trong phạm vi MVP này.']
+    privacy: ['Chính sách bảo mật', 'Đậu Đỏ Truyện lưu thông tin tài khoản, lịch sử đọc và giao dịch Đậu để vận hành dịch vụ demo. Không chia sẻ dữ liệu cá nhân cho bên thứ ba trong phạm vi MVP này.']
   };
   const [title, body] = pages[type] || pages.contact;
   return (
@@ -1677,11 +1677,221 @@ function AuthForm({ title, submitLabel, form, setForm, onSubmit, error, register
 }
 
 function Profile() {
-  const { user } = useAuth();
+  const { user, updateUser, logout } = useAuth();
+  const navigate = useNavigate();
+  const [form, setForm] = useState(() => ({
+    name: user?.name || '',
+    username: user?.username || user?.id || '',
+    email: user?.email || '',
+    phone: user?.phone || '',
+    birthday: user?.birthday || '',
+    gender: user?.gender || '',
+    address: user?.address || '',
+    website: user?.website || '',
+    bio: user?.bio || '',
+    avatar: user?.avatar || '/images/logo.png',
+    cover: user?.cover || ''
+  }));
+  const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
+  const [prefs, setPrefs] = useState(() => ({
+    emailNotifications: user?.preferences?.emailNotifications ?? true,
+    chapterNotifications: user?.preferences?.chapterNotifications ?? true,
+    commentNotifications: user?.preferences?.commentNotifications ?? true,
+    followNotifications: user?.preferences?.followNotifications ?? true,
+    promoNotifications: user?.preferences?.promoNotifications ?? false,
+    publicReading: user?.preferences?.publicReading ?? true
+  }));
+  const [library, setLibrary] = useState({ bookmarks: [], follows: [], history: [] });
+  const [wallet, setWallet] = useState({ transactions: [] });
+  const [notice, setNotice] = useState('');
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    Promise.all([api('/me/library'), api('/wallet/transactions')])
+      .then(([libraryData, walletData]) => {
+        setLibrary(libraryData);
+        setWallet(walletData);
+      })
+      .catch(err => setError(err.message));
+  }, []);
+
+  const myStories = useMemo(() => {
+    if (user?.role !== 'admin') return [];
+    return [];
+  }, [user?.role]);
+
+  const stats = {
+    stories: myStories.length || (user?.role === 'admin' ? 265 : library.follows.length),
+    chapters: user?.role === 'admin' ? 36600 : library.history.length,
+    followers: library.follows.length || 5,
+    views: user?.role === 'admin' ? 2000000 : library.history.length * 120
+  };
+
+  const showNotice = message => {
+    setNotice(message);
+    setTimeout(() => setNotice(''), 2600);
+  };
+
+  async function saveProfile(event) {
+    event.preventDefault();
+    setSaving(true);
+    setError('');
+    try {
+      const result = await api('/me/profile', { method: 'PATCH', body: JSON.stringify(form) });
+      updateUser(result.user);
+      showNotice('Đã lưu thay đổi hồ sơ.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function savePrefs(nextPrefs) {
+    setPrefs(nextPrefs);
+    setError('');
+    try {
+      const result = await api('/me/preferences', { method: 'PATCH', body: JSON.stringify(nextPrefs) });
+      updateUser(result.user);
+      showNotice('Đã cập nhật cài đặt.');
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function changePassword(event) {
+    event.preventDefault();
+    setSaving(true);
+    setError('');
+    try {
+      await api('/me/password', { method: 'POST', body: JSON.stringify(passwordForm) });
+      setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
+      showNotice('Đã đổi mật khẩu.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const menuGroups = [
+    ['TÀI KHOẢN', [['◉', 'Hồ sơ cá nhân', '/ho-so', true], ['◈', 'Bảo mật', '#security'], ['●', 'Thông báo', '#notifications', false, 7], ['▰', 'Ví của tôi', '#profile-wallet', false, `${formatNumber(user?.seeds || 0)} Đậu`], ['□', 'Mời bạn bè', '#invite'], ['⚙', 'Cài đặt', '#settings']]],
+    ['SÁNG TÁC', [['▣', 'Quản lý truyện', '/admin', false, user?.role === 'admin' ? 14 : 0], ['◒', 'Đăng truyện mới', '/dang-truyen'], ['◢', 'Lọc từ nhạy cảm', '#filter']]],
+    ['NỘI DUNG', [['▰', 'Thư viện', '/bookmarks'], ['▱', 'Đã đọc', '/lich-su'], ['♥', 'Yêu thích', '/theo-doi']]],
+    ['THỐNG KÊ', [['◉', 'Doanh thu', '#revenue']]],
+    ['QUẢN TRỊ', [['●', 'Duyệt bình luận', '/admin'], ['■', 'Duyệt truyện trùng', '/admin'], ['◷', 'Lịch sử MOD', '/admin']]],
+    ['HỖ TRỢ', [['?', 'Hướng dẫn', '/lien-he'], ['♟', 'Liên hệ', '/lien-he'], ['☞', 'Phản hồi', '/lien-he']]]
+  ];
+
+  const quickLinks = [
+    ['▣', 'Truyện của tôi', '/admin'],
+    ['▰', 'Truyện đã lưu', '/bookmarks'],
+    ['◷', 'Lịch sử đọc', '/lich-su'],
+    ['◇', 'Thành tựu', '#achievements'],
+    ['⚙', 'Cài đặt nâng cao', '#settings']
+  ];
+
+  const togglePref = key => savePrefs({ ...prefs, [key]: !prefs[key] });
+  const membership = user?.createdAt ? new Date(user.createdAt).toLocaleDateString('vi-VN', { month: 'long', year: 'numeric' }) : 'March 2026';
+
   return (
-    <div className="dashboard-grid">
-      <div className="panel profile-panel"><img src={user.avatar} alt="avatar" /><h1>{user.name}</h1><p>{user.email}</p><span className="pill">Vai trò: {user.role}</span><span className="pill">Số dư: {user.seeds} Hạt</span></div>
-      <div className="panel"><h2>Lối tắt</h2><div className="quick-links"><Link to="/bookmarks">Bookmarks</Link><Link to="/theo-doi">Theo dõi</Link><Link to="/lich-su">Lịch sử đọc</Link><Link to="/vi-hat">Ví Hạt</Link></div></div>
+    <div className="profile-workspace">
+      <aside className="profile-side-nav">
+        <div className="profile-side-brand"><img src="/images/logo.png" alt="logo" /><strong>Đậu Đỏ</strong><button type="button" onClick={() => navigate('/')}>‹</button></div>
+        <div className="profile-side-user"><img src={form.avatar || '/images/logo.png'} alt={user.name} /><div><strong>{user.name}</strong><span>Mod</span><small>⭐ Cấp 1</small></div></div>
+        {menuGroups.map(([group, items]) => (
+          <section className="profile-menu-group" key={group}>
+            <h3>{group}<span>⌄</span></h3>
+            {items.map(([icon, label, to, active, badge]) => (
+              to.startsWith('/') ? (
+                <Link key={label} className={active ? 'active' : ''} to={to}><span>{icon}</span>{label}{badge ? <b>{badge}</b> : null}</Link>
+              ) : (
+                <a key={label} className={active ? 'active' : ''} href={to}><span>{icon}</span>{label}{badge ? <b>{badge}</b> : null}</a>
+              )
+            ))}
+          </section>
+        ))}
+        <button type="button" className="profile-logout" onClick={logout}>⇥ Đăng xuất</button>
+      </aside>
+
+      <main className="profile-main">
+        <div className="profile-title"><span>♟</span><h1>Hồ sơ cá nhân</h1></div>
+        <ErrorBox message={error} />
+        {notice && <div className="success-box">{notice}</div>}
+
+        <section className="profile-hero-card">
+          <div className="profile-cover" style={{ backgroundImage: form.cover ? `url(${form.cover})` : 'none' }}><button type="button">◉</button></div>
+          <div className="profile-identity">
+            <button type="button" className="profile-avatar-edit" onClick={() => {
+              const avatar = prompt('Nhập URL avatar:', form.avatar);
+              if (avatar !== null) setForm(prev => ({ ...prev, avatar }));
+            }}><img src={form.avatar || '/images/logo.png'} alt={user.name} /><span>●</span></button>
+            <div><h2>{user.name}</h2><p>@_{user.id}</p><span>♛ {user.role === 'admin' ? 'Moderator' : 'Member'}</span></div>
+            <button type="button" className="profile-share" onClick={() => navigator.clipboard?.writeText(window.location.href).then(() => showNotice('Đã sao chép link hồ sơ.'))}>↗ Chia sẻ hồ sơ</button>
+          </div>
+          <div className="profile-joined">▦ Tham gia từ {membership}</div>
+        </section>
+
+        <form className="profile-card" onSubmit={saveProfile}>
+          <div className="profile-card-head"><h2>▣ Thông tin cá nhân</h2><button className="profile-save" disabled={saving}>▣ {saving ? 'Đang lưu...' : 'Lưu thay đổi'}</button></div>
+          <div className="profile-form-grid">
+            <label>Tên hiển thị *<input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></label>
+            <label>Tên đăng nhập<input value={`_${form.username}`} disabled /></label>
+            <label>Email *<input type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} /></label>
+            <label>Số điện thoại<input value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} placeholder="Nhập số điện thoại" /></label>
+            <label>Ngày sinh<input type="date" value={form.birthday} onChange={e => setForm({ ...form, birthday: e.target.value })} /></label>
+            <fieldset><legend>Giới tính</legend>{['Nam','Nữ','Khác'].map(item => <label key={item}><input type="radio" name="gender" checked={form.gender === item} onChange={() => setForm({ ...form, gender: item })} /> {item}</label>)}</fieldset>
+            <label>Địa chỉ<input value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} placeholder="VD: Hà Nội, Việt Nam" /></label>
+            <label>Website<input value={form.website} onChange={e => setForm({ ...form, website: e.target.value })} placeholder="https://website.com" /></label>
+            <label className="profile-wide">Giới thiệu bản thân<textarea maxLength="500" value={form.bio} onChange={e => setForm({ ...form, bio: e.target.value })} placeholder="Viết vài dòng giới thiệu về bản thân..." /><small>Tối đa 500 ký tự</small></label>
+          </div>
+        </form>
+
+        <form id="security" className="profile-card" onSubmit={changePassword}>
+          <div className="profile-card-head"><h2>⌕ Đổi mật khẩu</h2></div>
+          <p className="profile-alert">ⓘ Bảo mật tài khoản: Sử dụng mật khẩu mạnh với ít nhất 8 ký tự, bao gồm chữ hoa, chữ thường, số và ký tự đặc biệt.</p>
+          <label>Mật khẩu hiện tại *<input type="password" value={passwordForm.currentPassword} onChange={e => setPasswordForm({ ...passwordForm, currentPassword: e.target.value })} placeholder="Nhập mật khẩu hiện tại" /></label>
+          <div className="profile-form-grid">
+            <label>Mật khẩu mới *<input type="password" value={passwordForm.newPassword} onChange={e => setPasswordForm({ ...passwordForm, newPassword: e.target.value })} placeholder="Nhập mật khẩu mới" /><small>Ít nhất 8 ký tự</small></label>
+            <label>Xác nhận mật khẩu mới *<input type="password" value={passwordForm.confirmPassword} onChange={e => setPasswordForm({ ...passwordForm, confirmPassword: e.target.value })} placeholder="Nhập lại mật khẩu mới" /></label>
+          </div>
+          <div className="profile-card-actions"><button className="profile-save" disabled={saving}>⌕ Đổi mật khẩu</button></div>
+        </form>
+
+        <section id="notifications" className="profile-card">
+          <div className="profile-card-head"><h2>● Cài đặt thông báo</h2></div>
+          {[
+            ['emailNotifications', 'Thông báo qua Email', 'Nhận thông báo về chương mới, bình luận và cập nhật hệ thống qua email'],
+            ['chapterNotifications', 'Thông báo chương mới', 'Nhận thông báo khi truyện bạn theo dõi có chương mới'],
+            ['commentNotifications', 'Thông báo bình luận', 'Nhận thông báo khi có người bình luận truyện của bạn'],
+            ['followNotifications', 'Thông báo theo dõi', 'Nhận thông báo khi có người theo dõi bạn'],
+            ['promoNotifications', 'Thông báo khuyến mãi', 'Nhận thông báo về các chương trình khuyến mãi và sự kiện đặc biệt']
+          ].map(([key, title, desc]) => <ToggleRow key={key} title={title} desc={desc} checked={prefs[key]} onChange={() => togglePref(key)} />)}
+        </section>
+
+        <section className="profile-card">
+          <div className="profile-card-head"><h2>◉ Quyền riêng tư</h2></div>
+          <ToggleRow title="Hiển thị truyện đang đọc trên Tường nhà" desc="Cho phép mọi người xem danh sách truyện bạn đang đọc trên trang Tường nhà (my-wall)" checked={prefs.publicReading} onChange={() => togglePref('publicReading')} />
+        </section>
+      </main>
+
+      <aside className="profile-right-rail">
+        <section className="profile-card profile-mini"><h2>▥ Thống kê</h2><div className="profile-stat-grid"><strong>{formatCompact(stats.stories)}<span>Truyện đã đăng</span></strong><strong>{formatCompact(stats.chapters)}<span>Chương đã viết</span></strong><strong>{formatCompact(stats.followers)}<span>Người theo dõi</span></strong><strong>{formatCompact(stats.views)}<span>Lượt xem</span></strong></div></section>
+        <section id="profile-wallet" className="profile-card profile-mini"><h2>☁ Ví của tôi</h2><div className="profile-wallet-line"><span>◒</span><b>Đậu<br />{formatNumber(user.seeds || 0)}</b><button type="button" onClick={() => navigate('/vi-hat')}>+</button></div><button type="button" className="profile-white-btn" onClick={() => navigate('/vi-hat')}>◉ Lịch sử giao dịch</button></section>
+        <section className="profile-card profile-mini"><h2>♣ Liên kết mạng xã hội</h2><div className="profile-socials">{['f','𝕏','◎','♪'].map(item => <button key={item} type="button">{item}</button>)}</div><p>Cập nhật liên kết trong phần thông tin cá nhân</p></section>
+        <section className="profile-card profile-mini"><h2>⌁ Liên kết nhanh</h2><div className="profile-quick-list">{quickLinks.map(([icon, label, to]) => to.startsWith('/') ? <Link key={label} to={to}><span>{icon}</span>{label}<b>›</b></Link> : <a key={label} href={to}><span>{icon}</span>{label}<b>›</b></a>)}</div></section>
+        <section className="profile-card profile-danger"><h2>▲ Vùng nguy hiểm</h2><p>Các hành động dưới đây không thể hoàn tác. Hãy cân nhắc kỹ trước khi thực hiện.</p><button type="button" onClick={logout}>↳ Đăng xuất khỏi tất cả thiết bị</button></section>
+      </aside>
+    </div>
+  );
+}
+
+function ToggleRow({ title, desc, checked, onChange }) {
+  return (
+    <div className="profile-toggle-row">
+      <div><strong>{title}</strong><small>{desc}</small></div>
+      <button type="button" className={checked ? 'profile-toggle on' : 'profile-toggle'} onClick={onChange} aria-pressed={checked}><span /></button>
     </div>
   );
 }
@@ -1757,19 +1967,19 @@ function Wallet() {
 
   return (
     <div className="wallet-page">
-      <div className="catalog-breadcrumb">Trang chủ › Ví Hạt Đậu</div>
-      <div className="wallet-title"><span>🪙</span><div><h1>Ví Hạt Đậu</h1><p>Nạp Hạt Đậu để mua chương truyện yêu thích</p></div></div>
+      <div className="catalog-breadcrumb">Trang chủ › Ví Đậu</div>
+      <div className="wallet-title"><span>🪙</span><div><h1>Ví Đậu</h1><p>Nạp tiền vào ví sẽ chuyển thành Đậu để mua chương truyện yêu thích</p></div></div>
       <ErrorBox message={error} />
-      <section className="wallet-balance-panel"><p>Số dư hiện tại</p><h2>🪙 {user.seeds} <span>Hạt Đậu</span></h2><div><span>🛒 Đã dùng: 106 Hạt</span><span>💵 Đã nạp: 170 Hạt</span><span>🎁 Thưởng: 23 Hạt</span></div></section>
-      <div className="wallet-feature-row"><span>🪙 <b>1 Hạt Đậu</b><small>= 1.000đ</small></span><span>📖 <b>Mua lẻ</b><small>1–2 Hạt/chương</small></span><span>📦 <b>Combo</b><small>Tiết kiệm hơn 50%</small></span></div>
+      <section className="wallet-balance-panel"><p>Số dư hiện tại</p><h2>🪙 {user.seeds} <span>Đậu</span></h2><div><span>🛒 Đã dùng: 106 Đậu</span><span>💵 Đã nạp: 170 Đậu</span><span>🎁 Thưởng: 23 Đậu</span></div></section>
+      <div className="wallet-feature-row"><span>🪙 <b>1 Đậu</b><small>= 1.000đ</small></span><span>📖 <b>Mua lẻ</b><small>1–2 Đậu/chương</small></span><span>📦 <b>Combo</b><small>Tiết kiệm hơn 50%</small></span></div>
       <h2 className="wallet-section-title">◇ Chọn gói nạp</h2>
-      <div className="wallet-packages">{DEFAULT_WALLET_PACKAGES.map(pack => <button key={pack.id} type="button" className={selected === pack.id ? 'active' : ''} onClick={() => setSelected(pack.id)}>{pack.featured && <b>Phổ biến nhất</b>}<strong>{pack.seeds}<small>{pack.bonus ? ` +${pack.bonus} Hạt Đậu` : ' Hạt Đậu'}</small></strong><em>{pack.bonus ? `Tặng thêm ${pack.bonus} Hạt` : 'Không bonus'}</em><span>{pack.price.toLocaleString('vi-VN')}đ</span><small>{pack.label}</small></button>)}</div>
+      <div className="wallet-packages">{DEFAULT_WALLET_PACKAGES.map(pack => <button key={pack.id} type="button" className={selected === pack.id ? 'active' : ''} onClick={() => setSelected(pack.id)}>{pack.featured && <b>Phổ biến nhất</b>}<strong>{pack.seeds}<small>{pack.bonus ? ` +${pack.bonus} Đậu` : ' Đậu'}</small></strong><em>{pack.bonus ? `Tặng thêm ${pack.bonus} Đậu` : 'Không bonus'}</em><span>{pack.price.toLocaleString('vi-VN')}đ</span><small>{pack.label}</small></button>)}</div>
       <h2 className="wallet-section-title">▰ Phương thức thanh toán</h2>
       <div className="payment-methods">{['MoMo', 'VNPay', 'ZaloPay', 'Chuyển khoản'].map(item => <button key={item} className={method === item ? 'active' : ''} onClick={() => setMethod(item)}>{item}</button>)}</div>
-      <button className="button wallet-pay" onClick={() => topup(selected)}>◎ Nạp {selectedPack.price.toLocaleString('vi-VN')}đ — nhận {selectedPack.seeds + (selectedPack.bonus || 0)} Hạt Đậu</button>
+      <button className="button wallet-pay" onClick={() => topup(selected)}>◎ Nạp {selectedPack.price.toLocaleString('vi-VN')}đ — nhận {selectedPack.seeds + (selectedPack.bonus || 0)} Đậu</button>
       <small className="wallet-safe">🛡 Thanh toán an toàn, được mã hóa SSL</small>
       <HomeSection title="Lịch sử giao dịch" subtitle="Các giao dịch gần đây" kicker="History"><div className="wallet-txn-list">{data.transactions.map(txn => <div key={txn.id}><span>{txn.type === 'purchase' ? '🛒' : '💵'}</span><strong>{txn.note}</strong><small>{formatDateShort(txn.createdAt)}</small><b className={txn.amount > 0 ? 'plus' : 'minus'}>{txn.amount > 0 ? '+' : ''}{txn.amount}</b></div>)}</div></HomeSection>
-      <section className="wallet-faq"><h3>◉ Câu hỏi thường gặp</h3><p><b>Hạt Đậu có hết hạn không?</b><br />Không, Hạt Đậu không có thời hạn sử dụng.</p><p><b>Có hoàn tiền không?</b><br />Hạt Đậu đã nạp không được hoàn tiền.</p><p><b>Mua combo có lợi hơn không?</b><br />Có, combo tiết kiệm hơn 50% so với mua lẻ từng chương.</p></section>
+      <section className="wallet-faq"><h3>◉ Câu hỏi thường gặp</h3><p><b>Đậu có hết hạn không?</b><br />Không, Đậu không có thời hạn sử dụng.</p><p><b>Có hoàn tiền không?</b><br />Đậu đã nạp không được hoàn tiền.</p><p><b>Mua combo có lợi hơn không?</b><br />Có, combo tiết kiệm hơn 50% so với mua lẻ từng chương.</p></section>
     </div>
   );
 }
@@ -1849,7 +2059,7 @@ function Admin() {
     if (!title) return;
     const content = prompt('Nội dung chương:', chapter.content || '');
     if (content === null) return;
-    const price = prompt('Giá Hạt:', String(chapter.price || 0));
+    const price = prompt('Giá Đậu:', String(chapter.price || 0));
     if (price === null) return;
     const isPremium = confirm('Đặt chương này là chương trả phí? Bấm OK để trả phí, Cancel để miễn phí.');
     const result = await api(`/admin/chapters/${chapter.id}`, { method: 'PUT', body: JSON.stringify({ title, content, price, isPremium }) });
@@ -1868,12 +2078,12 @@ function Admin() {
   if (!stats) return <Loader />;
   return (
     <>
-      <div className="page-title"><h1>Admin Dashboard</h1><p>Quản trị truyện, người dùng và giao dịch Hạt.</p></div>
+      <div className="page-title"><h1>Admin Dashboard</h1><p>Quản trị truyện, người dùng và giao dịch Đậu.</p></div>
       <ErrorBox message={error} />
       <div className="stats-grid">{Object.entries(stats).map(([key, value]) => <div className="panel stat" key={key}><span>{key}</span><strong>{formatNumber(value)}</strong></div>)}</div>
       <div className="admin-grid">
         <form className="panel stack-form" onSubmit={createStory}><h2>Thêm truyện</h2><input placeholder="Tên truyện" value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} /><input placeholder="Tác giả" value={form.author} onChange={e => setForm({ ...form, author: e.target.value })} /><input placeholder="Thể loại, cách nhau bằng dấu phẩy" value={form.categories} onChange={e => setForm({ ...form, categories: e.target.value })} /><textarea placeholder="Mô tả" value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} /><label><input type="checkbox" checked={form.premium} onChange={e => setForm({ ...form, premium: e.target.checked })} /> Truyện trả phí</label><label><input type="checkbox" checked={form.featured} onChange={e => setForm({ ...form, featured: e.target.checked })} /> Ghim nổi bật</label><button className="button">Tạo truyện</button></form>
-        <div className="panel"><h2>Người dùng</h2><div className="list-panel compact">{users.map(user => <div key={user.id}><span>{user.name}</span><small>{user.email} · {user.role} · {user.seeds} Hạt</small></div>)}</div></div>
+        <div className="panel"><h2>Người dùng</h2><div className="list-panel compact">{users.map(user => <div key={user.id}><span>{user.name}</span><small>{user.email} · {user.role} · {user.seeds} Đậu</small></div>)}</div></div>
       </div>
       <Section title="Quản lý truyện" subtitle="Duyệt, ẩn/hiện, sửa tên và chọn truyện để quản lý chương."><div className="list-panel">{stories.map(story => <div key={story.id} className={selectedStory?.id === story.id ? 'active-admin-row' : ''}><span><button className="small-link" onClick={() => selectStory(story)}>{story.title}</button><small>{story.author} · {story.chapterCount} chương · {statusLabel(story.status)} · {approvalLabel(story.approvalStatus)} · {story.hidden ? 'Đang ẩn' : 'Đang hiện'}</small></span><button className="ghost" onClick={() => updateStory(story, { approvalStatus: story.approvalStatus === 'approved' ? 'pending' : 'approved' })}>{story.approvalStatus === 'approved' ? 'Đưa chờ duyệt' : 'Duyệt'}</button><button className="ghost" onClick={() => updateStory(story, { hidden: !story.hidden })}>{story.hidden ? 'Hiện' : 'Ẩn'}</button><button className="ghost" onClick={() => renameStory(story)}>Sửa</button><button className="ghost danger" onClick={() => deleteStory(story.id)}>Xóa</button></div>)}</div></Section>
       <Section title="Quản lý chương" subtitle={selectedStory ? `Đang chọn: ${selectedStory.title}` : 'Chọn một truyện ở danh sách trên để thêm/sửa/xóa chương.'}>
@@ -1884,11 +2094,11 @@ function Admin() {
               <input placeholder="Tiêu đề chương" value={chapterForm.title} onChange={e => setChapterForm({ ...chapterForm, title: e.target.value })} />
               <textarea rows="6" placeholder="Nội dung chương" value={chapterForm.content} onChange={e => setChapterForm({ ...chapterForm, content: e.target.value })} />
               <label><input type="checkbox" checked={chapterForm.isPremium} onChange={e => setChapterForm({ ...chapterForm, isPremium: e.target.checked })} /> Chương trả phí</label>
-              <input type="number" min="0" placeholder="Giá Hạt" value={chapterForm.price} onChange={e => setChapterForm({ ...chapterForm, price: e.target.value })} />
+              <input type="number" min="0" placeholder="Giá Đậu" value={chapterForm.price} onChange={e => setChapterForm({ ...chapterForm, price: e.target.value })} />
               <button className="button">Thêm chương</button>
             </form>
             <div className="list-panel">
-              {chapters.map(chapter => <div key={chapter.id}><span><strong>Chương {chapter.number}</strong><small>{chapter.title} · {chapter.isPremium ? `${chapter.price} Hạt` : 'Miễn phí'}</small></span><button className="ghost" onClick={() => updateChapter(chapter)}>Sửa tên</button><button className="ghost danger" onClick={() => deleteChapter(chapter)}>Xóa</button></div>)}
+              {chapters.map(chapter => <div key={chapter.id}><span><strong>Chương {chapter.number}</strong><small>{chapter.title} · {chapter.isPremium ? `${chapter.price} Đậu` : 'Miễn phí'}</small></span><button className="ghost" onClick={() => updateChapter(chapter)}>Sửa tên</button><button className="ghost danger" onClick={() => deleteChapter(chapter)}>Xóa</button></div>)}
             </div>
           </div>
         ) : <div className="center-card">Chưa chọn truyện.</div>}
@@ -2229,6 +2439,10 @@ function NotFound() {
 
 function formatNumber(value = 0) {
   return Number(value).toLocaleString('vi-VN');
+}
+
+function formatCompact(value = 0) {
+  return Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(Number(value) || 0);
 }
 
 createRoot(document.getElementById('root')).render(<App />);
