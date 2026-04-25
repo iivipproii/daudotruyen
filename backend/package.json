@@ -1,0 +1,15 @@
+{
+  "name": "daudo-truyen-backend",
+  "version": "1.0.0",
+  "description": "Backend API for Dau Do Truyen - pure Node.js with JSON persistence",
+  "main": "src/server.js",
+  "scripts": {
+    "dev": "node --watch src/server.js",
+    "start": "node src/server.js",
+    "reset-db": "node src/reset-db.js",
+    "test": "node --test"
+  },
+  "keywords": ["truyen", "node", "api"],
+  "author": "",
+  "license": "MIT"
+}
