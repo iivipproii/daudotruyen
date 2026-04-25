@@ -2143,10 +2143,22 @@ function StoryPublish() {
   const navigate = useNavigate();
   const draftKey = 'daudo_story_publish_draft';
   const [categories] = useState([
-    'Tiên Hiệp', 'Kiếm Hiệp', 'Huyền Huyễn', 'Kỳ Ảo', 'Tu Tiên', 'Tu Chân',
-    'Đô Thị', 'Hiện Đại', 'Khoa Huyễn', 'Hệ Thống', 'Đời Sống', 'Doanh Trường',
-    'Ngôn Tình', 'Đam Mỹ', 'Bách Hợp', 'Tinh Cảm', 'Romance', 'Học Đường',
-    'Văn Phòng', 'Tổng Tài', 'Ngược', 'Sủng', 'Nữ Cường', 'Nữ Phụ'
+    'Tiên Hiệp', 'Kiếm Hiệp', 'Huyền Huyễn', 'Kỳ Ảo', 'Tu Tiên', 'Tu Chân', 'Phong Thần',
+    'Hiện Đại & Đô Thị', 'Đô Thị', 'Hiện Đại', 'Khoa Huyễn', 'Hệ Thống', 'Đời Sống', 'Doanh Trường', 'Giải Trí', 'Thể Thao', 'Truyện Teen',
+    'Tình Cảm & Romance', 'Ngôn Tình', 'Đam Mỹ', 'Bách Hợp', 'Tình Cảm', 'Romance', 'Học Đường', 'Văn Phòng', 'Tổng Tài', 'Ngược', 'Sủng', 'Nữ Cường', 'Nữ Phụ',
+    'Đặc Biệt & Fantasy', 'Xuyên Không', 'Xuyên Nhanh', 'Trọng Sinh', 'Dị Giới', 'Võng Du', 'Mạt Thế', 'Dị Năng', 'Siêu Anh Hùng', 'Ma Pháp',
+    'Hành Động & Phiêu Lưu', 'Hành Động', 'Phiêu Lưu', 'Thám Hiểm', 'Sinh Tồn', 'Zombie', 'Quái Vật', 'Siêu Nhiên',
+    'Kinh Dị & Bí Ẩn', 'Kinh Dị', 'Ma Quỷ', 'Linh Dị', 'Trinh Thám', 'Bí Ẩn', 'Tâm Lý', 'Tội Phạm',
+    'Lịch Sử & Cổ Đại', 'Lịch Sử', 'Cổ Đại', 'Cung Đình', 'Cung Đấu', 'Hoàng Gia', 'Chiến Tranh', 'Quân Sự', 'Quan Trường', 'Võ Tướng', 'Đông Phương',
+    'Hài Hước & Nhẹ Nhàng', 'Hài Hước', 'Hài Kịch', 'Parody', 'Slice of Life', 'Ấm Áp', 'Gia Đình', 'Hàng Ngày', 'Điền Văn', 'Gia Đấu',
+    'Game & Technology', 'Game', 'VRMMO', 'LitRPG', 'Công Nghệ', 'AI', 'Cyberpunk', 'Tương Lai',
+    'Mở rộng', 'HE', 'SE', 'BE', 'OE', 'Ngọt', 'Chữa Lành', 'Ngược Nam', 'Ngược Nữ', 'Ngược Luyến Tàn Tâm', 'Truy Thê', 'Trả Thù', 'Vả Mặt', 'Sảng Văn',
+    'Cưới Trước Yêu Sau', 'Cường Thủ Hào Đoạt', 'Dưỡng Thê', 'Hào Môn Thế Gia', 'Gương Vỡ Lại Lành', 'Gương Vỡ Không Lành', 'Thế Thân', 'Nam Phụ Thượng Vị',
+    'Không CP', 'Ngôn Tình Thực Tế', 'Thanh Xuân Vườn Trường', 'Học Bá', 'Showbiz', 'Bác Sĩ', 'Cảnh Sát', 'Quân Nhân', 'Dân Quốc', 'Thập Niên', 'Phương Đông',
+    'Hoán Đổi Thân Xác', 'Đọc Tâm', 'Nhân Thú', 'Hư Cấu Kỳ Ảo', 'Phép Thuật', 'Xuyên Sách', 'Có Sử Dụng AI',
+    'Quy tắc', 'Đề Cử', 'Review truyện', 'Tiểu Thuyết', 'Truyện Sáng Tác', 'Truyện Việt', 'Vô Tri',
+    'Nội dung người lớn', 'Sắc', 'H', 'H+', 'Cao H+ (*)',
+    'Khác', 'Phương Tây', 'Light Novel', 'Việt Nam', 'Zhihu', 'Đoản Văn', 'Review Sách'
   ]);
   const [form, setForm] = useState({
     title: '',
@@ -2259,6 +2271,25 @@ function StoryPublish() {
     setTimeout(() => setDraftEnabled(true), 0);
   }
 
+  function handleCoverFile(file) {
+    if (!file) return;
+    if (!file.type?.startsWith('image/')) {
+      setError('Vui lòng chọn file ảnh JPG, PNG hoặc WEBP.');
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      setError('Ảnh bìa tối đa 2MB.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setError('');
+      setForm(prev => ({ ...prev, cover: reader.result }));
+    };
+    reader.onerror = () => setError('Không thể tải ảnh bìa. Vui lòng thử lại.');
+    reader.readAsDataURL(file);
+  }
+
   return (
     <div className="publish-page">
       <PublishSidebar user={user} />
@@ -2309,6 +2340,25 @@ function StoryPublish() {
               <input placeholder="Nhập số chương (không bắt buộc)" value={form.chapterCount} onChange={e => setForm({ ...form, chapterCount: e.target.value })} />
             </div>
           </div>
+
+          <section className="category-block publish-category-block">
+            <h2>Thể loại</h2>
+            <label>Chọn thể loại *</label>
+            <input placeholder="Tìm kiếm thể loại..." value={search} onChange={e => setSearch(e.target.value)} />
+            <div className="category-title">Đang chọn: {form.categories.length}/5</div>
+            <div className="chip-wrap">
+              {filteredCategories.map(item => (
+                <button
+                  type="button"
+                  key={item}
+                  className={form.categories.includes(item) ? 'chip active' : 'chip'}
+                  onClick={() => toggleCategory(item)}
+                >
+                  {item}
+                </button>
+              ))}
+            </div>
+          </section>
         </section>
 
         <aside className="publish-side">
@@ -2319,10 +2369,18 @@ function StoryPublish() {
               <button type="button" className="toggle">Video động</button>
             </div>
             <label>Tải lên ảnh bìa *</label>
-            <div className="cover-drop">
+            <label
+              className="cover-drop"
+              onDragOver={event => event.preventDefault()}
+              onDrop={event => {
+                event.preventDefault();
+                handleCoverFile(event.dataTransfer.files?.[0]);
+              }}
+            >
               <img src={form.cover} alt="cover preview" />
               <span>Kéo thả hoặc nhập link để tải lên</span>
-            </div>
+              <input type="file" accept="image/png,image/jpeg,image/webp" onChange={event => handleCoverFile(event.target.files?.[0])} />
+            </label>
             <input placeholder="/images/cover-1.jpg" value={form.cover} onChange={e => setForm({ ...form, cover: e.target.value })} />
             <div className="mini-panel">
               <strong>Auto tạo ảnh bìa (AI)</strong>
@@ -2343,27 +2401,6 @@ function StoryPublish() {
                 <li>Định dạng: JPG, PNG, WEBP</li>
                 <li>Kích thước tối đa: 2MB</li>
               </ul>
-            </div>
-          </section>
-
-          <section className="panel">
-            <h2>Thể loại</h2>
-            <label>Chọn thể loại *</label>
-            <input placeholder="Tìm kiếm thể loại..." value={search} onChange={e => setSearch(e.target.value)} />
-            <div className="category-block">
-              <div className="category-title">Đang chọn: {form.categories.length}/5</div>
-              <div className="chip-wrap">
-                {filteredCategories.map(item => (
-                  <button
-                    type="button"
-                    key={item}
-                    className={form.categories.includes(item) ? 'chip active' : 'chip'}
-                    onClick={() => toggleCategory(item)}
-                  >
-                    {item}
-                  </button>
-                ))}
-              </div>
             </div>
           </section>
 
