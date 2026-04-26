@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { mockStories } from '../../data/mockStories';
 
@@ -76,37 +76,8 @@ function normalizeStory(story = {}) {
   };
 }
 
-function uniqueStories(stories = []) {
-  return Array.from(new Map(stories.filter(Boolean).map(story => [story.id || story.slug, normalizeStory(story)])).values());
-}
-
 function formatNumber(value = 0) {
   return Number(value || 0).toLocaleString('vi-VN');
-}
-
-function getChapterCount(story = {}) {
-  return story.chapterCount || story.chapterCountEstimate || story.latestChapter?.number || 0;
-}
-
-function hashValue(value = '') {
-  return String(value).split('').reduce((sum, char) => sum + char.charCodeAt(0), 0);
-}
-
-function periodMultiplier(period) {
-  return { day: .08, week: .22, month: .48, year: .78, all: 1 }[period] || 1;
-}
-
-function metricValue(story, metric, period) {
-  const multiplier = periodMultiplier(period);
-  if (metric === 'views') return Math.round(Number(story.views || 0) * multiplier);
-  if (metric === 'follows') return Math.round(Number(story.follows || 0) * multiplier);
-  if (metric === 'rating') return Number(story.rating || 0);
-  if (metric === 'comments') return Math.round(((Number(story.follows || 0) / 9) + hashValue(story.slug) % 90) * multiplier);
-  if (metric === 'revenue') {
-    const vipBonus = story.premium ? 1.9 : .35;
-    return Math.round((Number(story.views || 0) / 160 + Number(story.follows || 0) * vipBonus) * multiplier);
-  }
-  return Number(story.views || 0);
 }
 
 function metricLabel(metric) {
@@ -119,18 +90,29 @@ function metricSuffix(metric) {
   return '';
 }
 
-function rankDelta(story, index, period) {
-  const value = (hashValue(`${story.slug}-${period}`) + index) % 7;
-  return value - 3;
-}
-
-async function fetchSafe(apiClient, path) {
-  if (!apiClient) return null;
-  try {
-    return await apiClient(path);
-  } catch {
-    return null;
-  }
+function fallbackRankingStories(metric) {
+  return mockStories
+    .map(story => {
+      const normalized = normalizeStory(story);
+      const rankScore = {
+        views: Number(normalized.views || 0),
+        follows: Number(normalized.follows || 0),
+        rating: Number(normalized.rating || 0),
+        comments: 0,
+        revenue: 0
+      }[metric] ?? Number(normalized.views || 0);
+      return {
+        ...normalized,
+        rankScore,
+        rankDelta: 0,
+        commentsCount: 0,
+        revenueSeeds: 0,
+        periodViews: metric === 'views' ? rankScore : 0,
+        periodFollows: metric === 'follows' ? rankScore : 0
+      };
+    })
+    .sort((a, b) => Number(b.rankScore || 0) - Number(a.rankScore || 0))
+    .slice(0, 100);
 }
 
 export function RankingPage({ apiClient }) {
@@ -147,45 +129,26 @@ export function RankingPage({ apiClient }) {
     async function load() {
       setLoading(true);
       setError('');
-      const [views, follows, rating, chapters] = await Promise.all([
-        fetchSafe(apiClient, '/stories?sort=views'),
-        fetchSafe(apiClient, '/stories?sort=follows'),
-        fetchSafe(apiClient, '/stories?sort=rating'),
-        fetchSafe(apiClient, '/stories?sort=chapters')
-      ]);
-      if (!alive) return;
-      const apiStories = uniqueStories([
-        ...(views?.stories || []),
-        ...(follows?.stories || []),
-        ...(rating?.stories || []),
-        ...(chapters?.stories || [])
-      ]);
-      setStories(apiStories.length ? apiStories : uniqueStories(mockStories));
-        setError(apiStories.length ? '' : 'Không kết nối được API, đang dùng dữ liệu dự phòng cho bảng xếp hạng.');
-      setLoading(false);
+      try {
+        if (!apiClient) throw new Error('Thiếu API client.');
+        const data = await apiClient(`/rankings?period=${encodeURIComponent(period)}&metric=${encodeURIComponent(metric)}&limit=100`);
+        if (!alive) return;
+        const apiStories = Array.isArray(data?.stories) ? data.stories.map(normalizeStory) : [];
+        setStories(apiStories.length ? apiStories : fallbackRankingStories(metric));
+        setError(apiStories.length ? '' : 'API /rankings chưa có dữ liệu, đang hiển thị dữ liệu mẫu.');
+      } catch (err) {
+        if (!alive) return;
+        setStories(fallbackRankingStories(metric));
+        setError(`${err.message || 'Không tải được API /rankings.'} Đang hiển thị dữ liệu mẫu.`);
+      } finally {
+        if (alive) setLoading(false);
+      }
     }
     load();
     return () => {
       alive = false;
     };
-  }, [apiClient]);
-
-  const rankedStories = useMemo(() => {
-    return stories
-      .map((story, index) => ({
-        ...story,
-        rankScore: metricValue(story, metric, period),
-        rankDelta: rankDelta(story, index, period)
-      }))
-      .sort((a, b) => {
-        if (metric === 'rating') {
-          if (Number(b.rankScore) !== Number(a.rankScore)) return Number(b.rankScore) - Number(a.rankScore);
-          return Number(b.views || 0) - Number(a.views || 0);
-        }
-        return Number(b.rankScore || 0) - Number(a.rankScore || 0);
-      })
-      .slice(0, 100);
-  }, [stories, metric, period]);
+  }, [apiClient, period, metric]);
 
   function updateQuery(patch) {
     const next = new URLSearchParams(searchParams);
@@ -212,8 +175,8 @@ export function RankingPage({ apiClient }) {
       ) : (
         <>
           {error && <div className="rk-warning">{error}</div>}
-          <RankingPodium stories={rankedStories.slice(0, 3)} metric={metric} />
-          <RankingTable stories={rankedStories} metric={metric} period={period} />
+          <RankingPodium stories={stories.slice(0, 3)} metric={metric} />
+          <RankingTable stories={stories} metric={metric} period={period} />
         </>
       )}
     </div>

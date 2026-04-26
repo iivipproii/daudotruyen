@@ -3219,6 +3219,9 @@
     {
       "id": "txn_seed_2",
       "userId": "u_user",
+      "storyId": "s1",
+      "chapterId": "c_s1_4",
+      "price": 8,
       "type": "purchase",
       "amount": -8,
       "note": "Mở khóa Đấu Phá Thương Khung chương 4",
@@ -3227,6 +3230,9 @@
     {
       "id": "txn_e9122aa0d45348e8",
       "userId": "u_user",
+      "storyId": "s1",
+      "chapterId": null,
+      "price": 64,
       "type": "purchase",
       "amount": -64,
       "note": "Mua combo Đấu Phá Thương Khung",
@@ -3235,6 +3241,7 @@
   ],
   "comments": [],
   "ratings": [],
+  "viewEvents": [],
   "notifications": [
     {
       "id": "noti_63df9d64b7409a77",
@@ -3246,5 +3253,6 @@
       "createdAt": "2026-04-25T11:49:44.688Z"
     }
   ],
-  "reports": []
+  "reports": [],
+  "newsletters": []
 }

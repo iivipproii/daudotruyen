@@ -216,6 +216,9 @@ function storySummary(story) {
   };
 }
 
+const RANKING_PERIODS = ['day', 'week', 'month', 'year', 'all'];
+const RANKING_METRICS = ['views', 'follows', 'rating', 'comments', 'revenue'];
+const DAY_MS = 24 * 60 * 60 * 1000;
 const VALID_CHAPTER_STATUSES = ['pending', 'reviewing', 'approved', 'rejected', 'hidden'];
 
 function chapterStatus(chapter) {
@@ -251,6 +254,130 @@ function chapterAdminSummary(db, chapter) {
   };
 }
 
+function periodWindow(period, reference = new Date()) {
+  if (period === 'all') return { start: null, end: reference, previousStart: null, previousEnd: null };
+  const end = reference;
+  let start;
+  if (period === 'day') {
+    start = new Date(reference);
+    start.setHours(0, 0, 0, 0);
+  } else {
+    const days = { week: 7, month: 30, year: 365 }[period] || 7;
+    start = new Date(reference.getTime() - days * DAY_MS);
+  }
+  const duration = Math.max(1, end.getTime() - start.getTime());
+  return {
+    start,
+    end,
+    previousStart: new Date(start.getTime() - duration),
+    previousEnd: start
+  };
+}
+
+function inRange(value, start, end) {
+  if (!value) return false;
+  const time = new Date(value).getTime();
+  if (!Number.isFinite(time)) return false;
+  if (start && time < start.getTime()) return false;
+  if (end && time >= end.getTime()) return false;
+  return true;
+}
+
+function countByStory(items, start, end, getStoryId = item => item.storyId) {
+  return items.reduce((map, item) => {
+    if (start || end) {
+      if (!inRange(item.createdAt, start, end)) return map;
+    }
+    const storyId = getStoryId(item);
+    if (!storyId) return map;
+    map.set(storyId, (map.get(storyId) || 0) + 1);
+    return map;
+  }, new Map());
+}
+
+function revenueByStory(db, start, end) {
+  return db.purchases.reduce((map, purchase) => {
+    if (start || end) {
+      if (!inRange(purchase.createdAt, start, end)) return map;
+    }
+    const chapter = purchase.chapterId ? db.chapters.find(item => item.id === purchase.chapterId) : null;
+    const storyId = purchase.storyId || chapter?.storyId;
+    if (!storyId) return map;
+    const amount = Number(purchase.price ?? Math.abs(purchase.amount || 0));
+    map.set(storyId, (map.get(storyId) || 0) + (Number.isFinite(amount) ? amount : 0));
+    return map;
+  }, new Map());
+}
+
+function buildRankingRows(db, metric, period, start, end) {
+  const publicStories = db.stories.filter(isPublicStory).map(story => enrichStory(db, story, null));
+  const allTime = period === 'all';
+  const viewCounts = allTime ? new Map() : countByStory(db.viewEvents, start, end);
+  const followCounts = allTime ? new Map() : countByStory(db.follows, start, end);
+  const commentCounts = countByStory(db.comments, allTime ? null : start, allTime ? null : end);
+  const revenueCounts = revenueByStory(db, allTime ? null : start, allTime ? null : end);
+
+  return publicStories.map(story => {
+    const periodViews = allTime ? Number(story.views || 0) : Number(viewCounts.get(story.id) || 0);
+    const periodFollows = allTime ? Number(story.follows || 0) : Number(followCounts.get(story.id) || 0);
+    const commentsCount = Number(commentCounts.get(story.id) || 0);
+    const revenueSeeds = Number(revenueCounts.get(story.id) || 0);
+    const ratingScore = Number(story.rating || 0);
+    const ratingCount = Number(story.ratingCount || 0);
+    const rankScore = {
+      views: periodViews,
+      follows: periodFollows,
+      rating: ratingScore,
+      comments: commentsCount,
+      revenue: revenueSeeds
+    }[metric];
+
+    return {
+      ...storySummary(story),
+      rankScore,
+      rankDelta: 0,
+      commentsCount,
+      revenueSeeds,
+      periodViews,
+      periodFollows,
+      ratingCount
+    };
+  });
+}
+
+function sortRankingRows(rows, metric) {
+  return rows.sort((a, b) => {
+    if (Number(b.rankScore || 0) !== Number(a.rankScore || 0)) return Number(b.rankScore || 0) - Number(a.rankScore || 0);
+    if (metric === 'rating' && Number(b.ratingCount || 0) !== Number(a.ratingCount || 0)) return Number(b.ratingCount || 0) - Number(a.ratingCount || 0);
+    if (Number(b.views || 0) !== Number(a.views || 0)) return Number(b.views || 0) - Number(a.views || 0);
+    return String(a.title || '').localeCompare(String(b.title || ''), 'vi');
+  });
+}
+
+function applyRankDelta(currentRows, previousRows) {
+  const previousRank = new Map();
+  previousRows.forEach((story, index) => {
+    if (Number(story.rankScore || 0) > 0) previousRank.set(story.id, index + 1);
+  });
+  if (!previousRank.size) return currentRows.map(story => ({ ...story, rankDelta: 0 }));
+  return currentRows.map((story, index) => ({
+    ...story,
+    rankDelta: previousRank.has(story.id) ? previousRank.get(story.id) - (index + 1) : 0
+  }));
+}
+
+function buildRankings(db, { period = 'week', metric = 'views', limit = 100 } = {}) {
+  const safePeriod = RANKING_PERIODS.includes(period) ? period : 'week';
+  const safeMetric = RANKING_METRICS.includes(metric) ? metric : 'views';
+  const safeLimit = Math.min(100, Math.max(1, parsePositiveNumber(limit, 100)));
+  const range = periodWindow(safePeriod);
+  const currentRows = sortRankingRows(buildRankingRows(db, safeMetric, safePeriod, range.start, range.end), safeMetric);
+  const previousRows = safePeriod === 'all'
+    ? []
+    : sortRankingRows(buildRankingRows(db, safeMetric, safePeriod, range.previousStart, range.previousEnd), safeMetric);
+  return applyRankDelta(currentRows, previousRows).slice(0, safeLimit);
+}
+
 function ensureDbShape(db) {
   db.users ||= [];
   db.stories ||= [];
@@ -265,8 +392,22 @@ function ensureDbShape(db) {
   db.notifications ||= [];
   db.reports ||= [];
   db.newsletters ||= [];
+  db.viewEvents ||= [];
   db.stories.forEach(story => {
     if (!story.approvalStatus) story.approvalStatus = story.hidden ? 'pending' : 'approved';
+  });
+  db.follows.forEach(follow => {
+    if (!follow.createdAt) follow.createdAt = now();
+  });
+  db.purchases.forEach(purchase => {
+    if (!purchase.createdAt) purchase.createdAt = now();
+    if (!purchase.storyId && purchase.chapterId) {
+      const chapter = db.chapters.find(item => item.id === purchase.chapterId);
+      if (chapter) purchase.storyId = chapter.storyId;
+    }
+  });
+  db.viewEvents.forEach(event => {
+    if (!event.createdAt) event.createdAt = now();
   });
   db.chapters.forEach(chapter => {
     if (chapter.status && !VALID_CHAPTER_STATUSES.includes(chapter.status)) chapter.status = 'approved';
@@ -406,12 +547,21 @@ async function handle(req, res) {
       return send(res, 200, { stories: items.map(storySummary) });
     }
 
+    if (req.method === 'GET' && pathname === '/api/rankings') {
+      const period = url.searchParams.get('period') || 'week';
+      const metric = url.searchParams.get('metric') || 'views';
+      const limit = url.searchParams.get('limit') || 100;
+      const stories = buildRankings(db, { period, metric, limit });
+      return send(res, 200, { stories });
+    }
+
     const storyParams = match(pathname, '/api/stories/:slug');
     if (req.method === 'GET' && storyParams) {
       const story = db.stories.find(item => item.slug === storyParams.slug || item.id === storyParams.slug);
       if (!story) return notFound(res);
       if (!isPublicStory(story) && (!viewer || viewer.role !== 'admin')) return notFound(res);
       story.views += 1;
+      db.viewEvents.push({ id: uid('view'), storyId: story.id, userId: viewer?.id || null, createdAt: now() });
       writeDb(db);
       const enriched = enrichStory(db, story, viewer && viewer.id, viewer?.role === 'admin');
       const chapters = db.chapters
@@ -437,6 +587,7 @@ async function handle(req, res) {
       const payloadChapter = unlocked ? chapter : { ...chapter, content: chapter.preview || 'Chương trả phí. Vui lòng mở khóa để đọc đầy đủ.' };
       chapter.views += 1;
       story.views += 1;
+      db.viewEvents.push({ id: uid('view'), storyId: story.id, chapterId: chapter.id, userId: viewer?.id || null, createdAt: now() });
       if (viewer) {
         const existing = db.history.find(item => item.userId === viewer.id && item.storyId === story.id);
         if (existing) {
@@ -569,7 +720,7 @@ async function handle(req, res) {
       if (user.seeds < price) return badRequest(res, 'Số dư xu không đủ để mua combo.');
       user.seeds -= price;
       db.purchases.push({ id: uid('pur'), userId: user.id, storyId: story.id, chapterId: null, combo: true, price, createdAt: now() });
-      db.transactions.push({ id: uid('txn'), userId: user.id, type: 'purchase', amount: -price, note: `Mua combo ${story.title}`, createdAt: now() });
+      db.transactions.push({ id: uid('txn'), userId: user.id, storyId: story.id, chapterId: null, price, type: 'purchase', amount: -price, note: `Mua combo ${story.title}`, createdAt: now() });
       db.notifications.push({ id: uid('noti'), userId: user.id, type: 'purchase', title: 'Đã mở khóa combo', body: `Bạn đã mở khóa toàn bộ chương VIP hiện tại của ${story.title}.`, read: false, createdAt: now() });
       writeDb(db);
       return send(res, 200, { unlocked: true, user: safeUser(user), price });
@@ -668,7 +819,7 @@ async function handle(req, res) {
       if (user.seeds < chapter.price) return badRequest(res, 'Số dư xu không đủ. Vui lòng nạp thêm.');
       user.seeds -= chapter.price;
       db.purchases.push({ id: uid('pur'), userId: user.id, storyId: chapter.storyId, chapterId: chapter.id, price: chapter.price, createdAt: now() });
-      db.transactions.push({ id: uid('txn'), userId: user.id, type: 'purchase', amount: -chapter.price, note: `Mở khóa ${chapter.title}`, createdAt: now() });
+      db.transactions.push({ id: uid('txn'), userId: user.id, storyId: chapter.storyId, chapterId: chapter.id, price: chapter.price, type: 'purchase', amount: -chapter.price, note: `Mở khóa ${chapter.title}`, createdAt: now() });
       writeDb(db);
       return send(res, 200, { unlocked: true, user: safeUser(user) });
     }
@@ -1060,7 +1211,7 @@ function createSeedDb() {
     purchases: [{ id: 'pur_seed_1', userId: 'u_user', storyId: 's1', chapterId: 'c_s1_4', price: 8, createdAt: now() }],
     transactions: [
       { id: 'txn_seed_1', userId: 'u_user', type: 'bonus', amount: 80, note: 'Xu khởi tạo', createdAt: now() },
-      { id: 'txn_seed_2', userId: 'u_user', type: 'purchase', amount: -8, note: 'Mở khóa Đấu Phá Thương Khung chương 4', createdAt: now() }
+      { id: 'txn_seed_2', userId: 'u_user', storyId: 's1', chapterId: 'c_s1_4', price: 8, type: 'purchase', amount: -8, note: 'Mở khóa Đấu Phá Thương Khung chương 4', createdAt: now() }
     ],
     comments: [
       { id: 'cmt_seed_1', storyId: 's1', userId: 'u_user', body: 'Truyện mở đầu rất cuốn, đoạn cao trào đọc rất đã.', createdAt: now() }
@@ -1068,6 +1219,7 @@ function createSeedDb() {
     ratings: [
       { id: 'rate_seed_1', storyId: 's1', userId: 'u_user', value: 5, createdAt: now(), updatedAt: now() }
     ],
+    viewEvents: [],
     notifications: [
       { id: 'noti_seed_1', userId: 'u_user', type: 'system', title: 'Chào mừng đến Đậu Đỏ Truyện', body: 'Bạn đã nhận xu khởi tạo để đọc chương trả phí.', read: false, createdAt: now() }
     ],

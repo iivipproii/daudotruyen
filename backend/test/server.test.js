@@ -31,6 +31,24 @@ async function loginToken(email = 'admin@example.com', password = '123456') {
   return login.data.token;
 }
 
+function readTestDb() {
+  return JSON.parse(fs.readFileSync(DB_PATH, 'utf8'));
+}
+
+function writeTestDb(db) {
+  fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2));
+}
+
+function daysAgo(days, extraHours = 0) {
+  return new Date(Date.now() - days * 24 * 60 * 60 * 1000 - extraHours * 60 * 60 * 1000).toISOString();
+}
+
+function addViewEvents(db, storyId, count, createdAt) {
+  for (let index = 0; index < count; index += 1) {
+    db.viewEvents.push({ id: `view_test_${storyId}_${createdAt}_${index}`, storyId, createdAt });
+  }
+}
+
 test.before(async () => {
   fs.copyFileSync(DB_PATH, BACKUP_PATH);
   fs.writeFileSync(DB_PATH, JSON.stringify(createSeedDb(), null, 2));
@@ -116,6 +134,63 @@ test('premium chapter returns preview when not unlocked', async () => {
   assert.equal(response.status, 200);
   assert.equal(data.unlocked, null);
   assert.match(data.chapter.content, /Đoạn xem trước/);
+});
+
+test('rankings use view events for periods and story totals for all time', async () => {
+  const db = readTestDb();
+  db.viewEvents ||= [];
+  addViewEvents(db, 's24', 9, new Date().toISOString());
+  writeTestDb(db);
+
+  const day = await request('/api/rankings?period=day&metric=views&limit=5');
+  const all = await request('/api/rankings?period=all&metric=views&limit=5');
+  assert.equal(day.response.status, 200);
+  assert.equal(all.response.status, 200);
+  assert.equal(day.data.stories[0].id, 's24');
+  assert.equal(day.data.stories[0].rankScore, 9);
+  assert.notEqual(day.data.stories[0].id, all.data.stories[0].id);
+  assert.ok(all.data.stories[0].rankScore > day.data.stories[0].rankScore);
+});
+
+test('rankings comments and revenue use persisted records', async () => {
+  const db = readTestDb();
+  const today = new Date().toISOString();
+  db.comments.push(
+    { id: 'cmt_rank_1', storyId: 's2', userId: 'u_user', body: 'Hay', createdAt: today },
+    { id: 'cmt_rank_2', storyId: 's2', userId: 'u_user', body: 'Tot', createdAt: today },
+    { id: 'cmt_rank_3', storyId: 's2', userId: 'u_user', body: 'On', createdAt: today }
+  );
+  db.purchases.push({ id: 'pur_rank_1', userId: 'u_user', storyId: 's3', chapterId: 'c_s3_4', price: 999, createdAt: today });
+  writeTestDb(db);
+
+  const comments = await request('/api/rankings?period=day&metric=comments&limit=3');
+  const revenue = await request('/api/rankings?period=day&metric=revenue&limit=3');
+  assert.equal(comments.response.status, 200);
+  assert.equal(revenue.response.status, 200);
+  assert.equal(comments.data.stories[0].id, 's2');
+  assert.equal(comments.data.stories[0].commentsCount, 3);
+  assert.equal(comments.data.stories[0].rankScore, 3);
+  assert.equal(revenue.data.stories[0].id, 's3');
+  assert.equal(revenue.data.stories[0].revenueSeeds, 999);
+  assert.equal(revenue.data.stories[0].rankScore, 999);
+});
+
+test('rankings rankDelta compares against the previous period', async () => {
+  const db = readTestDb();
+  db.viewEvents ||= [];
+  addViewEvents(db, 's20', 40, daysAgo(1));
+  addViewEvents(db, 's21', 30, daysAgo(1));
+  addViewEvents(db, 's20', 5, daysAgo(8));
+  addViewEvents(db, 's21', 50, daysAgo(8));
+  writeTestDb(db);
+
+  const ranking = await request('/api/rankings?period=week&metric=views&limit=5');
+  assert.equal(ranking.response.status, 200);
+  const s20 = ranking.data.stories.find(story => story.id === 's20');
+  const s21 = ranking.data.stories.find(story => story.id === 's21');
+  assert.equal(ranking.data.stories[0].id, 's20');
+  assert.equal(s20.rankDelta, 1);
+  assert.equal(s21.rankDelta, -1);
 });
 
 test('bookmark requires auth', async () => {
