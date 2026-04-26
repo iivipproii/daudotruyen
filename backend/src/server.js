@@ -309,59 +309,6 @@ async function handle(req, res) {
       return send(res, 200, { user: safeUser(user) });
     }
 
-    if (req.method === 'PATCH' && pathname === '/api/me/profile') {
-      const user = requireUser(req, res, db);
-      if (!user) return;
-      const body = await parseBody(req);
-      const name = String(body.name || '').trim();
-      const email = String(body.email || '').trim().toLowerCase();
-      if (!name) return badRequest(res, 'Tên hiển thị là bắt buộc.');
-      if (name.length > 80) return badRequest(res, 'Tên hiển thị quá dài.');
-      if (!isEmail(email)) return badRequest(res, 'Email không hợp lệ.');
-      if (db.users.some(item => item.id !== user.id && item.email.toLowerCase() === email)) return badRequest(res, 'Email đã tồn tại.');
-      user.name = name;
-      user.email = email;
-      ['phone','birthday','gender','address','website','bio','avatar','cover'].forEach(key => {
-        if (body[key] !== undefined) user[key] = String(body[key] || '').trim().slice(0, key === 'bio' ? 500 : 220);
-      });
-      user.updatedAt = now();
-      writeDb(db);
-      return send(res, 200, { user: safeUser(user) });
-    }
-
-    if (req.method === 'PATCH' && pathname === '/api/me/preferences') {
-      const user = requireUser(req, res, db);
-      if (!user) return;
-      const body = await parseBody(req);
-      user.preferences = {
-        ...(user.preferences || {}),
-        ...Object.fromEntries(Object.entries(body).map(([key, value]) => [key, Boolean(value)]))
-      };
-      user.updatedAt = now();
-      writeDb(db);
-      return send(res, 200, { user: safeUser(user) });
-    }
-
-    if (req.method === 'POST' && pathname === '/api/me/password') {
-      const user = requireUser(req, res, db);
-      if (!user) return;
-      const body = await parseBody(req);
-      const currentPassword = String(body.currentPassword || '');
-      const newPassword = String(body.newPassword || '');
-      const confirmPassword = String(body.confirmPassword || '');
-      const check = hashPassword(currentPassword, user.salt);
-      if (check.passwordHash !== user.passwordHash) return badRequest(res, 'Mật khẩu hiện tại không đúng.');
-      if (newPassword.length < 8) return badRequest(res, 'Mật khẩu mới cần ít nhất 8 ký tự.');
-      if (newPassword !== confirmPassword) return badRequest(res, 'Xác nhận mật khẩu không khớp.');
-      const next = hashPassword(newPassword);
-      user.salt = next.salt;
-      user.passwordHash = next.passwordHash;
-      user.updatedAt = now();
-      db.notifications.push({ id: uid('noti'), userId: user.id, type: 'security', title: 'Đã đổi mật khẩu', body: 'Mật khẩu tài khoản của bạn vừa được cập nhật.', read: false, createdAt: now() });
-      writeDb(db);
-      return send(res, 200, { ok: true });
-    }
-
     if (req.method === 'GET' && pathname === '/api/categories') {
       const categories = Array.from(new Set(db.stories.filter(isPublicStory).flatMap(story => story.categories))).sort();
       return send(res, 200, { categories });
@@ -547,7 +494,7 @@ async function handle(req, res) {
       const premiumChapters = db.chapters.filter(chapter => chapter.storyId === story.id && chapter.isPremium);
       const price = Math.max(1, Math.max(49, (story.price || 1) * db.chapters.filter(chapter => chapter.storyId === story.id).length));
       if (premiumChapters.length === 0) return send(res, 200, { unlocked: true, user: safeUser(user), price: 0 });
-      if (user.seeds < price) return badRequest(res, 'Số dư Đậu không đủ để mua combo.');
+      if (user.seeds < price) return badRequest(res, 'Số dư Hạt không đủ để mua combo.');
       user.seeds -= price;
       db.purchases.push({ id: uid('pur'), userId: user.id, storyId: story.id, chapterId: null, combo: true, price, createdAt: now() });
       db.transactions.push({ id: uid('txn'), userId: user.id, type: 'purchase', amount: -price, note: `Mua combo ${story.title}`, createdAt: now() });
@@ -621,23 +568,19 @@ async function handle(req, res) {
       if (!user) return;
       const body = await parseBody(req);
       const packs = {
-        'seed-10': { seeds: 10, bonus: 0, price: 10000 },
-        'seed-20': { seeds: 20, bonus: 2, price: 20000 },
-        'seed-50': { seeds: 50, bonus: 8, price: 50000 },
-        'seed-100': { seeds: 100, bonus: 20, price: 100000 },
-        'seed-200': { seeds: 200, bonus: 50, price: 200000 },
-        'seed-500': { seeds: 500, bonus: 150, price: 500000 }
+        'seed-10': 10,
+        'seed-20': 22,
+        'seed-50': 58,
+        'seed-100': 120,
+        'seed-200': 250,
+        'seed-500': 650
       };
-      const pack = packs[body.packageId];
-      if (!pack) return badRequest(res, 'Gói nạp không hợp lệ.');
-      const method = String(body.method || 'Thanh toán').trim().slice(0, 40);
-      const amount = pack.seeds + pack.bonus;
-      user.seeds += amount;
-      db.transactions.push({ id: uid('txn'), userId: user.id, type: 'topup', amount: pack.seeds, note: `Nạp ${pack.seeds} Đậu qua ${method}`, price: pack.price, method, createdAt: now() });
-      if (pack.bonus > 0) db.transactions.push({ id: uid('txn'), userId: user.id, type: 'bonus', amount: pack.bonus, note: `Thưởng gói nạp ${body.packageId}`, price: 0, method, createdAt: now() });
-      db.notifications.push({ id: uid('noti'), userId: user.id, type: 'wallet', title: 'Nạp Đậu thành công', body: `Bạn đã nhận ${amount} Đậu qua ${method}.`, read: false, createdAt: now() });
+      const seeds = packs[body.packageId];
+      if (!seeds) return badRequest(res, 'Gói nạp không hợp lệ.');
+      user.seeds += seeds;
+      db.transactions.push({ id: uid('txn'), userId: user.id, type: 'topup', amount: seeds, note: `Nạp ${seeds} Hạt`, createdAt: now() });
       writeDb(db);
-      return send(res, 200, { user: safeUser(user), balance: user.seeds, amount });
+      return send(res, 200, { user: safeUser(user), balance: user.seeds });
     }
 
     const unlockParams = match(pathname, '/api/chapters/:id/unlock');
@@ -650,7 +593,7 @@ async function handle(req, res) {
       if (db.purchases.some(item => item.userId === user.id && item.chapterId === chapter.id)) {
         return send(res, 200, { unlocked: true, user: safeUser(user) });
       }
-      if (user.seeds < chapter.price) return badRequest(res, 'Số dư Đậu không đủ. Vui lòng nạp thêm.');
+      if (user.seeds < chapter.price) return badRequest(res, 'Số dư Hạt không đủ. Vui lòng nạp thêm.');
       user.seeds -= chapter.price;
       db.purchases.push({ id: uid('pur'), userId: user.id, storyId: chapter.storyId, chapterId: chapter.id, price: chapter.price, createdAt: now() });
       db.transactions.push({ id: uid('txn'), userId: user.id, type: 'purchase', amount: -chapter.price, note: `Mở khóa ${chapter.title}`, createdAt: now() });
@@ -834,6 +777,7 @@ async function handle(req, res) {
         preview: body.preview || 'Đây là đoạn xem trước của chương.',
         isPremium: Boolean(body.isPremium),
         price: Number(body.price || 0),
+        password: body.password ? String(body.password) : '',
         views: 0,
         createdAt: now()
       };
@@ -856,6 +800,7 @@ async function handle(req, res) {
       if (body.number !== undefined) chapter.number = Number(body.number);
       if (body.isPremium !== undefined) chapter.isPremium = Boolean(body.isPremium);
       if (body.price !== undefined) chapter.price = Number(body.price);
+      if (body.password !== undefined) chapter.password = String(body.password || '');
       const story = db.stories.find(item => item.id === chapter.storyId);
       if (story) story.updatedAt = now();
       writeDb(db);
@@ -929,7 +874,7 @@ function slugify(value) {
 }
 
 function lorem(title, tone) {
-  return `${title}\n\n${tone} Câu chuyện được biên tập theo phong cách dễ đọc, chia đoạn rõ ràng và tối ưu cho trải nghiệm đọc trên điện thoại.\n\nNhân vật chính từng bước vượt qua biến cố, mở khóa bí mật cũ và tạo nên những lựa chọn làm thay đổi cả hành trình phía trước.\n\nĐậu Đỏ Truyện lưu lịch sử đọc tự động, hỗ trợ chương trả phí bằng Đậu và cho phép người dùng theo dõi truyện yêu thích.`;
+  return `${title}\n\n${tone} Câu chuyện được biên tập theo phong cách dễ đọc, chia đoạn rõ ràng và tối ưu cho trải nghiệm đọc trên điện thoại.\n\nNhân vật chính từng bước vượt qua biến cố, mở khóa bí mật cũ và tạo nên những lựa chọn làm thay đổi cả hành trình phía trước.\n\nĐậu Đỏ Truyện lưu lịch sử đọc tự động, hỗ trợ chương trả phí bằng Hạt và cho phép người dùng theo dõi truyện yêu thích.`;
 }
 
 function extraSeedStoryRows() {
@@ -1009,7 +954,7 @@ function createSeedDb() {
     history: [{ id: 'his_seed_1', userId: 'u_user', storyId: 's1', chapterId: 'c_s1_2', chapterNumber: 2, updatedAt: now() }],
     purchases: [{ id: 'pur_seed_1', userId: 'u_user', storyId: 's1', chapterId: 'c_s1_4', price: 8, createdAt: now() }],
     transactions: [
-      { id: 'txn_seed_1', userId: 'u_user', type: 'bonus', amount: 80, note: 'Đậu dùng thử', createdAt: now() },
+      { id: 'txn_seed_1', userId: 'u_user', type: 'bonus', amount: 80, note: 'Hạt dùng thử', createdAt: now() },
       { id: 'txn_seed_2', userId: 'u_user', type: 'purchase', amount: -8, note: 'Mở khóa Đấu Phá Thương Khung chương 4', createdAt: now() }
     ],
     comments: [
@@ -1019,7 +964,7 @@ function createSeedDb() {
       { id: 'rate_seed_1', storyId: 's1', userId: 'u_user', value: 5, createdAt: now(), updatedAt: now() }
     ],
     notifications: [
-      { id: 'noti_seed_1', userId: 'u_user', type: 'system', title: 'Chào mừng đến Đậu Đỏ Truyện', body: 'Bạn đã nhận Đậu dùng thử để đọc chương trả phí.', read: false, createdAt: now() }
+      { id: 'noti_seed_1', userId: 'u_user', type: 'system', title: 'Chào mừng đến Đậu Đỏ Truyện', body: 'Bạn đã nhận Hạt dùng thử để đọc chương trả phí.', read: false, createdAt: now() }
     ],
     reports: []
   };

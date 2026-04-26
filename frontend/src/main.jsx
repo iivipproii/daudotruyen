@@ -26,6 +26,22 @@ const STORY_CATEGORIES = [
   'KhÃ¡c', 'PhÆ°Æ¡ng TÃ¢y', 'Light Novel', 'Viá»‡t Nam', 'Zhihu', 'Äoáº£n VÄƒn', 'Review SÃ¡ch'
 ];
 
+const PUBLISH_STORY_CATEGORIES = [
+  'Tiên Hiệp', 'Kiếm Hiệp', 'Huyền Huyễn', 'Kỳ Ảo', 'Tu Tiên', 'Tu Chân', 'Phong Thần',
+  'Hiện Đại & Đô Thị', 'Đô Thị', 'Hiện Đại', 'Khoa Huyễn', 'Hệ Thống', 'Đời Sống', 'Doanh Trường', 'Giải Trí', 'Thể Thao', 'Truyện Teen',
+  'Tình Cảm & Romance', 'Ngôn Tình', 'Đam Mỹ', 'Bách Hợp', 'Tình Cảm', 'Romance', 'Học Đường', 'Văn Phòng', 'Tổng Tài', 'Ngược', 'Sủng', 'Nữ Cường', 'Nữ Phụ',
+  'Đặc Biệt & Fantasy', 'Xuyên Không', 'Xuyên Nhanh', 'Trọng Sinh', 'Dị Giới', 'Võng Du', 'Mạt Thế', 'Dị Năng', 'Siêu Anh Hùng', 'Ma Pháp',
+  'Hành Động & Phiêu Lưu', 'Hành Động', 'Phiêu Lưu', 'Thám Hiểm', 'Sinh Tồn', 'Zombie', 'Quái Vật', 'Siêu Nhiên',
+  'Kinh Dị & Bí Ẩn', 'Kinh Dị', 'Ma Quỷ', 'Linh Dị', 'Trinh Thám', 'Bí Ẩn', 'Tâm Lý', 'Tội Phạm',
+  'Lịch Sử & Cổ Đại', 'Lịch Sử', 'Cổ Đại', 'Cung Đình', 'Cung Đấu', 'Hoàng Gia', 'Chiến Tranh', 'Quân Sự', 'Quan Trường', 'Võ Tướng', 'Đông Phương',
+  'Hài Hước & Nhẹ Nhàng', 'Hài Hước', 'Hài Kịch', 'Parody', 'Slice of Life', 'Ấm Áp', 'Gia Đình', 'Hằng Ngày', 'Điền Văn', 'Gia Đấu',
+  'Game & Technology', 'Game', 'VRMMO', 'LitRPG', 'Công Nghệ', 'AI', 'Cyberpunk', 'Tương Lai',
+  'Mở rộng', 'HE', 'SE', 'BE', 'OE', 'Ngọt', 'Chữa Lành', 'Ngược Nam', 'Ngược Nữ', 'Truy Thê', 'Trả Thù', 'Vả Mặt', 'Sảng Văn',
+  'Không CP', 'Showbiz', 'Bác Sĩ', 'Cảnh Sát', 'Quân Nhân', 'Dân Quốc', 'Thập Niên', 'Phương Đông',
+  'Quy tắc', 'Đề Cử', 'Review truyện', 'Tiểu Thuyết', 'Truyện Sáng Tác', 'Truyện Việt',
+  'Khác', 'Phương Tây', 'Light Novel', 'Việt Nam', 'Zhihu', 'Đoản Văn', 'Review Sách'
+];
+
 async function api(path, options = {}) {
   const token = localStorage.getItem('daudo_token');
   const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
@@ -132,6 +148,7 @@ function App() {
               <Route path="/thong-bao" element={<Protected><Notifications /></Protected>} />
               <Route path="/ai-tools" element={<AiTools />} />
               <Route path="/dang-truyen" element={<Protected admin><StoryPublish /></Protected>} />
+              <Route path="/dang-truyen/them-nhieu-chuong" element={<Protected admin><BulkChapterPublish /></Protected>} />
               <Route path="/admin" element={<Protected admin><Admin /></Protected>} />
               <Route path="/lien-he" element={<StaticPage type="contact" />} />
               <Route path="/dieu-khoan" element={<StaticPage type="terms" />} />
@@ -162,7 +179,7 @@ function RouteScrollReset() {
 
 function Shell({ children }) {
   const location = useLocation();
-  const publishing = location.pathname === '/dang-truyen';
+  const publishing = location.pathname.startsWith('/dang-truyen');
 
   if (publishing) {
     return <PublishShell>{children}</PublishShell>;
@@ -717,6 +734,38 @@ function statusLabel(value) {
 
 function approvalLabel(value) {
   return { pending: 'Chờ duyệt', approved: 'Đã duyệt', rejected: 'Từ chối' }[value] || 'Đã duyệt';
+}
+
+const BULK_CHAPTER_HEADING = /^\s*((?:Quy[eể]n\s+\d+\s*[-–—]\s*)?Ch[uư][oơ]ng\s+\d+(?:\s*[:：\-–—]\s*.*)?|Th[eế]\s*gi[oớ]i\s+\d+(?:\s*[:：\-–—]\s*.*)?|Ph[oó]\s*b[aả]n\s+\d+(?:\s*[:：\-–—]\s*.*)?)\s*$/i;
+
+function parseBulkChapters(input = '') {
+  const lines = String(input || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+  const chapters = [];
+  let current = null;
+
+  lines.forEach(line => {
+    const heading = line.match(BULK_CHAPTER_HEADING);
+    if (heading) {
+      if (current) chapters.push(current);
+      current = { title: heading[1].trim(), contentLines: [] };
+      return;
+    }
+    if (current) current.contentLines.push(line);
+  });
+
+  if (current) chapters.push(current);
+
+  return chapters.map((chapter, index) => {
+    const content = chapter.contentLines.join('\n').trim();
+    return {
+      index: index + 1,
+      title: chapter.title,
+      content,
+      charCount: content.length,
+      valid: content.length > 0,
+      error: content.length > 0 ? '' : 'Chương chưa có nội dung.'
+    };
+  });
 }
 
 function getStoryCardStatusLabel(status) {
@@ -1949,6 +1998,7 @@ function Admin() {
 }
 
 function PublishSidebar({ user }) {
+  const location = useLocation();
   const groups = [
     ['TÀI KHOẢN', ['Hồ sơ cá nhân', 'Bảo mật', 'Thông báo', 'Ví của tôi']],
     ['SÁNG TÁC', ['Quản lý truyện', 'Đăng truyện mới', 'Kiểm tra chương lỗi']],
@@ -1966,10 +2016,300 @@ function PublishSidebar({ user }) {
       {groups.map(([group, items]) => (
         <div className="sidebar-group" key={group}>
           <strong>{group}</strong>
-          {items.map(item => <span className={item === 'Đăng truyện mới' ? 'active' : ''} key={item}>{item}</span>)}
+          {items.map(item => <span className={item === 'Đăng truyện mới' && location.pathname === '/dang-truyen' ? 'active' : ''} key={item}>{item}</span>)}
         </div>
       ))}
+      <div className="sidebar-group">
+        <strong>THAO TÁC</strong>
+        <Link className={location.pathname === '/dang-truyen/them-nhieu-chuong' ? 'active' : ''} to="/dang-truyen/them-nhieu-chuong">Thêm nhiều chương</Link>
+      </div>
     </aside>
+  );
+}
+
+function BulkChapterPublish() {
+  const { user } = useAuth();
+  const [searchParams] = useSearchParams();
+  const queryStoryId = searchParams.get('storyId') || '';
+  const [stories, setStories] = useState([]);
+  const [storyDetail, setStoryDetail] = useState(null);
+  const [selectedStoryId, setSelectedStoryId] = useState(queryStoryId);
+  const [activeTab, setActiveTab] = useState('paste');
+  const [rawText, setRawText] = useState('');
+  const [isPremium, setIsPremium] = useState(false);
+  const [price, setPrice] = useState(0);
+  const [passwordEnabled, setPasswordEnabled] = useState(false);
+  const [password, setPassword] = useState('');
+  const [checked, setChecked] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [postedStory, setPostedStory] = useState(null);
+  const [draftLoadedKey, setDraftLoadedKey] = useState('');
+
+  const selectedStory = stories.find(story => story.id === selectedStoryId) || null;
+  const parsedChapters = useMemo(() => parseBulkChapters(rawText), [rawText]);
+  const validChapters = parsedChapters.filter(chapter => chapter.valid);
+  const invalidChapters = parsedChapters.filter(chapter => !chapter.valid);
+  const chapterNumbers = storyDetail?.chapters?.map(chapter => Number(chapter.number) || 0) || [];
+  const nextChapterNumber = Math.max(0, ...chapterNumbers, Number(selectedStory?.chapterCount || 0)) + 1;
+  const draftKey = `daudo_bulk_chapters_${selectedStoryId || 'unselected'}`;
+
+  useEffect(() => {
+    api('/admin/stories')
+      .then(data => setStories(data.stories || []))
+      .catch(err => setError(err.message))
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    if (queryStoryId) setSelectedStoryId(queryStoryId);
+  }, [queryStoryId]);
+
+  useEffect(() => {
+    setStoryDetail(null);
+    if (!selectedStoryId) return;
+    api(`/stories/${selectedStoryId}`)
+      .then(data => setStoryDetail(data))
+      .catch(() => setStoryDetail(null));
+  }, [selectedStoryId]);
+
+  useEffect(() => {
+    setDraftLoadedKey('');
+    const rawDraft = localStorage.getItem(draftKey);
+    if (rawDraft) {
+      try {
+        const draft = JSON.parse(rawDraft);
+        setRawText(draft.rawText || '');
+        setActiveTab(draft.activeTab || 'paste');
+        setIsPremium(Boolean(draft.isPremium));
+        setPrice(Number(draft.price || 0));
+        setPasswordEnabled(Boolean(draft.passwordEnabled));
+        setPassword(draft.password || '');
+      } catch {
+        localStorage.removeItem(draftKey);
+      }
+    } else {
+      setRawText('');
+      setActiveTab('paste');
+      setIsPremium(false);
+      setPrice(0);
+      setPasswordEnabled(false);
+      setPassword('');
+    }
+    setChecked(false);
+    setSuccess('');
+    setPostedStory(null);
+    setDraftLoadedKey(draftKey);
+  }, [draftKey]);
+
+  useEffect(() => {
+    if (draftLoadedKey !== draftKey) return;
+    localStorage.setItem(draftKey, JSON.stringify({ rawText, activeTab, isPremium, price, passwordEnabled, password }));
+  }, [draftKey, draftLoadedKey, rawText, activeTab, isPremium, price, passwordEnabled, password]);
+
+  function clearDraft() {
+    localStorage.removeItem(draftKey);
+    setRawText('');
+    setActiveTab('paste');
+    setIsPremium(false);
+    setPrice(0);
+    setPasswordEnabled(false);
+    setPassword('');
+    setChecked(false);
+    setSuccess('Đã xóa bản nháp.');
+  }
+
+  function checkChapters() {
+    setChecked(true);
+    setSuccess('');
+    if (!rawText.trim()) {
+      setError('Vui lòng dán nội dung hoặc tải file .txt.');
+      return;
+    }
+    if (parsedChapters.length === 0) {
+      setError('Chưa tìm thấy tiêu đề chương hợp lệ.');
+      return;
+    }
+    if (invalidChapters.length > 0) {
+      setError(`Có ${invalidChapters.length} chương chưa có nội dung.`);
+      return;
+    }
+    setError('');
+  }
+
+  function handleFile(file) {
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.txt')) {
+      setError('Hiện tại chỉ hỗ trợ file .txt.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setRawText(String(reader.result || ''));
+      setActiveTab('paste');
+      setChecked(false);
+      setError('');
+      setSuccess(`Đã tải file ${file.name}.`);
+    };
+    reader.onerror = () => setError('Không thể đọc file. Vui lòng thử lại.');
+    reader.readAsText(file);
+  }
+
+  async function submitChapters() {
+    setChecked(true);
+    setError('');
+    setSuccess('');
+    if (!selectedStoryId) return setError('Vui lòng chọn truyện trước khi đăng chương.');
+    if (parsedChapters.length === 0) return setError('Chưa parse được chương nào.');
+    if (invalidChapters.length > 0) return setError('Không thể đăng chương rỗng. Vui lòng kiểm tra lại nội dung.');
+    if (isPremium && Number(price) < 0) return setError('Giá chương không hợp lệ.');
+    if (passwordEnabled && !password.trim()) return setError('Vui lòng nhập mật khẩu chương.');
+
+    setSubmitting(true);
+    try {
+      for (const chapter of validChapters) {
+        await api(`/admin/stories/${selectedStoryId}/chapters`, {
+          method: 'POST',
+          body: JSON.stringify({
+            title: chapter.title,
+            content: chapter.content,
+            isPremium,
+            price: isPremium ? Number(price || 0) : 0,
+            preview: chapter.content.slice(0, 300),
+            password: passwordEnabled ? password.trim() : ''
+          })
+        });
+      }
+      localStorage.removeItem(draftKey);
+      setPostedStory(selectedStory);
+      setSuccess(`Đã đăng ${validChapters.length} chương.`);
+      setRawText('');
+      setChecked(false);
+      const detail = await api(`/stories/${selectedStoryId}`).catch(() => null);
+      if (detail) setStoryDetail(detail);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  if (loading) return <Loader />;
+
+  return (
+    <div className="publish-page bulk-chapter-page">
+      <PublishSidebar user={user} />
+      <section className="bulk-chapter-card">
+        <header className="bulk-chapter-header">
+          <div className="bulk-chapter-header-main">
+            <Link className="bulk-back" to="/dang-truyen">‹</Link>
+            <div>
+              <h1>Thêm nhiều chương</h1>
+              <p>Sau khi {selectedStory?.title || 'chọn truyện'}</p>
+            </div>
+          </div>
+          <div className="bulk-next-badge">Chương tiếp: {selectedStoryId ? nextChapterNumber : '-'}</div>
+        </header>
+
+        <ErrorBox message={error} />
+        {success && <div className="success-box">{success}</div>}
+
+        {!queryStoryId && (
+          <div className="bulk-story-select">
+            <label>Chọn truyện</label>
+            <select value={selectedStoryId} onChange={event => setSelectedStoryId(event.target.value)}>
+              <option value="">Chọn truyện cần đăng chương</option>
+              {stories.map(story => <option key={story.id} value={story.id}>{story.title} - {story.chapterCount || 0} chương</option>)}
+            </select>
+          </div>
+        )}
+
+        <div className="bulk-tabs">
+          <button type="button" className={activeTab === 'paste' ? 'active' : ''} onClick={() => setActiveTab('paste')}>Dán nội dung</button>
+          <button type="button" className={activeTab === 'file' ? 'active' : ''} onClick={() => setActiveTab('file')}>Tải file</button>
+        </div>
+
+        {activeTab === 'file' && (
+          <label className="bulk-file-drop">
+            <strong>Tải file .txt</strong>
+            <span>Chọn file văn bản chứa nhiều chương, hệ thống sẽ đọc và đưa vào ô dán nội dung.</span>
+            <input type="file" accept=".txt,text/plain" onChange={event => handleFile(event.target.files?.[0])} />
+          </label>
+        )}
+
+        <textarea
+          className="bulk-chapter-textarea"
+          value={rawText}
+          onChange={event => {
+            setRawText(event.target.value);
+            setChecked(false);
+          }}
+          placeholder={`Chương 1: Tên chương 1
+Nội dung chương 1...
+
+Chương 2: Tên chương 2
+Nội dung chương 2...
+
+Hỗ trợ: Chương N, Quyển N - Chương N, Thế giới N, Phó bản N...`}
+        />
+
+        <div className="bulk-counter">
+          <span>{formatNumber(rawText.length)} ký tự</span>
+          <span>{parsedChapters.length} chương parse được</span>
+          {invalidChapters.length > 0 && <span className="danger">{invalidChapters.length} lỗi</span>}
+        </div>
+
+        <section className="bulk-options">
+          <h2>Tùy chọn chương</h2>
+          <div className="bulk-radio-row">
+            <label><input type="radio" checked={!isPremium} onChange={() => setIsPremium(false)} /> Miễn phí</label>
+            <label><input type="radio" checked={isPremium} onChange={() => setIsPremium(true)} /> Có phí</label>
+          </div>
+          {isPremium && (
+            <div className="bulk-price-row">
+              <label>Giá Hạt/Đậu mỗi chương</label>
+              <input type="number" min="0" value={price} onChange={event => setPrice(event.target.value)} />
+            </div>
+          )}
+          <div className="bulk-password-row">
+            <label><input type="checkbox" checked={passwordEnabled} onChange={event => setPasswordEnabled(event.target.checked)} /> Mật khẩu chương</label>
+            {passwordEnabled && <input placeholder="Nhập mật khẩu" value={password} onChange={event => setPassword(event.target.value)} />}
+          </div>
+        </section>
+
+        {checked && (
+          <section className="bulk-preview">
+            <h2>Preview chương</h2>
+            {parsedChapters.length === 0 && <div className="bulk-empty">Chưa có chương nào được parse.</div>}
+            {parsedChapters.map(chapter => (
+              <div key={`${chapter.index}-${chapter.title}`} className={chapter.valid ? 'bulk-preview-row valid' : 'bulk-preview-row invalid'}>
+                <span>#{chapter.index}</span>
+                <strong>{chapter.title}</strong>
+                <small>{formatNumber(chapter.charCount)} ký tự</small>
+                <em>{chapter.valid ? 'Hợp lệ' : chapter.error}</em>
+              </div>
+            ))}
+          </section>
+        )}
+
+        {postedStory && (
+          <div className="bulk-success-actions">
+            <Link className="button small" to={`/truyen/${postedStory.slug}`}>Xem truyện</Link>
+            <Link className="ghost" to="/admin">Quay lại admin</Link>
+          </div>
+        )}
+      </section>
+
+      <footer className="bulk-chapter-footer">
+        <button type="button" className="ghost" onClick={clearDraft}>Xóa nháp</button>
+        <div>
+          <button type="button" className="ghost" onClick={checkChapters}>Kiểm tra</button>
+          <button type="button" className="button" disabled={submitting || validChapters.length === 0 || invalidChapters.length > 0} onClick={submitChapters}>{submitting ? 'Đang đăng...' : 'Đăng chương'}</button>
+        </div>
+      </footer>
+    </div>
   );
 }
 
@@ -1977,7 +2317,7 @@ function StoryPublish() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const draftKey = 'daudo_story_publish_draft';
-  const [categories] = useState(STORY_CATEGORIES);
+  const [categories] = useState(PUBLISH_STORY_CATEGORIES);
   const [form, setForm] = useState({
     title: '',
     author: '',
@@ -2005,7 +2345,11 @@ function StoryPublish() {
     const raw = localStorage.getItem(draftKey);
     if (!raw) return;
     try {
-      setForm(prev => ({ ...prev, ...JSON.parse(raw) }));
+      const draft = JSON.parse(raw);
+      const draftCategories = Array.isArray(draft.categories)
+        ? draft.categories.filter(item => PUBLISH_STORY_CATEGORIES.includes(item))
+        : [];
+      setForm(prev => ({ ...prev, ...draft, categories: draftCategories.length ? draftCategories : prev.categories }));
     } catch {
       localStorage.removeItem(draftKey);
     }
@@ -2117,6 +2461,7 @@ function StoryPublish() {
           <p>{user?.name ? `Đăng nhập với tài khoản ${user.name}` : 'Tạo truyện theo bố cục nhiều cột giống ảnh mẫu.'}</p>
         </div>
         <div className="publish-actions">
+          <Link to="/dang-truyen/them-nhieu-chuong" className="button small">Thêm nhiều chương</Link>
           <Link to="/admin" className="ghost light">Quay lại admin</Link>
         </div>
       </div>
@@ -2297,4 +2642,3 @@ function formatNumber(value = 0) {
 }
 
 createRoot(document.getElementById('root')).render(<App />);
-
