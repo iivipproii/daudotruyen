@@ -22,6 +22,15 @@ function request(pathname, options = {}) {
   });
 }
 
+async function loginToken(email = 'admin@example.com', password = '123456') {
+  const login = await request('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ email, password })
+  });
+  assert.equal(login.response.status, 200);
+  return login.data.token;
+}
+
 test.before(async () => {
   fs.copyFileSync(DB_PATH, BACKUP_PATH);
   fs.writeFileSync(DB_PATH, JSON.stringify(createSeedDb(), null, 2));
@@ -57,6 +66,31 @@ test('register rejects invalid email', async () => {
   });
   assert.equal(response.status, 400);
   assert.match(data.message, /Email/i);
+});
+
+test('newsletter validates and stores subscriber email', async () => {
+  const invalid = await request('/api/newsletter', {
+    method: 'POST',
+    body: JSON.stringify({ email: 'not-an-email' })
+  });
+  assert.equal(invalid.response.status, 400);
+  assert.match(invalid.data.message, /Email/i);
+
+  const created = await request('/api/newsletter', {
+    method: 'POST',
+    body: JSON.stringify({ email: 'reader-news@example.com', source: 'footer' })
+  });
+  assert.equal(created.response.status, 201);
+  assert.equal(created.data.subscribed, true);
+
+  const duplicate = await request('/api/newsletter', {
+    method: 'POST',
+    body: JSON.stringify({ email: 'reader-news@example.com', source: 'footer' })
+  });
+  assert.equal(duplicate.response.status, 200);
+
+  const db = JSON.parse(fs.readFileSync(DB_PATH, 'utf8'));
+  assert.equal(db.newsletters.filter(item => item.email === 'reader-news@example.com').length, 1);
 });
 
 test('login returns token and user', async () => {
@@ -122,6 +156,55 @@ test('admin stats rejects non-admin user', async () => {
   assert.equal(response.status, 403);
 });
 
+test('admin chapters API rejects non-admin user', async () => {
+  const token = await loginToken('user@example.com');
+  const { response } = await request('/api/admin/chapters', {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  assert.equal(response.status, 403);
+});
+
+test('admin can list chapters and approve chapter status', async () => {
+  const token = await loginToken();
+  const list = await request('/api/admin/chapters', {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  assert.equal(list.response.status, 200);
+  assert.ok(Array.isArray(list.data.chapters));
+  assert.ok(list.data.chapters.length > 0);
+  assert.ok(list.data.chapters[0].storyTitle);
+  assert.ok(list.data.chapters[0].storyId);
+  assert.ok(list.data.chapters[0].author);
+  assert.equal(typeof list.data.chapters[0].wordCount, 'number');
+
+  const create = await request('/api/admin/stories/s1/chapters', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({
+      title: 'Chuong can duyet',
+      content: 'Noi dung chuong moi dang cho quan tri vien phe duyet.',
+      status: 'pending'
+    })
+  });
+  assert.equal(create.response.status, 201);
+  assert.equal(create.data.chapter.status, 'pending');
+
+  const approve = await request(`/api/admin/chapters/${create.data.chapter.id}/status`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ status: 'approved' })
+  });
+  assert.equal(approve.response.status, 200);
+  assert.equal(approve.data.chapter.status, 'approved');
+  assert.equal(approve.data.chapter.storyTitle, 'Đấu Phá Thương Khung');
+
+  const reloaded = await request('/api/admin/chapters', {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  const saved = reloaded.data.chapters.find(item => item.id === create.data.chapter.id);
+  assert.equal(saved.status, 'approved');
+});
+
 test('admin can create story with publish metadata', async () => {
   const login = await request('/api/auth/login', {
     method: 'POST',
@@ -149,6 +232,55 @@ test('admin can create story with publish metadata', async () => {
   assert.equal(data.story.ageRating, '16');
   assert.equal(data.story.hidden, true);
   assert.equal(data.story.chapterCountEstimate, 12);
+});
+
+test('hidden and rejected chapters stay out of public story and reader endpoints', async () => {
+  const token = await loginToken();
+  const story = await request('/api/admin/stories', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({
+      title: 'Chapter Visibility Story',
+      author: 'Chapter Moderator',
+      description: 'Story used to verify chapter visibility',
+      categories: ['Moderation'],
+      approvalStatus: 'approved',
+      hidden: false
+    })
+  });
+  assert.equal(story.response.status, 201);
+
+  const rejected = await request(`/api/admin/stories/${story.data.story.id}/chapters`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ number: 1, title: 'Rejected chapter', content: 'Rejected content should not be public.', status: 'rejected' })
+  });
+  const hidden = await request(`/api/admin/stories/${story.data.story.id}/chapters`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ number: 2, title: 'Hidden chapter', content: 'Hidden content should not be public.', status: 'hidden' })
+  });
+  const approved = await request(`/api/admin/stories/${story.data.story.id}/chapters`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ number: 3, title: 'Approved chapter', content: 'Approved content is public.', status: 'approved' })
+  });
+  assert.equal(rejected.response.status, 201);
+  assert.equal(hidden.response.status, 201);
+  assert.equal(approved.response.status, 201);
+
+  const detail = await request(`/api/stories/${story.data.story.slug}`);
+  assert.equal(detail.response.status, 200);
+  assert.ok(detail.data.chapters.some(item => item.id === approved.data.chapter.id));
+  assert.ok(!detail.data.chapters.some(item => item.id === rejected.data.chapter.id));
+  assert.ok(!detail.data.chapters.some(item => item.id === hidden.data.chapter.id));
+
+  const rejectedRead = await request(`/api/stories/${story.data.story.slug}/chapters/1`);
+  const hiddenRead = await request(`/api/stories/${story.data.story.slug}/chapters/2`);
+  const approvedRead = await request(`/api/stories/${story.data.story.slug}/chapters/3`);
+  assert.equal(rejectedRead.response.status, 404);
+  assert.equal(hiddenRead.response.status, 404);
+  assert.equal(approvedRead.response.status, 200);
 });
 
 test('admin can update and delete chapters', async () => {
@@ -244,6 +376,54 @@ test('pending stories stay out of public listing', async () => {
   const list = await request('/api/stories?q=Pending%20Story%20Test');
   assert.equal(list.response.status, 200);
   assert.equal(list.data.stories.length, 0);
+});
+
+test('story moderation status controls public listing', async () => {
+  const token = await loginToken();
+  const create = await request('/api/admin/stories', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({
+      title: 'Story Status Public Toggle',
+      author: 'Story Moderator',
+      description: 'Story used to verify public status toggle',
+      categories: ['Moderation'],
+      approvalStatus: 'pending',
+      hidden: false
+    })
+  });
+  assert.equal(create.response.status, 201);
+
+  const pendingList = await request('/api/stories?q=Story%20Status%20Public%20Toggle');
+  assert.equal(pendingList.data.stories.length, 0);
+
+  const approve = await request(`/api/admin/stories/${create.data.story.id}/status`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ approvalStatus: 'approved', hidden: false })
+  });
+  assert.equal(approve.response.status, 200);
+  assert.equal(approve.data.story.approvalStatus, 'approved');
+  const approvedList = await request('/api/stories?q=Story%20Status%20Public%20Toggle');
+  assert.equal(approvedList.data.stories.length, 1);
+
+  const reject = await request(`/api/admin/stories/${create.data.story.id}/status`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ approvalStatus: 'rejected' })
+  });
+  assert.equal(reject.response.status, 200);
+  const rejectedList = await request('/api/stories?q=Story%20Status%20Public%20Toggle');
+  assert.equal(rejectedList.data.stories.length, 0);
+
+  const hide = await request(`/api/admin/stories/${create.data.story.id}/status`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ approvalStatus: 'approved', hidden: true })
+  });
+  assert.equal(hide.response.status, 200);
+  const hiddenList = await request('/api/stories?q=Story%20Status%20Public%20Toggle');
+  assert.equal(hiddenList.data.stories.length, 0);
 });
 
 test('hidden stories stay out of public listing', async () => {

@@ -149,9 +149,10 @@ function requireAdmin(req, res, db) {
   return user;
 }
 
-function enrichStory(db, story, viewerId) {
+function enrichStory(db, story, viewerId, includeAllChapters = false) {
   const chapters = db.chapters
     .filter(chapter => chapter.storyId === story.id)
+    .filter(chapter => includeAllChapters || isPublicChapter(chapter))
     .sort((a, b) => a.number - b.number);
   const ratings = db.ratings.filter(item => item.storyId === story.id);
   const ratingAvg = ratings.length
@@ -215,6 +216,41 @@ function storySummary(story) {
   };
 }
 
+const VALID_CHAPTER_STATUSES = ['pending', 'reviewing', 'approved', 'rejected', 'hidden'];
+
+function chapterStatus(chapter) {
+  return chapter.status || 'approved';
+}
+
+function isPublicChapter(chapter) {
+  return chapterStatus(chapter) === 'approved';
+}
+
+function wordCount(value) {
+  const text = String(value || '').trim();
+  if (!text) return 0;
+  return text.split(/\s+/).filter(Boolean).length;
+}
+
+function chapterAdminSummary(db, chapter) {
+  const story = db.stories.find(item => item.id === chapter.storyId);
+  return {
+    ...chapter,
+    storyId: chapter.storyId,
+    storyTitle: story?.title || 'Truyện đã xóa',
+    author: story?.author || 'Không rõ tác giả',
+    number: chapter.number,
+    title: chapter.title,
+    status: chapterStatus(chapter),
+    wordCount: chapter.wordCount ?? wordCount(chapter.content),
+    createdAt: chapter.createdAt || story?.createdAt || now(),
+    updatedAt: chapter.updatedAt || chapter.createdAt || story?.updatedAt || story?.createdAt || now(),
+    vip: Boolean(chapter.isPremium),
+    reads: chapter.views || 0,
+    comments: db.comments.filter(item => item.chapterId === chapter.id).length
+  };
+}
+
 function ensureDbShape(db) {
   db.users ||= [];
   db.stories ||= [];
@@ -228,8 +264,12 @@ function ensureDbShape(db) {
   db.ratings ||= [];
   db.notifications ||= [];
   db.reports ||= [];
+  db.newsletters ||= [];
   db.stories.forEach(story => {
     if (!story.approvalStatus) story.approvalStatus = story.hidden ? 'pending' : 'approved';
+  });
+  db.chapters.forEach(chapter => {
+    if (chapter.status && !VALID_CHAPTER_STATUSES.includes(chapter.status)) chapter.status = 'approved';
   });
   return db;
 }
@@ -314,6 +354,33 @@ async function handle(req, res) {
       return send(res, 200, { categories });
     }
 
+    if (req.method === 'POST' && pathname === '/api/newsletter') {
+      const body = await parseBody(req);
+      const email = String(body.email || '').trim().toLowerCase();
+      if (!isEmail(email)) return badRequest(res, 'Email không hợp lệ.');
+
+      const existing = db.newsletters.find(item => item.email.toLowerCase() === email);
+      if (existing) {
+        existing.active = true;
+        existing.updatedAt = now();
+        existing.source = String(body.source || existing.source || 'footer').slice(0, 80);
+        writeDb(db);
+        return send(res, 200, { ok: true, subscribed: true, message: 'Email này đã có trong danh sách nhận thông báo.' });
+      }
+
+      const subscription = {
+        id: uid('nl'),
+        email,
+        source: String(body.source || 'footer').slice(0, 80),
+        active: true,
+        createdAt: now(),
+        updatedAt: now()
+      };
+      db.newsletters.unshift(subscription);
+      writeDb(db);
+      return send(res, 201, { ok: true, subscribed: true, message: 'Đăng ký nhận thông báo thành công.' });
+    }
+
     if (req.method === 'GET' && pathname === '/api/stories') {
       const q = (url.searchParams.get('q') || '').trim().toLowerCase();
       const category = url.searchParams.get('category') || '';
@@ -346,8 +413,11 @@ async function handle(req, res) {
       if (!isPublicStory(story) && (!viewer || viewer.role !== 'admin')) return notFound(res);
       story.views += 1;
       writeDb(db);
-      const enriched = enrichStory(db, story, viewer && viewer.id);
-      const chapters = db.chapters.filter(chapter => chapter.storyId === story.id).sort((a, b) => a.number - b.number);
+      const enriched = enrichStory(db, story, viewer && viewer.id, viewer?.role === 'admin');
+      const chapters = db.chapters
+        .filter(chapter => chapter.storyId === story.id)
+        .filter(chapter => viewer?.role === 'admin' || isPublicChapter(chapter))
+        .sort((a, b) => a.number - b.number);
       const comments = db.comments
         .filter(comment => comment.storyId === story.id)
         .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
@@ -362,6 +432,7 @@ async function handle(req, res) {
       if (!isPublicStory(story) && (!viewer || viewer.role !== 'admin')) return notFound(res);
       const chapter = db.chapters.find(item => item.storyId === story.id && item.number === Number(chapterParams.number));
       if (!chapter) return notFound(res);
+      if (!isPublicChapter(chapter) && viewer?.role !== 'admin') return notFound(res);
       const unlocked = !chapter.isPremium || (viewer && db.purchases.some(item => item.userId === viewer.id && (item.chapterId === chapter.id || (item.storyId === story.id && item.combo))));
       const payloadChapter = unlocked ? chapter : { ...chapter, content: chapter.preview || 'Chương trả phí. Vui lòng mở khóa để đọc đầy đủ.' };
       chapter.views += 1;
@@ -377,7 +448,7 @@ async function handle(req, res) {
         }
       }
       writeDb(db);
-      return send(res, 200, { story: enrichStory(db, story, viewer && viewer.id), chapter: payloadChapter, unlocked });
+      return send(res, 200, { story: enrichStory(db, story, viewer && viewer.id, viewer?.role === 'admin'), chapter: payloadChapter, unlocked });
     }
 
     const bookmarkParams = match(pathname, '/api/stories/:id/bookmark');
@@ -491,10 +562,11 @@ async function handle(req, res) {
       if (db.purchases.some(item => item.userId === user.id && item.storyId === story.id && item.combo)) {
         return send(res, 200, { unlocked: true, user: safeUser(user), price: 0 });
       }
-      const premiumChapters = db.chapters.filter(chapter => chapter.storyId === story.id && chapter.isPremium);
-      const price = Math.max(1, Math.max(49, (story.price || 1) * db.chapters.filter(chapter => chapter.storyId === story.id).length));
+      const publicChapters = db.chapters.filter(chapter => chapter.storyId === story.id && isPublicChapter(chapter));
+      const premiumChapters = publicChapters.filter(chapter => chapter.isPremium);
+      const price = Math.max(1, Math.max(49, (story.price || 1) * publicChapters.length));
       if (premiumChapters.length === 0) return send(res, 200, { unlocked: true, user: safeUser(user), price: 0 });
-      if (user.seeds < price) return badRequest(res, 'Số dư Hạt không đủ để mua combo.');
+      if (user.seeds < price) return badRequest(res, 'Số dư xu không đủ để mua combo.');
       user.seeds -= price;
       db.purchases.push({ id: uid('pur'), userId: user.id, storyId: story.id, chapterId: null, combo: true, price, createdAt: now() });
       db.transactions.push({ id: uid('txn'), userId: user.id, type: 'purchase', amount: -price, note: `Mua combo ${story.title}`, createdAt: now() });
@@ -578,7 +650,7 @@ async function handle(req, res) {
       const seeds = packs[body.packageId];
       if (!seeds) return badRequest(res, 'Gói nạp không hợp lệ.');
       user.seeds += seeds;
-      db.transactions.push({ id: uid('txn'), userId: user.id, type: 'topup', amount: seeds, note: `Nạp ${seeds} Hạt`, createdAt: now() });
+      db.transactions.push({ id: uid('txn'), userId: user.id, type: 'topup', amount: seeds, note: `Nạp ${seeds} xu`, createdAt: now() });
       writeDb(db);
       return send(res, 200, { user: safeUser(user), balance: user.seeds });
     }
@@ -593,7 +665,7 @@ async function handle(req, res) {
       if (db.purchases.some(item => item.userId === user.id && item.chapterId === chapter.id)) {
         return send(res, 200, { unlocked: true, user: safeUser(user) });
       }
-      if (user.seeds < chapter.price) return badRequest(res, 'Số dư Hạt không đủ. Vui lòng nạp thêm.');
+      if (user.seeds < chapter.price) return badRequest(res, 'Số dư xu không đủ. Vui lòng nạp thêm.');
       user.seeds -= chapter.price;
       db.purchases.push({ id: uid('pur'), userId: user.id, storyId: chapter.storyId, chapterId: chapter.id, price: chapter.price, createdAt: now() });
       db.transactions.push({ id: uid('txn'), userId: user.id, type: 'purchase', amount: -chapter.price, note: `Mở khóa ${chapter.title}`, createdAt: now() });
@@ -634,7 +706,7 @@ async function handle(req, res) {
       if (!admin) return;
       const reports = db.reports.slice().sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).map(report => ({
         ...report,
-        story: db.stories.find(story => story.id === report.storyId) ? storySummary(enrichStory(db, db.stories.find(story => story.id === report.storyId), admin.id)) : null,
+        story: db.stories.find(story => story.id === report.storyId) ? storySummary(enrichStory(db, db.stories.find(story => story.id === report.storyId), admin.id, true)) : null,
         user: safeUser(db.users.find(user => user.id === report.userId))
       }));
       return send(res, 200, { reports });
@@ -643,7 +715,17 @@ async function handle(req, res) {
     if (req.method === 'GET' && pathname === '/api/admin/stories') {
       const admin = requireAdmin(req, res, db);
       if (!admin) return;
-      return send(res, 200, { stories: db.stories.map(story => enrichStory(db, story, admin.id)) });
+      return send(res, 200, { stories: db.stories.map(story => enrichStory(db, story, admin.id, true)) });
+    }
+
+    if (req.method === 'GET' && pathname === '/api/admin/chapters') {
+      const admin = requireAdmin(req, res, db);
+      if (!admin) return;
+      const chapters = db.chapters
+        .slice()
+        .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0))
+        .map(chapter => chapterAdminSummary(db, chapter));
+      return send(res, 200, { chapters });
     }
 
     if (req.method === 'POST' && pathname === '/api/admin/stories') {
@@ -686,6 +768,22 @@ async function handle(req, res) {
 
     const adminStoryParams = match(pathname, '/api/admin/stories/:id');
     const adminReportParams = match(pathname, '/api/admin/reports/:id');
+    const adminChapterStatusParams = match(pathname, '/api/admin/chapters/:id/status');
+    if (adminChapterStatusParams && req.method === 'PATCH') {
+      const admin = requireAdmin(req, res, db);
+      if (!admin) return;
+      const chapter = db.chapters.find(item => item.id === adminChapterStatusParams.id);
+      if (!chapter) return notFound(res);
+      const body = await parseBody(req);
+      if (!VALID_CHAPTER_STATUSES.includes(body.status)) return badRequest(res, 'Trạng thái chương không hợp lệ.');
+      chapter.status = body.status;
+      chapter.updatedAt = now();
+      const story = db.stories.find(item => item.id === chapter.storyId);
+      if (story) story.updatedAt = now();
+      writeDb(db);
+      return send(res, 200, { chapter: chapterAdminSummary(db, chapter) });
+    }
+
     if (adminReportParams && req.method === 'PATCH') {
       const admin = requireAdmin(req, res, db);
       if (!admin) return;
@@ -777,9 +875,11 @@ async function handle(req, res) {
         preview: body.preview || 'Đây là đoạn xem trước của chương.',
         isPremium: Boolean(body.isPremium),
         price: Number(body.price || 0),
+        status: VALID_CHAPTER_STATUSES.includes(body.status) ? body.status : 'approved',
         password: body.password ? String(body.password) : '',
         views: 0,
-        createdAt: now()
+        createdAt: now(),
+        updatedAt: now()
       };
       db.chapters.push(chapter);
       story.updatedAt = now();
@@ -800,11 +900,16 @@ async function handle(req, res) {
       if (body.number !== undefined) chapter.number = Number(body.number);
       if (body.isPremium !== undefined) chapter.isPremium = Boolean(body.isPremium);
       if (body.price !== undefined) chapter.price = Number(body.price);
+      if (body.status !== undefined) {
+        if (!VALID_CHAPTER_STATUSES.includes(body.status)) return badRequest(res, 'Trạng thái chương không hợp lệ.');
+        chapter.status = body.status;
+      }
       if (body.password !== undefined) chapter.password = String(body.password || '');
       const story = db.stories.find(item => item.id === chapter.storyId);
       if (story) story.updatedAt = now();
+      chapter.updatedAt = now();
       writeDb(db);
-      return send(res, 200, { chapter });
+      return send(res, 200, { chapter: chapterAdminSummary(db, chapter) });
     }
 
     if (adminChapterUpdateParams && req.method === 'DELETE') {
@@ -874,7 +979,7 @@ function slugify(value) {
 }
 
 function lorem(title, tone) {
-  return `${title}\n\n${tone} Câu chuyện được biên tập theo phong cách dễ đọc, chia đoạn rõ ràng và tối ưu cho trải nghiệm đọc trên điện thoại.\n\nNhân vật chính từng bước vượt qua biến cố, mở khóa bí mật cũ và tạo nên những lựa chọn làm thay đổi cả hành trình phía trước.\n\nĐậu Đỏ Truyện lưu lịch sử đọc tự động, hỗ trợ chương trả phí bằng Hạt và cho phép người dùng theo dõi truyện yêu thích.`;
+  return `${title}\n\n${tone} Câu chuyện được biên tập theo phong cách dễ đọc, chia đoạn rõ ràng và tối ưu cho trải nghiệm đọc trên điện thoại.\n\nNhân vật chính từng bước vượt qua biến cố, mở khóa bí mật cũ và tạo nên những lựa chọn làm thay đổi cả hành trình phía trước.\n\nĐậu Đỏ Truyện lưu lịch sử đọc tự động, hỗ trợ chương trả phí bằng xu và cho phép người dùng theo dõi truyện yêu thích.`;
 }
 
 function extraSeedStoryRows() {
@@ -932,7 +1037,7 @@ function createSeedDb() {
         storyId: story.id,
         number,
         title: `Chương ${number}: ${number === 1 ? 'Khởi đầu' : number === 2 ? 'Biến cố' : number === 3 ? 'Gặp gỡ' : 'Bước ngoặt mới'}`,
-        content: lorem(`${story.title} - Chương ${number}`, premiumChapter ? 'Đây là chương cao trào có nội dung trả phí trong bản demo.' : 'Đây là chương miễn phí trong bản demo.'),
+        content: lorem(`${story.title} - Chương ${number}`, premiumChapter ? 'Cao trào của câu chuyện dần hé lộ, các bí mật cũ được kết nối với lựa chọn quyết định của nhân vật chính.' : 'Chương mở ra bằng những biến cố đầu tiên, đưa nhân vật chính bước vào hành trình mới.'),
         preview: `${story.title} - Chương ${number}\n\nĐoạn xem trước: biến cố mới xuất hiện, nhân vật chính buộc phải đưa ra lựa chọn quan trọng...`,
         isPremium: premiumChapter,
         price: premiumChapter ? story.price : 0,
@@ -954,7 +1059,7 @@ function createSeedDb() {
     history: [{ id: 'his_seed_1', userId: 'u_user', storyId: 's1', chapterId: 'c_s1_2', chapterNumber: 2, updatedAt: now() }],
     purchases: [{ id: 'pur_seed_1', userId: 'u_user', storyId: 's1', chapterId: 'c_s1_4', price: 8, createdAt: now() }],
     transactions: [
-      { id: 'txn_seed_1', userId: 'u_user', type: 'bonus', amount: 80, note: 'Hạt dùng thử', createdAt: now() },
+      { id: 'txn_seed_1', userId: 'u_user', type: 'bonus', amount: 80, note: 'Xu khởi tạo', createdAt: now() },
       { id: 'txn_seed_2', userId: 'u_user', type: 'purchase', amount: -8, note: 'Mở khóa Đấu Phá Thương Khung chương 4', createdAt: now() }
     ],
     comments: [
@@ -964,9 +1069,10 @@ function createSeedDb() {
       { id: 'rate_seed_1', storyId: 's1', userId: 'u_user', value: 5, createdAt: now(), updatedAt: now() }
     ],
     notifications: [
-      { id: 'noti_seed_1', userId: 'u_user', type: 'system', title: 'Chào mừng đến Đậu Đỏ Truyện', body: 'Bạn đã nhận Hạt dùng thử để đọc chương trả phí.', read: false, createdAt: now() }
+      { id: 'noti_seed_1', userId: 'u_user', type: 'system', title: 'Chào mừng đến Đậu Đỏ Truyện', body: 'Bạn đã nhận xu khởi tạo để đọc chương trả phí.', read: false, createdAt: now() }
     ],
-    reports: []
+    reports: [],
+    newsletters: []
   };
 }
 

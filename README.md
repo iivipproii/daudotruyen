@@ -1,4 +1,4 @@
-# Dau Do Truyen - Full-stack demo
+# Dau Do Truyen - Full-stack reading platform
 
 This project is a reconstructed full-stack reading app based on the exported `webcuatui.zip` UI.
 
@@ -6,8 +6,8 @@ This project is a reconstructed full-stack reading app based on the exported `we
 
 - Frontend: React + Vite + React Router + plain CSS
 - Backend: Node.js HTTP server with JSON persistence
-- Auth: demo HMAC token for local use
-- Features: story browsing, story detail, paid chapters via Hạt, bookmarks, follows, reading history, wallet, AI tools demo, admin dashboard
+- Auth: local HMAC token for development
+- Features: story browsing, story detail, paid chapters via xu, bookmarks, follows, reading history, wallet, AI tools, admin dashboard
 
 ## Structure
 
@@ -59,14 +59,14 @@ Default frontend URL:
 http://localhost:5173
 ```
 
-## Demo accounts
+## Seed accounts
 
 ```text
 Admin: admin@example.com / 123456
 User:  user@example.com / 123456
 ```
 
-## Reset demo data
+## Reset local data
 
 ```bash
 cd backend
@@ -93,9 +93,9 @@ npm run reset-db
 
 ## Production notes
 
-This repo is ready for local/demo development. For production, replace the JSON file with a real database, use a standard session/JWT setup, keep `JWT_SECRET` in environment variables, restrict CORS to the deployed frontend origin, add stronger request validation, and connect real payment flows before exposing wallet actions.
+This repo is ready for local development. For production, replace the JSON file with a real database, use a standard session/JWT setup, keep `JWT_SECRET` in environment variables, restrict CORS to the deployed frontend origin, add stronger request validation, and connect real payment flows before exposing wallet actions.
 
-## Deploy demo online
+## Deploy online
 
 Deploy the backend and frontend as two separate services.
 
@@ -134,4 +134,4 @@ Change that value to the real backend domain before building if the backend is d
 
 The frontend uses React Router with `BrowserRouter`. `frontend/vercel.json` rewrites all routes to `index.html` so direct refreshes on routes such as `/admin`, `/ho-so`, and `/truyen/...` do not return 404 on Vercel.
 
-The current backend stores data in `backend/data/db.json`. For a public demo, use hosting with persistent disk if you keep JSON storage. For production with real users, move the data to PostgreSQL, Supabase, Neon, or another real database.
+The current backend stores data in `backend/data/db.json`. For a public launch, use hosting with persistent disk if you keep JSON storage. For production with real users, move the data to PostgreSQL, Supabase, Neon, or another real database.

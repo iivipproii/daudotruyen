@@ -111,7 +111,7 @@ function normalizeTransaction(transaction, users) {
     userName: transaction.userName || user?.name || transaction.userId || 'Người dùng',
     amount: transaction.vndAmount ?? transaction.money ?? (transaction.type === 'purchase' ? seedAmount * 100 : seedAmount * 1000),
     coins: transaction.coins ?? transaction.seeds ?? Math.abs(Number(transaction.amount || 0)),
-    method: transaction.method || (transaction.type === 'purchase' ? 'Ví xu' : 'Mock payment'),
+    method: transaction.method || (transaction.type === 'purchase' ? 'Ví xu' : 'Thanh toán nội bộ'),
     status: transaction.status || 'success',
     createdAt: transaction.createdAt || new Date().toISOString()
   };
@@ -131,10 +131,37 @@ function normalizeReport(report) {
   };
 }
 
+function countWords(value) {
+  const text = String(value || '').trim();
+  if (!text) return 0;
+  return text.split(/\s+/).filter(Boolean).length;
+}
+
+function normalizeChapter(chapter, index = 0) {
+  const fallback = mockChapterApprovals[index % mockChapterApprovals.length] || {};
+  const premium = chapter.isPremium ?? chapter.vip ?? fallback.vip ?? false;
+  return {
+    ...fallback,
+    ...chapter,
+    storyTitle: chapter.storyTitle || chapter.story?.title || fallback.storyTitle || 'Truyện đã xóa',
+    storyId: chapter.storyId || chapter.story?.id || fallback.storyId,
+    author: chapter.author || chapter.story?.author || fallback.author || 'Không rõ tác giả',
+    status: chapter.status || fallback.status || 'approved',
+    vip: Boolean(premium),
+    price: Number(chapter.price ?? fallback.price ?? 0),
+    wordCount: Number(chapter.wordCount ?? countWords(chapter.content) ?? fallback.wordCount ?? 0),
+    reads: Number(chapter.reads ?? chapter.views ?? fallback.reads ?? 0),
+    comments: Number(chapter.comments ?? fallback.comments ?? 0),
+    createdAt: chapter.createdAt || fallback.createdAt || new Date().toISOString(),
+    updatedAt: chapter.updatedAt || chapter.createdAt || fallback.updatedAt || fallback.createdAt || new Date().toISOString(),
+    preview: chapter.preview || String(chapter.content || '').slice(0, 320) || fallback.preview || 'Chưa có nội dung preview.'
+  };
+}
+
 function buildAdminState() {
   const users = mockAdminUsers.map(normalizeUser);
   const stories = mockAdminStories.map(normalizeStory);
-  const chapters = mockChapterApprovals;
+  const chapters = mockChapterApprovals.map(normalizeChapter);
   const reports = mockAdminReports.map(normalizeReport);
   const transactions = mockAdminTransactions;
   return {
@@ -184,7 +211,7 @@ function getAdminView(pathname) {
 const adminTabs = [
   { to: '/admin', label: 'Tổng quan', view: 'overview' },
   { to: '/admin/users', label: 'Người dùng', view: 'users' },
-  { to: '/admin/stories', label: 'Truyện', view: 'stories' },
+  { to: '/admin/stories', label: 'Duyệt truyện', view: 'stories' },
   { to: '/admin/chapters', label: 'Duyệt chương', view: 'chapters' },
   { to: '/admin/reports', label: 'Báo cáo', view: 'reports' },
   { to: '/admin/transactions', label: 'Giao dịch', view: 'transactions' }
@@ -209,10 +236,11 @@ export function AdminDashboard({ apiClient, user }) {
       }
 
       setLoading(true);
-      const [statsRes, usersRes, storiesRes, reportsRes, txRes] = await Promise.allSettled([
+      const [statsRes, usersRes, storiesRes, chaptersRes, reportsRes, txRes] = await Promise.allSettled([
         apiClient('/admin/stats'),
         apiClient('/admin/users'),
         apiClient('/admin/stories'),
+        apiClient('/admin/chapters'),
         apiClient('/admin/reports'),
         apiClient('/admin/transactions')
       ]);
@@ -224,17 +252,20 @@ export function AdminDashboard({ apiClient, user }) {
       const users = apiUsers.length ? apiUsers : fallback.users;
       const apiStories = asArray(getSettledValue(storiesRes)?.stories).map(normalizeStory);
       const stories = apiStories.length ? apiStories : fallback.stories;
+      const apiChapters = asArray(getSettledValue(chaptersRes)?.chapters).map(normalizeChapter);
+      const chapters = apiChapters.length ? apiChapters : fallback.chapters;
       const apiReports = asArray(getSettledValue(reportsRes)?.reports).map(normalizeReport);
       const reports = apiReports.length ? apiReports : fallback.reports;
       const apiTransactions = asArray(getSettledValue(txRes)?.transactions).map(item => normalizeTransaction(item, users));
       const transactions = apiTransactions.length ? apiTransactions : fallback.transactions;
       const stats = getSettledValue(statsRes)?.stats || getSettledValue(statsRes) || fallback.stats;
-      const failed = [statsRes, usersRes, storiesRes, reportsRes, txRes].some(item => item.status === 'rejected');
+      const failed = [statsRes, usersRes, storiesRes, chaptersRes, reportsRes, txRes].some(item => item.status === 'rejected');
 
       setState(current => ({
         ...current,
         users,
         stories,
+        chapters,
         reports,
         transactions,
         stats: {
@@ -242,16 +273,17 @@ export function AdminDashboard({ apiClient, user }) {
           ...stats,
           users: stats.users ?? users.length,
           stories: stats.stories ?? stories.length,
+          chapters: stats.chapters ?? chapters.length,
           transactions: stats.transactions ?? transactions.length
         }
       }));
-      setError(failed ? 'Một số API admin chưa sẵn sàng, phần còn thiếu đang dùng dữ liệu mock/local.' : '');
+      setError(failed ? 'Một số API admin chưa sẵn sàng, phần còn thiếu đang dùng dữ liệu dự phòng.' : '');
       setLoading(false);
     }
 
     loadAdminData().catch(err => {
       if (ignore) return;
-      setError(`${err.message || 'Không tải được API admin.'} Đang hiển thị dữ liệu mock.`);
+      setError(`${err.message || 'Không tải được API admin.'} Đang hiển thị dữ liệu dự phòng.`);
       setState(buildAdminState());
       setLoading(false);
     });
@@ -283,16 +315,23 @@ export function AdminDashboard({ apiClient, user }) {
   }, [state]);
 
   async function updateStory(story, patch) {
+    const supportedPatch = {};
+    if (patch.approvalStatus) supportedPatch.approvalStatus = patch.approvalStatus;
+    if (Object.prototype.hasOwnProperty.call(patch, 'hidden')) supportedPatch.hidden = patch.hidden;
+    const usesApi = Object.keys(supportedPatch).length > 0;
+
+    if (usesApi && !apiClient) {
+      setError('Không có kết nối API để cập nhật trạng thái truyện.');
+      return;
+    }
+
+    const previousStories = state.stories;
     setState(current => ({
       ...current,
       stories: current.stories.map(item => item.id === story.id ? { ...item, ...patch } : item)
     }));
 
-    const supportedPatch = {};
-    if (patch.approvalStatus) supportedPatch.approvalStatus = patch.approvalStatus;
-    if (Object.prototype.hasOwnProperty.call(patch, 'hidden')) supportedPatch.hidden = patch.hidden;
-
-    if (apiClient && Object.keys(supportedPatch).length) {
+    if (usesApi) {
       try {
         const result = await apiClient(`/admin/stories/${story.id}/status`, {
           method: 'PATCH',
@@ -304,11 +343,16 @@ export function AdminDashboard({ apiClient, user }) {
             stories: current.stories.map(item => item.id === story.id ? normalizeStory(result.story, 0) : item)
           }));
         }
-      } catch {
-        setError('API chưa xử lý action này, thay đổi đang được giữ ở mock state trên giao diện.');
+        setError('');
+        setToast('Đã cập nhật trạng thái truyện trên backend.');
+      } catch (err) {
+        setState(current => ({ ...current, stories: previousStories }));
+        setError(err.message || 'Không cập nhật được trạng thái truyện.');
       }
+      return;
     }
-    setToast('Đã cập nhật truyện trên CMS.');
+
+    setToast('Đã cập nhật nhãn hiển thị trong phiên hiện tại.');
   }
 
   function updateUser(id, patch) {
@@ -316,15 +360,42 @@ export function AdminDashboard({ apiClient, user }) {
       ...current,
       users: current.users.map(item => item.id === id ? { ...item, ...patch } : item)
     }));
-    setToast('Đã cập nhật trạng thái người dùng bằng mock state.');
+    setToast('Đã cập nhật trạng thái người dùng trong phiên hiện tại.');
   }
 
-  function updateChapter(id, patch) {
+  async function updateChapter(id, patch) {
+    if (patch.status && !apiClient) {
+      setError('Không có kết nối API để cập nhật trạng thái chương.');
+      return;
+    }
+
+    const previousChapters = state.chapters;
     setState(current => ({
       ...current,
-      chapters: current.chapters.map(item => item.id === id ? { ...item, ...patch } : item)
+      chapters: current.chapters.map(item => item.id === id ? { ...item, ...patch, updatedAt: new Date().toISOString() } : item)
     }));
-    setToast('Đã cập nhật trạng thái chương bằng mock state.');
+
+    if (patch.status) {
+      try {
+        const result = await apiClient(`/admin/chapters/${id}/status`, {
+          method: 'PATCH',
+          body: JSON.stringify({ status: patch.status })
+        });
+        if (!result?.chapter) throw new Error('API không trả về dữ liệu chương đã cập nhật.');
+        setState(current => ({
+          ...current,
+          chapters: current.chapters.map(item => item.id === id ? normalizeChapter(result.chapter, 0) : item)
+        }));
+        setError('');
+        setToast(`Đã cập nhật trạng thái chương: ${statusLabel(result.chapter.status)}.`);
+      } catch (err) {
+        setState(current => ({ ...current, chapters: previousChapters }));
+        setError(err.message || 'Không cập nhật được trạng thái chương.');
+      }
+      return;
+    }
+
+    setToast('Đã cập nhật chương trong phiên hiện tại.');
   }
 
   async function updateReport(report, patch) {
@@ -343,7 +414,7 @@ export function AdminDashboard({ apiClient, user }) {
           body: JSON.stringify({ status: patch.status })
         });
       } catch {
-        setError('API báo cáo chưa đồng bộ action này, CMS đang giữ thay đổi mock.');
+        setError('API báo cáo chưa đồng bộ action này, CMS đang giữ thay đổi trong phiên hiện tại.');
       }
     }
     setToast('Đã xử lý báo cáo.');
@@ -354,12 +425,12 @@ export function AdminDashboard({ apiClient, user }) {
       ...current,
       comments: current.comments.map(item => item.id === id ? { ...item, ...patch } : item)
     }));
-    setToast('Đã cập nhật bình luận vi phạm bằng mock state.');
+    setToast('Đã cập nhật bình luận vi phạm trong phiên hiện tại.');
   }
 
   function updateTaxonomy(nextTaxonomy) {
     setState(current => ({ ...current, taxonomy: nextTaxonomy }));
-    setToast('Đã cập nhật thể loại/tag trên mock CMS.');
+    setToast('Đã cập nhật thể loại/tag trong phiên hiện tại.');
   }
 
   if (loading) {
@@ -472,7 +543,7 @@ function AdminOverview({ stats, stories, reports, chapters, users }) {
       <section className="cms-grid-three">
         <MiniPanel title="Top truyện cần chú ý" items={stories.slice().sort((a, b) => Number(b.views || 0) - Number(a.views || 0)).slice(0, 5).map(story => `${story.title} · ${formatNumber(story.views)} lượt đọc`)} />
         <MiniPanel title="Người dùng mới" items={users.slice(0, 5).map(item => `${item.name} · ${roleLabel(item.role)} · ${statusLabel(item.status)}`)} />
-        <MiniPanel title="Tác vụ CMS" items={['Khóa/mở khóa người dùng bằng mock state', 'Duyệt/từ chối truyện qua API khi có backend', 'Ẩn nội dung vi phạm từ báo cáo', 'Quản lý hot/đề cử/banner trang chủ']} />
+        <MiniPanel title="Tác vụ CMS" items={['Khóa/mở khóa người dùng trong phiên hiện tại', 'Duyệt/từ chối truyện qua API backend', 'Duyệt/từ chối/ẩn chương qua API backend', 'Quản lý hot/đề cử/banner trang chủ']} />
       </section>
     </div>
   );
@@ -570,7 +641,7 @@ export function UserManagementTable({ users, onUpdate }) {
 
   return (
     <div className="cms-stack">
-      <PageHead eyebrow="Quản lý người dùng" title="Người dùng" text="Tìm kiếm, lọc vai trò/trạng thái, xem chi tiết và khóa/mở khóa tài khoản bằng mock state nếu backend chưa hỗ trợ." />
+      <PageHead eyebrow="Quản lý người dùng" title="Người dùng" text="Tìm kiếm, lọc vai trò/trạng thái, xem chi tiết và khóa/mở khóa tài khoản trong phiên hiện tại nếu backend chưa hỗ trợ." />
       <FilterBar>
         <input value={query} onChange={event => setQuery(event.target.value)} placeholder="Tìm tên hoặc email..." />
         <select value={role} onChange={event => setRole(event.target.value)}>
@@ -661,7 +732,7 @@ export function StoryModerationTable({ stories, taxonomy, onUpdate, onTaxonomyCh
 
   return (
     <div className="cms-stack">
-      <PageHead eyebrow="Kiểm duyệt truyện" title="Quản lý truyện" text="Duyệt/từ chối truyện mới, ẩn nội dung, gắn hot/đề cử/banner trang chủ và quản lý taxonomy." />
+      <PageHead eyebrow="Duyệt truyện / Quản lý truyện" title="Duyệt truyện và quản lý truyện" text="Duyệt/từ chối truyện mới, ẩn nội dung, gắn hot/đề cử/banner trang chủ và quản lý taxonomy." />
       <FilterBar>
         <input value={query} onChange={event => setQuery(event.target.value)} placeholder="Tìm truyện hoặc tác giả..." />
         <select value={approval} onChange={event => setApproval(event.target.value)}>
@@ -785,7 +856,7 @@ export function ChapterModerationTable({ chapters, onUpdate }) {
 
   return (
     <div className="cms-stack">
-      <PageHead eyebrow="Duyệt chương" title="Chương chờ kiểm duyệt" text="Xem preview, duyệt/từ chối chương và ghi lý do từ chối bằng mock workflow khi chưa có endpoint riêng." />
+      <PageHead eyebrow="Duyệt chương" title="Duyệt chương" text="Xem preview, chuyển trạng thái duyệt/từ chối/ẩn chương và lưu trạng thái trực tiếp vào backend." />
       <FilterBar>
         <input value={query} onChange={event => setQuery(event.target.value)} placeholder="Tìm chương, truyện, tác giả..." />
         <select value={status} onChange={event => setStatus(event.target.value)}>
@@ -794,6 +865,7 @@ export function ChapterModerationTable({ chapters, onUpdate }) {
           <option value="reviewing">Đang xử lý</option>
           <option value="approved">Đã duyệt</option>
           <option value="rejected">Từ chối</option>
+          <option value="hidden">Đã ẩn</option>
         </select>
         <select value={story} onChange={event => setStory(event.target.value)}>
           <option value="all">Tất cả truyện</option>
@@ -810,14 +882,16 @@ export function ChapterModerationTable({ chapters, onUpdate }) {
               <small>Chương {chapter.number}: {chapter.title}</small>
             </td>
             <td>{chapter.author}</td>
-            <td><Badge tone={chapter.status === 'approved' ? 'success' : chapter.status === 'rejected' ? 'danger' : 'warning'}>{statusLabel(chapter.status)}</Badge></td>
+            <td><Badge tone={chapter.status === 'approved' ? 'success' : chapter.status === 'rejected' ? 'danger' : chapter.status === 'hidden' ? 'dark' : 'warning'}>{statusLabel(chapter.status)}</Badge></td>
             <td>{chapter.vip ? `VIP · ${chapter.price} xu` : 'Miễn phí'}</td>
             <td>{formatNumber(chapter.wordCount)} từ · {formatNumber(chapter.reads)} đọc · {formatNumber(chapter.comments)} bình luận</td>
             <td>
               <div className="cms-row-actions">
                 <button type="button" onClick={() => setPreview(chapter)}>Preview</button>
+                <button type="button" onClick={() => onUpdate(chapter.id, { status: 'reviewing' })}>Đang xử lý</button>
                 <button type="button" onClick={() => onUpdate(chapter.id, { status: 'approved' })}>Duyệt</button>
                 <button type="button" onClick={() => setRejecting(chapter)}>Từ chối</button>
+                <button type="button" onClick={() => onUpdate(chapter.id, { status: 'hidden' })}>Ẩn</button>
               </div>
             </td>
           </tr>
@@ -1035,7 +1109,7 @@ export function ReportActionModal({ report, onClose, onSubmit }) {
         </label>
         <label className="cms-checkbox">
           <input type="checkbox" checked={hideContent} onChange={event => setHideContent(event.target.checked)} />
-          Ẩn nội dung liên quan bằng mock action
+          Ẩn nội dung liên quan trong phiên hiện tại
         </label>
         <div className="cms-modal-actions">
           <button type="button" onClick={onClose}>Hủy</button>
@@ -1065,11 +1139,11 @@ export function NotificationPage({ apiClient, user }) {
         if (ignore) return;
         const notifications = asArray(data.notifications);
         setItems(notifications.length ? notifications : mockAdminNotifications);
-        setError(notifications.length ? '' : 'Chưa có thông báo từ backend, đang hiển thị mock notification.');
+        setError(notifications.length ? '' : 'Chưa có thông báo từ backend, đang hiển thị dữ liệu dự phòng.');
       } catch {
         if (ignore) return;
         setItems(mockAdminNotifications);
-        setError('Không tải được API thông báo, đang hiển thị dữ liệu mock.');
+        setError('Không tải được API thông báo, đang hiển thị dữ liệu dự phòng.');
       } finally {
         if (!ignore) setLoading(false);
       }

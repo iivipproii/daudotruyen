@@ -161,7 +161,7 @@ export function RankingPage({ apiClient }) {
         ...(chapters?.stories || [])
       ]);
       setStories(apiStories.length ? apiStories : uniqueStories(mockStories));
-      setError(apiStories.length ? '' : 'Không kết nối được API, đang dùng dữ liệu mẫu cho bảng xếp hạng.');
+        setError(apiStories.length ? '' : 'Không kết nối được API, đang dùng dữ liệu dự phòng cho bảng xếp hạng.');
       setLoading(false);
     }
     load();

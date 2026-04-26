@@ -199,7 +199,7 @@ export function ReaderPage({ apiClient, user, updateUser }) {
     setUnlocked(!chapter.isPremium);
     setChapters(mockChapters);
     setComments(mockChapterComments(chapter.id));
-    setError('Không kết nối được API, đang hiển thị dữ liệu mẫu cho trang đọc.');
+        setError('Không kết nối được API, đang hiển thị dữ liệu dự phòng cho trang đọc.');
     setLoading(false);
   }
 

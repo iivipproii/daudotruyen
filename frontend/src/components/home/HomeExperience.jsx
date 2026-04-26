@@ -594,7 +594,7 @@ export function ProductionHome({ apiClient, currentUser }) {
       const nextData = buildHomeSlices(fallbackUsed ? mockStories : unique);
       const apiCategories = (categories?.categories || []).map(repairText);
       setHomeData({ ...nextData, categories: apiCategories.length ? apiCategories : nextData.categories });
-      setError(fallbackUsed ? 'Không kết nối được API, đang hiển thị dữ liệu mẫu cho trang chủ.' : '');
+      setError(fallbackUsed ? 'Không kết nối được API, đang hiển thị dữ liệu dự phòng cho trang chủ.' : '');
       setLoading(false);
     }
 
@@ -914,7 +914,9 @@ export function AuthorCTA() {
   );
 }
 
-export function ProductionFooter() {
+export function ProductionFooter({ apiClient }) {
+  const [newsletterEmail, setNewsletterEmail] = useState('');
+  const [newsletterState, setNewsletterState] = useState({ loading: false, error: '', success: '' });
   const quickLinks = [
     ['Trang chủ', '/'],
     ['Hoàn thành', '/danh-sach?status=completed'],
@@ -922,10 +924,49 @@ export function ProductionFooter() {
     ['Xếp hạng', '/xep-hang']
   ];
   const supportLinks = [
-    ['Hỗ trợ', '/lien-he'],
+    ['Liên hệ', '/lien-he'],
     ['Điều khoản sử dụng', '/dieu-khoan'],
-    ['Chính sách bảo mật', '/bao-mat']
+    ['Chính sách bảo mật', '/bao-mat'],
+    ['FAQ', '/faq'],
+    ['DMCA', '/dmca'],
+    ['Quy định nội dung', '/quy-dinh-noi-dung']
   ];
+
+  async function submitNewsletter(event) {
+    event.preventDefault();
+    const email = newsletterEmail.trim().toLowerCase();
+    setNewsletterState({ loading: false, error: '', success: '' });
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setNewsletterState({ loading: false, error: 'Email không hợp lệ.', success: '' });
+      return;
+    }
+
+    if (!apiClient) {
+      setNewsletterState({ loading: false, error: 'API newsletter chưa sẵn sàng. Vui lòng thử lại sau.', success: '' });
+      return;
+    }
+
+    setNewsletterState({ loading: true, error: '', success: '' });
+    try {
+      const result = await apiClient('/newsletter', {
+        method: 'POST',
+        body: JSON.stringify({ email, source: 'footer' })
+      });
+      setNewsletterEmail('');
+      setNewsletterState({
+        loading: false,
+        error: '',
+        success: result?.message || 'Đăng ký nhận thông báo thành công.'
+      });
+    } catch (err) {
+      setNewsletterState({
+        loading: false,
+        error: err.message || 'Không thể đăng ký lúc này. Vui lòng thử lại.',
+        success: ''
+      });
+    }
+  }
 
   return (
     <footer className="prod-footer">
@@ -946,6 +987,28 @@ export function ProductionFooter() {
           {mockCategories.slice(0, 5).map(category => <Link key={category} to={`/the-loai/${encodeURIComponent(category)}`}>{category}</Link>)}
         </div>
         <FooterColumn title="Hỗ trợ" links={supportLinks} />
+        <div className="prod-footer-col prod-newsletter-col">
+          <strong>Đăng ký nhận thông báo</strong>
+          <p>Nhận thông báo truyện hot, chương mới và cập nhật sản phẩm.</p>
+          <form onSubmit={submitNewsletter} noValidate>
+            <label htmlFor="footer-newsletter-email">Email</label>
+            <div>
+              <input
+                id="footer-newsletter-email"
+                type="email"
+                value={newsletterEmail}
+                onChange={event => setNewsletterEmail(event.target.value)}
+                placeholder="you@example.com"
+                disabled={newsletterState.loading}
+              />
+              <button type="submit" disabled={newsletterState.loading}>
+                {newsletterState.loading ? 'Đang gửi...' : 'Đăng ký'}
+              </button>
+            </div>
+            {newsletterState.error && <span className="prod-newsletter-message error">{newsletterState.error}</span>}
+            {newsletterState.success && <span className="prod-newsletter-message success">{newsletterState.success}</span>}
+          </form>
+        </div>
       </div>
       <div className="prod-footer-bottom">
         <span>© 2026 Đậu Đỏ Truyện. Tất cả quyền được bảo lưu.</span>

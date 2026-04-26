@@ -1284,7 +1284,7 @@ body {
 .prod-footer-inner {
   width: min(1240px, calc(100% - 32px));
   display: grid;
-  grid-template-columns: minmax(260px, 1.35fr) repeat(3, minmax(150px, .65fr));
+  grid-template-columns: minmax(240px, 1.2fr) repeat(3, minmax(140px, .62fr)) minmax(250px, .9fr);
   gap: 26px;
   margin: 0 auto;
   padding: 28px 0 20px;
@@ -1316,6 +1316,91 @@ body {
 .prod-footer-col a:focus-visible {
   color: var(--prod-primary);
   outline: 0;
+}
+
+.prod-newsletter-col p {
+  margin: 0;
+  color: var(--prod-muted);
+  font-size: .9rem;
+  line-height: 1.55;
+}
+
+.prod-newsletter-col form {
+  display: grid;
+  gap: 8px;
+}
+
+.prod-newsletter-col label {
+  color: var(--prod-muted);
+  font-size: .78rem;
+  font-weight: 900;
+}
+
+.prod-newsletter-col form > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.prod-newsletter-col input,
+.prod-newsletter-col button {
+  min-height: 42px;
+  border: 1px solid var(--prod-line);
+  border-radius: 12px;
+  font: inherit;
+}
+
+.prod-newsletter-col input {
+  min-width: 0;
+  padding: 0 12px;
+  background: var(--prod-surface);
+  color: var(--prod-text);
+  outline: 0;
+}
+
+.prod-newsletter-col input:focus-visible {
+  border-color: rgba(239, 63, 95, .42);
+  box-shadow: 0 0 0 4px rgba(239, 63, 95, .12);
+}
+
+.prod-newsletter-col button {
+  padding: 0 14px;
+  background: linear-gradient(135deg, var(--prod-primary), var(--prod-orange));
+  color: #fff;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.prod-newsletter-col button:hover,
+.prod-newsletter-col button:focus-visible {
+  box-shadow: 0 12px 26px rgba(239, 63, 95, .18);
+  transform: translateY(-1px);
+  outline: 0;
+}
+
+.prod-newsletter-col button:disabled,
+.prod-newsletter-col input:disabled {
+  opacity: .62;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.prod-newsletter-message {
+  padding: 8px 10px;
+  border-radius: 10px;
+  font-size: .84rem;
+  font-weight: 800;
+  line-height: 1.4;
+}
+
+.prod-newsletter-message.error {
+  background: #fff1f2;
+  color: #be123c;
+}
+
+.prod-newsletter-message.success {
+  background: #ecfdf5;
+  color: #047857;
 }
 
 .prod-footer-bottom {
@@ -1572,6 +1657,10 @@ body {
   .prod-home-split .prod-story-grid,
   .prod-continue-grid,
   .prod-footer-inner {
+    grid-template-columns: 1fr;
+  }
+
+  .prod-newsletter-col form > div {
     grid-template-columns: 1fr;
   }
 

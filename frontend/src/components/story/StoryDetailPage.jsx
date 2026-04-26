@@ -185,7 +185,7 @@ export function StoryDetailPage({ apiClient, user, updateUser }) {
 
     const story = findMockStory(slug);
     setPayload({ story, chapters: generateMockChapters(story), comments: mockComments(story.id || story.slug), reviews: mockReviews(story) });
-    setError('Không kết nối được API, đang hiển thị dữ liệu mẫu cho trang chi tiết.');
+        setError('Không kết nối được API, đang hiển thị dữ liệu dự phòng cho trang chi tiết.');
     setLoading(false);
   }
 

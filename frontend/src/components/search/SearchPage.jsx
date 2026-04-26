@@ -276,7 +276,7 @@ export function SearchPage({ apiClient, presetFilters = {} }) {
       const nextCategories = (categoryData?.categories || []).map(repairText);
       setStories(sourceStories);
       setCategories(nextCategories.length ? nextCategories : categoriesFromStories(sourceStories));
-      setError(apiStories.length ? '' : 'Không kết nối được API, đang dùng dữ liệu mẫu để tìm kiếm.');
+        setError(apiStories.length ? '' : 'Không kết nối được API, đang dùng dữ liệu dự phòng để tìm kiếm.');
       setLoading(false);
     }
     load();
@@ -497,7 +497,7 @@ export function SearchResults({ stories, loading, error, filters, resetFilters }
     <section className="sr-results">
       <div className="sr-results-head">
         <div>
-          <span>{error ? 'Dữ liệu mẫu' : 'Results'}</span>
+            <span>{error ? 'Dữ liệu dự phòng' : 'Results'}</span>
           <h2>{formatNumber(stories.length)} truyện phù hợp</h2>
           {error && <p>{error}</p>}
         </div>

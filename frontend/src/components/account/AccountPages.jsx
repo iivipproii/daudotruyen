@@ -275,7 +275,7 @@ export function ForgotPasswordPage() {
   return (
     <AuthShell mode="forgot">
       <div className="acct-auth-card">
-        <AuthHeader title="Quên mật khẩu" subtitle="Nhập email tài khoản. Bản demo sẽ hiển thị màn hình đã gửi hướng dẫn." />
+        <AuthHeader title="Quên mật khẩu" subtitle="Nhập email tài khoản. Hệ thống sẽ hiển thị màn hình xác nhận đã gửi hướng dẫn." />
         {sent ? (
           <div className="acct-sent-state">
             <h2>Đã gửi hướng dẫn</h2>
@@ -338,7 +338,7 @@ export function ReaderDashboard({ user, apiClient }) {
       if (!alive) return;
       setLibrary(normalizeLibrary(libraryData));
       setNotifications(notificationData?.notifications || []);
-      if (!libraryData) setError('Không kết nối được API thư viện, đang hiển thị dữ liệu mẫu.');
+      if (!libraryData) setError('Không kết nối được API thư viện, đang hiển thị dữ liệu dự phòng.');
     }
     load();
     return () => {
@@ -365,7 +365,7 @@ export function ReaderDashboard({ user, apiClient }) {
         <div>
           <span>Tài khoản độc giả</span>
           <h1>Chào, {user?.name || 'độc giả'}</h1>
-          <p>{user?.email} · Vai trò {user?.role === 'admin' ? 'admin' : localStorage.getItem('daudo_role_choice') === 'author' ? 'tác giả demo' : 'độc giả'}</p>
+          <p>{user?.email} · Vai trò {user?.role === 'admin' ? 'admin' : localStorage.getItem('daudo_role_choice') === 'author' ? 'tác giả' : 'độc giả'}</p>
         </div>
         <Link to="/wallet">Nạp xu nhanh</Link>
       </section>
@@ -567,7 +567,7 @@ export function WalletPage({ user, updateUser, apiClient }) {
       setNotice('Nạp xu thành công. Số dư đã được cập nhật.');
       await load();
     } else {
-      setNotice('Thanh toán demo đã được tạo ở trạng thái chờ thanh toán.');
+      setNotice('Yêu cầu thanh toán đã được tạo ở trạng thái chờ thanh toán.');
       setTransactions(current => [{
         id: `mock-${Date.now()}`,
         code: `DD${Date.now().toString().slice(-6)}`,
@@ -593,7 +593,7 @@ export function WalletPage({ user, updateUser, apiClient }) {
         <label>Mã giảm giá<input value={voucher} onChange={event => setVoucher(event.target.value)} placeholder="Thử DAUDO10" /></label>
         <div className="acct-payment-summary"><span>Gói nạp</span><b>{selectedPack.seeds + selectedPack.bonus} xu</b><span>Giảm giá</span><b>{formatCurrency(discount)}</b><span>Cần thanh toán</span><strong>{formatCurrency(selectedPack.price - discount)}</strong></div>
         <button type="button" disabled={loading} onClick={topup}>{loading ? 'Đang xử lý...' : 'Nạp xu ngay'}</button>
-        <p>Thanh toán thật chưa được tích hợp. Nếu backend chạy, thao tác này dùng endpoint demo `/wallet/topup`.</p>
+        <p>Khi backend thanh toán sẵn sàng, thao tác này sẽ đồng bộ qua endpoint `/wallet/topup`.</p>
       </section>
       <PaymentHistory transactions={transactions} />
     </div>
@@ -718,9 +718,9 @@ function AccountLoading() {
 
 function mockTransactions() {
   return [
-    { id: 'TXN-DEMO-1', code: 'DD102938', type: 'topup', amount: 58, money: 50000, status: 'success', note: 'Nạp gói phổ biến', createdAt: new Date().toISOString() },
-    { id: 'TXN-DEMO-2', code: 'DD102120', type: 'purchase', amount: -8, money: 8000, status: 'success', note: 'Mua chương VIP', createdAt: new Date(Date.now() - 86400000).toISOString() },
-    { id: 'TXN-DEMO-3', code: 'DD100001', type: 'topup', amount: 22, money: 20000, status: 'failed', note: 'Thanh toán lỗi', createdAt: new Date(Date.now() - 172800000).toISOString() }
+    { id: 'TXN-LOCAL-1', code: 'DD102938', type: 'topup', amount: 58, money: 50000, status: 'success', note: 'Nạp gói phổ biến', createdAt: new Date().toISOString() },
+    { id: 'TXN-LOCAL-2', code: 'DD102120', type: 'purchase', amount: -8, money: 8000, status: 'success', note: 'Mua chương VIP', createdAt: new Date(Date.now() - 86400000).toISOString() },
+    { id: 'TXN-LOCAL-3', code: 'DD100001', type: 'topup', amount: 22, money: 20000, status: 'failed', note: 'Thanh toán lỗi', createdAt: new Date(Date.now() - 172800000).toISOString() }
   ];
 }
 
