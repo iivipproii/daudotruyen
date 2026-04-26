@@ -146,18 +146,76 @@ function Shell({ children }) {
   const location = useLocation();
   const publishing = location.pathname === '/dang-truyen';
   const home = location.pathname === '/';
+  const ranking = location.pathname === '/xep-hang';
+  const showHeader = home || ranking;
+  const showSidebar = !showHeader;
 
   if (publishing) {
     return <PublishShell>{children}</PublishShell>;
   }
 
   return (
-    <div className="app-shell public-shell">
+    <div className={showSidebar ? 'app-shell public-shell shell-with-sidebar' : 'app-shell public-shell'}>
       <RouteScrollReset />
-      {home && <PublicHeaderEnhanced />}
-      <main className="container">{children}</main>
+      {showHeader && <PublicHeaderEnhanced />}
+      {showSidebar && <PublicSidebar />}
+      <main className={showSidebar ? 'container shell-main-with-sidebar' : 'container'}>{children}</main>
       <Footer />
     </div>
+  );
+}
+
+function PublicSidebar() {
+  const { user } = useAuth();
+  const location = useLocation();
+  const navGroups = [
+    ['Khám phá', [
+      ['Trang chủ', '/'],
+      ['Danh sách truyện', '/danh-sach'],
+      ['Truyện ngắn', '/truyen-ngan'],
+      ['Xếp hạng', '/xep-hang']
+    ]],
+    ['Tài khoản', [
+      ['Hồ sơ', '/ho-so'],
+      ['Ví của tôi', '/vi-hat'],
+      ['Thông báo', '/thong-bao'],
+      ['Lịch sử đọc', '/lich-su']
+    ]],
+    ['Sáng tác', [
+      ['Đăng truyện', '/dang-truyen'],
+      ['Quản lý truyện', '/admin'],
+      ['AI Tools', '/ai-tools']
+    ]]
+  ];
+
+  const canSee = path => {
+    if (path === '/dang-truyen' || path === '/admin') return user?.role === 'admin';
+    if (path === '/ho-so' || path === '/vi-hat' || path === '/thong-bao' || path === '/lich-su') return Boolean(user);
+    return true;
+  };
+
+  const isActive = path => location.pathname === path || (path !== '/' && location.pathname.startsWith(path));
+
+  return (
+    <aside className="public-sidebar" aria-label="Điều hướng trang">
+      <Link to="/" className="public-sidebar-brand">
+        <img src="/images/logo.png" alt="Đậu Đỏ Truyện" />
+        <div>
+          <strong>Đậu Đỏ Truyện</strong>
+          <span>{user?.role === 'admin' ? 'Khu vực quản trị' : 'Kho truyện cá nhân'}</span>
+        </div>
+      </Link>
+      {navGroups.map(([title, items]) => (
+        <section key={title} className="public-sidebar-group">
+          <h3>{title}</h3>
+          <div className="public-sidebar-links">
+            {items.filter(([, path]) => canSee(path)).map(([label, path]) => (
+              <Link key={path} to={path} className={isActive(path) ? 'active' : ''}>{label}</Link>
+            ))}
+          </div>
+        </section>
+      ))}
+    </aside>
   );
 }
 
@@ -2041,6 +2099,7 @@ function Admin() {
   const [error, setError] = useState('');
   const [storyQuery, setStoryQuery] = useState('');
   const [storyFilter, setStoryFilter] = useState('all');
+  const [storySort, setStorySort] = useState('updated');
   const load = async () => {
     const [s, list, u, r] = await Promise.all([api('/admin/stats'), api('/admin/stories'), api('/admin/users'), api('/admin/reports')]);
     setStats(s.stats); setStories(list.stories); setUsers(u.users); setReports(r.reports || []);
@@ -2111,17 +2170,23 @@ function Admin() {
     await load();
   }
   if (!stats) return <Loader />;
-  const visibleStories = stories.filter(story => {
-    const keyword = storyQuery.trim().toLowerCase();
-    const matchesKeyword = !keyword || [story.title, story.author, ...(story.categories || [])].join(' ').toLowerCase().includes(keyword);
-    const matchesFilter =
-      storyFilter === 'all' ||
-      (storyFilter === 'visible' && !story.hidden) ||
-      (storyFilter === 'hidden' && story.hidden) ||
-      story.status === storyFilter ||
-      story.approvalStatus === storyFilter;
-    return matchesKeyword && matchesFilter;
-  });
+  const visibleStories = stories
+    .filter(story => {
+      const keyword = storyQuery.trim().toLowerCase();
+      const matchesKeyword = !keyword || [story.title, story.author, ...(story.categories || [])].join(' ').toLowerCase().includes(keyword);
+      const matchesFilter =
+        storyFilter === 'all' ||
+        (storyFilter === 'visible' && !story.hidden) ||
+        (storyFilter === 'hidden' && story.hidden) ||
+        story.status === storyFilter ||
+        story.approvalStatus === storyFilter;
+      return matchesKeyword && matchesFilter;
+    })
+    .sort((a, b) => {
+      if (storySort === 'views') return (b.views || 0) - (a.views || 0);
+      if (storySort === 'chapters') return (b.chapterCount || 0) - (a.chapterCount || 0);
+      return new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0);
+    });
   return (
     <>
       <div className="page-title"><h1>Admin Dashboard</h1><p>Quản trị truyện, người dùng và giao dịch Đậu.</p></div>
@@ -2132,18 +2197,29 @@ function Admin() {
         <div className="panel"><h2>Người dùng</h2><div className="list-panel compact">{users.map(user => <div key={user.id}><span>{user.name}</span><small>{user.email} · {user.role} · {user.seeds} Đậu</small></div>)}</div></div>
       </div>
       <Section title="Quản lý truyện" subtitle="Duyệt, ẩn/hiện, sửa tên và chọn truyện để quản lý chương.">
-        <div className="admin-story-toolbar">
-          <input placeholder="Tìm theo tên truyện, tác giả, thể loại..." value={storyQuery} onChange={e => setStoryQuery(e.target.value)} />
-          <select value={storyFilter} onChange={e => setStoryFilter(e.target.value)}>
-            <option value="all">Tất cả truyện</option>
-            <option value="pending">Chờ duyệt</option>
-            <option value="approved">Đã duyệt</option>
-            <option value="rejected">Từ chối</option>
-            <option value="ongoing">Đang ra</option>
-            <option value="completed">Hoàn thành</option>
-            <option value="visible">Đang hiện</option>
-            <option value="hidden">Đang ẩn</option>
-          </select>
+        <div className="admin-story-manager">
+          <div className="admin-story-summary">
+            <strong>{formatNumber(visibleStories.length)}</strong>
+            <span>truyện đang hiển thị theo bộ lọc hiện tại</span>
+          </div>
+          <div className="admin-story-toolbar">
+            <input placeholder="Tìm theo tên truyện, tác giả, thể loại..." value={storyQuery} onChange={e => setStoryQuery(e.target.value)} />
+            <select value={storyFilter} onChange={e => setStoryFilter(e.target.value)}>
+              <option value="all">Tất cả truyện</option>
+              <option value="pending">Chờ duyệt</option>
+              <option value="approved">Đã duyệt</option>
+              <option value="rejected">Từ chối</option>
+              <option value="ongoing">Đang ra</option>
+              <option value="completed">Hoàn thành</option>
+              <option value="visible">Đang hiện</option>
+              <option value="hidden">Đang ẩn</option>
+            </select>
+            <select value={storySort} onChange={e => setStorySort(e.target.value)}>
+              <option value="updated">Mới cập nhật</option>
+              <option value="views">Nhiều lượt đọc</option>
+              <option value="chapters">Nhiều chương</option>
+            </select>
+          </div>
         </div>
         <div className="admin-story-list">
           {visibleStories.map(story => (
