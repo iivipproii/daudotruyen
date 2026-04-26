@@ -7,7 +7,7 @@ const PORT = Number(process.env.PORT || 4000);
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || '*';
 const DB_PATH = path.join(__dirname, '..', 'data', 'db.json');
-const JSON_LIMIT = 1024 * 1024;
+const JSON_LIMIT = 4 * 1024 * 1024;
 
 function now() {
   return new Date().toISOString();
@@ -197,6 +197,7 @@ function match(pathname, pattern) {
 function storySummary(story) {
   return {
     id: story.id,
+    ownerId: story.ownerId,
     slug: story.slug,
     title: story.title,
     author: story.author,
@@ -216,6 +217,7 @@ function storySummary(story) {
     language: story.language,
     ageRating: story.ageRating,
     hidden: story.hidden,
+    rejectionReason: story.rejectionReason || '',
     chapterCountEstimate: story.chapterCountEstimate,
     updatedAt: story.updatedAt,
     chapterCount: story.chapterCount,
@@ -228,7 +230,14 @@ function storySummary(story) {
 const RANKING_PERIODS = ['day', 'week', 'month', 'year', 'all'];
 const RANKING_METRICS = ['views', 'follows', 'rating', 'comments', 'revenue'];
 const DAY_MS = 24 * 60 * 60 * 1000;
-const VALID_CHAPTER_STATUSES = ['pending', 'reviewing', 'approved', 'rejected', 'hidden'];
+const VALID_STORY_APPROVAL_STATUSES = ['draft', 'pending', 'approved', 'rejected'];
+const VALID_CHAPTER_STATUSES = ['draft', 'pending', 'reviewing', 'approved', 'rejected', 'hidden', 'scheduled'];
+const AUTHOR_CHAPTER_STATUSES = ['draft', 'pending', 'scheduled'];
+const PROMOTION_PACKAGES = [
+  { id: 'promo-1', title: 'Day top trang chu', days: 3, price: 120, reach: '25.000 luot hien thi', features: ['Gan nhan de xuat', 'Uu tien trong muc hot'] },
+  { id: 'promo-2', title: 'Goi tang truong', days: 7, price: 260, reach: '80.000 luot hien thi', features: ['Banner the loai', 'Day top tim kiem', 'Bao cao hieu qua'], featured: true },
+  { id: 'promo-3', title: 'Ra mat truyen moi', days: 5, price: 180, reach: '45.000 luot hien thi', features: ['Thong bao doc gia phu hop', 'Chip new launch'] }
+];
 const DEFAULT_NOTIFICATION_PREFERENCES = {
   emailNotifications: true,
   webNotifications: true,
@@ -271,7 +280,7 @@ const ACCOUNT_PREFERENCE_KEYS = new Set(Object.keys(ACCOUNT_PREFERENCE_DEFAULTS)
 const SOCIAL_LINK_KEY_PATTERN = /^[A-Za-z0-9_-]{1,32}$/;
 
 function chapterStatus(chapter) {
-  return chapter.status || 'approved';
+  return chapter.status === 'published' ? 'approved' : chapter.status || 'approved';
 }
 
 function isPublicChapter(chapter) {
@@ -324,6 +333,16 @@ function isHttpUrl(value) {
   }
 }
 
+function isProfileImageDataUrl(value) {
+  const text = String(value || '');
+  return /^data:image\/(png|jpeg|jpg|webp);base64,[A-Za-z0-9+/=]+$/i.test(text) && text.length <= 3 * 1024 * 1024;
+}
+
+function isProfileImageValue(value) {
+  if (!value) return true;
+  return isHttpUrl(value) || isProfileImageDataUrl(value);
+}
+
 function normalizeSocialLinks(input = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return {};
   return Object.entries(input).reduce((links, [key, value]) => {
@@ -344,7 +363,7 @@ function profileResponse(user) {
     address: user.address || '',
     website: user.website || '',
     bio: user.bio || '',
-    avatar: isHttpUrl(user.avatar) ? user.avatar || '' : '',
+    avatar: isProfileImageValue(user.avatar) ? user.avatar || '' : '',
     cover: isHttpUrl(user.cover) ? user.cover || '' : '',
     socialLinks: normalizeSocialLinks(user.socialLinks),
     updatedAt: user.updatedAt || user.createdAt || null
@@ -355,55 +374,94 @@ function validateProfilePayload(body, user, db) {
   const unknown = Object.keys(body).filter(key => !PROFILE_FIELDS.has(key));
   if (unknown.length) return { error: `Trường hồ sơ không hợp lệ: ${unknown.join(', ')}.` };
 
-  const name = String(body.name ?? user.name ?? '').trim();
-  const email = String(body.email ?? user.email ?? '').trim().toLowerCase();
-  const phone = String(body.phone ?? user.phone ?? '').trim();
-  const birthday = String(body.birthday ?? user.birthday ?? '').trim();
-  const gender = String(body.gender ?? user.gender ?? '').trim();
-  const address = String(body.address ?? user.address ?? '').trim();
-  const website = String(body.website ?? user.website ?? '').trim();
-  const bio = String(body.bio ?? user.bio ?? '').trim();
-  const avatar = String(body.avatar ?? (isHttpUrl(user.avatar) ? user.avatar || '' : '')).trim();
-  const cover = String(body.cover ?? (isHttpUrl(user.cover) ? user.cover || '' : '')).trim();
+  const value = {};
+  const has = field => Object.prototype.hasOwnProperty.call(body, field);
 
-  if (!name) return { error: 'Tên hiển thị là bắt buộc.' };
-  if (name.length > 80) return { error: 'Tên hiển thị tối đa 80 ký tự.' };
-  if (!isEmail(email)) return { error: 'Email không hợp lệ.' };
-  if (db.users.some(item => item.id !== user.id && item.email.toLowerCase() === email)) return { error: 'Email đã tồn tại.' };
-  if (phone && !/^[0-9+\-\s().]{7,20}$/.test(phone)) return { error: 'Số điện thoại không hợp lệ.' };
-  if (birthday) {
-    const date = new Date(`${birthday}T00:00:00`);
-    if (Number.isNaN(date.getTime())) return { error: 'Ngày sinh không hợp lệ.' };
-    const today = new Date();
-    today.setHours(23, 59, 59, 999);
-    if (date > today) return { error: 'Ngày sinh không được ở tương lai.' };
-  }
-  if (gender && !['male', 'female', 'other', 'prefer-not'].includes(gender)) return { error: 'Giới tính không hợp lệ.' };
-  if (address.length > 200) return { error: 'Địa chỉ tối đa 200 ký tự.' };
-  if (bio.length > 500) return { error: 'Giới thiệu tối đa 500 ký tự.' };
-  for (const [field, value] of Object.entries({ website, avatar, cover })) {
-    if (value && !isHttpUrl(value)) return { error: `${field} phải là URL http/https hợp lệ.` };
+  if (has('name')) {
+    const name = String(body.name || '').trim();
+    if (!name) return { error: 'Tên hiển thị là bắt buộc.' };
+    if (name.length > 80) return { error: 'Tên hiển thị tối đa 80 ký tự.' };
+    value.name = name;
   }
 
-  let socialLinks = normalizeSocialLinks(user.socialLinks);
+  if (has('email')) {
+    const email = String(body.email || '').trim().toLowerCase();
+    if (!isEmail(email)) return { error: 'Email không hợp lệ.' };
+    if (db.users.some(item => item.id !== user.id && item.email.toLowerCase() === email)) return { error: 'Email đã tồn tại.' };
+    value.email = email;
+  }
+
+  if (has('phone')) {
+    const phone = String(body.phone || '').trim();
+    if (phone && !/^[0-9+\-\s().]{7,20}$/.test(phone)) return { error: 'Số điện thoại không hợp lệ.' };
+    value.phone = phone;
+  }
+
+  if (has('birthday')) {
+    const birthday = String(body.birthday || '').trim();
+    if (birthday) {
+      const date = new Date(`${birthday}T00:00:00`);
+      if (Number.isNaN(date.getTime())) return { error: 'Ngày sinh không hợp lệ.' };
+      const today = new Date();
+      today.setHours(23, 59, 59, 999);
+      if (date > today) return { error: 'Ngày sinh không được ở tương lai.' };
+    }
+    value.birthday = birthday;
+  }
+
+  if (has('gender')) {
+    const gender = String(body.gender || '').trim();
+    if (gender && !['male', 'female', 'other', 'prefer-not'].includes(gender)) return { error: 'Giới tính không hợp lệ.' };
+    value.gender = gender;
+  }
+
+  if (has('address')) {
+    const address = String(body.address || '').trim();
+    if (address.length > 200) return { error: 'Địa chỉ tối đa 200 ký tự.' };
+    value.address = address;
+  }
+
+  if (has('bio')) {
+    const bio = String(body.bio || '').trim();
+    if (bio.length > 500) return { error: 'Giới thiệu tối đa 500 ký tự.' };
+    value.bio = bio;
+  }
+
+  if (has('avatar')) {
+    const avatar = String(body.avatar || '').trim();
+    if (!isProfileImageValue(avatar)) return { error: 'Avatar phải là ảnh PNG, JPG hoặc WEBP hợp lệ.' };
+    value.avatar = avatar;
+  }
+
+  if (has('website')) {
+    const website = String(body.website || '').trim();
+    if (website && !isHttpUrl(website)) return { error: 'website phải là URL http/https hợp lệ.' };
+    value.website = website;
+  }
+
+  if (has('cover')) {
+    const cover = String(body.cover || '').trim();
+    if (cover && !isHttpUrl(cover)) return { error: 'cover phải là URL http/https hợp lệ.' };
+    value.cover = cover;
+  }
+
   if (body.socialLinks !== undefined) {
     if (!body.socialLinks || typeof body.socialLinks !== 'object' || Array.isArray(body.socialLinks)) {
       return { error: 'Liên kết mạng xã hội không hợp lệ.' };
     }
     const entries = Object.entries(body.socialLinks);
     if (entries.length > 12) return { error: 'Tối đa 12 liên kết mạng xã hội.' };
-    socialLinks = {};
+    const socialLinks = {};
     for (const [key, rawValue] of entries) {
       if (!SOCIAL_LINK_KEY_PATTERN.test(key)) return { error: `Tên social link không hợp lệ: ${key}.` };
-      const value = String(rawValue || '').trim();
-      if (value && !isHttpUrl(value)) return { error: `Liên kết ${key} phải là URL http/https hợp lệ.` };
-      if (value) socialLinks[key] = value;
+      const link = String(rawValue || '').trim();
+      if (link && !isHttpUrl(link)) return { error: `Liên kết ${key} phải là URL http/https hợp lệ.` };
+      if (link) socialLinks[key] = link;
     }
+    value.socialLinks = socialLinks;
   }
 
-  return {
-    value: { name, email, phone, birthday, gender, address, website, bio, avatar, cover, socialLinks }
-  };
+  return { value };
 }
 
 function passwordMatches(user, password) {
@@ -412,11 +470,7 @@ function passwordMatches(user, password) {
 }
 
 function passwordPolicyError(password) {
-  if (password.length < 8) return 'Mật khẩu mới cần tối thiểu 8 ký tự.';
-  if (!/[A-Z]/.test(password)) return 'Mật khẩu mới cần có ít nhất 1 chữ hoa.';
-  if (!/[a-z]/.test(password)) return 'Mật khẩu mới cần có ít nhất 1 chữ thường.';
-  if (!/[0-9]/.test(password)) return 'Mật khẩu mới cần có ít nhất 1 chữ số.';
-  if (!/[^A-Za-z0-9]/.test(password)) return 'Mật khẩu mới cần có ít nhất 1 ký tự đặc biệt.';
+  if (password.length < 6) return 'Mật khẩu mới cần tối thiểu 6 ký tự.';
   return '';
 }
 
@@ -607,6 +661,7 @@ function ensureDbShape(db) {
   db.reports ||= [];
   db.newsletters ||= [];
   db.viewEvents ||= [];
+  db.promotions ||= [];
   db.users.forEach(user => {
     user.tokenVersion = Number(user.tokenVersion || 0);
     user.notificationPreferences = normalizeNotificationPreferences(user.notificationPreferences || user.preferences);
@@ -615,10 +670,12 @@ function ensureDbShape(db) {
   });
   db.stories.forEach(story => {
     if (!story.approvalStatus) story.approvalStatus = story.hidden ? 'pending' : 'approved';
+    if (!VALID_STORY_APPROVAL_STATUSES.includes(story.approvalStatus)) story.approvalStatus = story.hidden ? 'pending' : 'approved';
     if (!story.ownerId) {
       const admin = db.users.find(user => user.role === 'admin');
       if (admin) story.ownerId = admin.id;
     }
+    if (story.approvalStatus !== 'approved') story.hidden = true;
   });
   db.follows.forEach(follow => {
     if (!follow.createdAt) follow.createdAt = now();
@@ -634,7 +691,15 @@ function ensureDbShape(db) {
     if (!event.createdAt) event.createdAt = now();
   });
   db.chapters.forEach(chapter => {
+    if (chapter.status === 'published') chapter.status = 'approved';
     if (chapter.status && !VALID_CHAPTER_STATUSES.includes(chapter.status)) chapter.status = 'approved';
+    if (!chapter.createdAt) chapter.createdAt = now();
+    if (!chapter.updatedAt) chapter.updatedAt = chapter.createdAt;
+  });
+  db.promotions.forEach(promotion => {
+    if (!promotion.id) promotion.id = uid('promo');
+    if (!promotion.createdAt) promotion.createdAt = now();
+    if (!promotion.status) promotion.status = 'active';
   });
   db.notifications.forEach(notification => {
     if (!notification.id) notification.id = uid('noti');
@@ -736,6 +801,241 @@ function countUnreadNotifications(db, userId) {
 
 function getStoryOwnerId(story) {
   return story?.ownerId || story?.authorId || story?.createdBy || story?.userId || null;
+}
+
+function canEditStory(user, story) {
+  if (!user || !story) return false;
+  return user.role === 'admin' || getStoryOwnerId(story) === user.id;
+}
+
+function canEditChapter(db, user, chapter) {
+  if (!user || !chapter) return false;
+  const story = db.stories.find(item => item.id === chapter.storyId);
+  return canEditStory(user, story);
+}
+
+function makeUniqueSlug(db, title, currentStoryId) {
+  const base = slugify(title || 'truyen-moi');
+  let slug = base;
+  let index = 2;
+  while (db.stories.some(story => story.slug === slug && story.id !== currentStoryId)) {
+    slug = `${base}-${index}`;
+    index += 1;
+  }
+  return slug;
+}
+
+function normalizeAuthorStoryInput(body, user, existingStory) {
+  const categories = normalizeCategories(body.categories ?? body.genres ?? existingStory?.categories ?? existingStory?.genres ?? []);
+  const tags = normalizeCategories(body.tags ?? existingStory?.tags ?? []);
+  const type = String(body.type ?? existingStory?.type ?? (body.premium ? 'vip' : 'free')).trim();
+  const premium = body.premium !== undefined ? Boolean(body.premium) : ['vip', 'mixed'].includes(type);
+  const price = parsePositiveNumber(body.price ?? body.chapterPrice ?? existingStory?.price, premium ? 1 : 0);
+  const title = String(body.title ?? existingStory?.title ?? '').trim();
+  const description = String(body.description ?? body.shortDescription ?? existingStory?.description ?? '').trim();
+  const shortDescription = String(body.shortDescription ?? existingStory?.shortDescription ?? description.slice(0, 180)).trim();
+  return {
+    title,
+    author: String(body.author || existingStory?.author || user.name || 'Tac gia').trim(),
+    translator: String(body.translator ?? existingStory?.translator ?? '').trim(),
+    cover: String(body.cover ?? existingStory?.cover ?? '/images/cover-1.jpg').trim() || '/images/cover-1.jpg',
+    coverPosition: String(body.coverPosition ?? existingStory?.coverPosition ?? '50% 50%').trim(),
+    shortDescription,
+    description,
+    status: String(body.status ?? existingStory?.status ?? 'ongoing').trim(),
+    language: String(body.language ?? existingStory?.language ?? 'Tieng Viet').trim(),
+    ageRating: String(body.ageRating ?? body.age ?? existingStory?.ageRating ?? 'all').trim(),
+    categories,
+    tags,
+    type,
+    premium,
+    price,
+    vipFromChapter: parsePositiveNumber(body.vipFromChapter ?? existingStory?.vipFromChapter, premium ? 1 : 0),
+    chapterPrice: parsePositiveNumber(body.chapterPrice ?? existingStory?.chapterPrice ?? price, price),
+    comboPrice: parsePositiveNumber(body.comboPrice ?? existingStory?.comboPrice, 0),
+    chapterCountEstimate: parsePositiveNumber(body.chapterCountEstimate ?? body.chapterCount ?? existingStory?.chapterCountEstimate, 0)
+  };
+}
+
+function validateAuthorStoryPayload(payload, approvalStatus) {
+  if (!payload.title) return 'Ten truyen la bat buoc.';
+  if (payload.title.length > 180) return 'Ten truyen qua dai.';
+  if (payload.author.length > 120) return 'Tac gia qua dai.';
+  if (approvalStatus === 'pending') {
+    if (payload.description.length < 20) return 'Mo ta can it nhat 20 ky tu truoc khi gui duyet.';
+    if (!payload.categories.length) return 'Vui long chon it nhat mot the loai.';
+    if (payload.premium && payload.chapterPrice <= 0) return 'Gia chuong VIP phai lon hon 0.';
+  }
+  return null;
+}
+
+function authorStoryApprovalStatus(body, fallback = 'draft') {
+  const requested = String(body.approvalStatus || body.statusApproval || body.mode || '').trim();
+  if (requested === 'submit') return 'pending';
+  if (requested === 'pending') return 'pending';
+  if (requested === 'draft') return 'draft';
+  return fallback === 'approved' ? 'pending' : fallback;
+}
+
+function normalizeAuthorChapterStatus(value, fallback = 'draft') {
+  const requested = String(value || fallback || 'draft').trim();
+  if (requested === 'submit') return 'pending';
+  if (requested === 'published' || requested === 'approved') return 'pending';
+  if (AUTHOR_CHAPTER_STATUSES.includes(requested)) return requested;
+  return fallback === 'approved' ? 'pending' : fallback;
+}
+
+function refreshStoryChapterMetadata(db, story, { touch = true } = {}) {
+  if (!story) return;
+  const publicChapters = db.chapters
+    .filter(chapter => chapter.storyId === story.id && isPublicChapter(chapter))
+    .sort((a, b) => a.number - b.number);
+  story.chapterCount = publicChapters.length;
+  story.latestChapter = publicChapters.at(-1)
+    ? {
+        id: publicChapters.at(-1).id,
+        number: publicChapters.at(-1).number,
+        title: publicChapters.at(-1).title,
+        updatedAt: publicChapters.at(-1).updatedAt || publicChapters.at(-1).createdAt
+      }
+    : null;
+  if (touch) story.updatedAt = now();
+}
+
+function revenueAmountFromPurchase(purchase) {
+  return Number(purchase.price ?? Math.abs(Number(purchase.amount || 0)) ?? 0);
+}
+
+function authorRevenueData(db, ownerId) {
+  const ownedStories = db.stories.filter(story => getStoryOwnerId(story) === ownerId);
+  const ownedStoryIds = new Set(ownedStories.map(story => story.id));
+  const ownedChapterIds = new Set(db.chapters.filter(chapter => ownedStoryIds.has(chapter.storyId)).map(chapter => chapter.id));
+  const purchases = db.purchases
+    .filter(purchase => ownedStoryIds.has(purchase.storyId) || ownedChapterIds.has(purchase.chapterId))
+    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+  const transactions = db.transactions
+    .filter(transaction => {
+      if (transaction.type !== 'purchase') return false;
+      return ownedStoryIds.has(transaction.storyId) || ownedChapterIds.has(transaction.chapterId);
+    })
+    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+  const storyMap = new Map(ownedStories.map(story => [story.id, story]));
+  const chapterMap = new Map(db.chapters.filter(chapter => ownedStoryIds.has(chapter.storyId)).map(chapter => [chapter.id, chapter]));
+  const storyRevenueMap = new Map();
+  const chapterRevenueMap = new Map();
+  const rowsByDay = new Map();
+
+  purchases.forEach(purchase => {
+    const chapter = purchase.chapterId ? chapterMap.get(purchase.chapterId) : null;
+    const storyId = purchase.storyId || chapter?.storyId;
+    if (!storyId || !ownedStoryIds.has(storyId)) return;
+    const amount = revenueAmountFromPurchase(purchase);
+    storyRevenueMap.set(storyId, Number(storyRevenueMap.get(storyId) || 0) + amount);
+    if (chapter) chapterRevenueMap.set(chapter.id, Number(chapterRevenueMap.get(chapter.id) || 0) + amount);
+    const key = new Date(purchase.createdAt || now()).toISOString().slice(0, 10);
+    const row = rowsByDay.get(key) || { label: key.slice(5), revenue: 0, reads: 0 };
+    row.revenue += amount;
+    row.reads += 1;
+    rowsByDay.set(key, row);
+  });
+
+  const totalRevenue = purchases.reduce((sum, purchase) => sum + revenueAmountFromPurchase(purchase), 0);
+  const paidOut = db.transactions
+    .filter(transaction => transaction.userId === ownerId && ['withdrawal', 'author_payout'].includes(transaction.type))
+    .reduce((sum, transaction) => sum + Math.abs(Number(transaction.amount || 0)), 0);
+
+  return {
+    totalRevenue,
+    pendingWithdrawal: Math.max(0, totalRevenue - paidOut),
+    byStory: ownedStories.map(story => ({
+      storyId: story.id,
+      storyTitle: story.title,
+      revenue: Number(storyRevenueMap.get(story.id) || 0),
+      purchases: purchases.filter(purchase => (purchase.storyId || chapterMap.get(purchase.chapterId)?.storyId) === story.id).length
+    })).sort((a, b) => b.revenue - a.revenue),
+    bestChapters: Array.from(chapterRevenueMap.entries())
+      .map(([chapterId, revenue]) => {
+        const chapter = chapterMap.get(chapterId);
+        const story = storyMap.get(chapter?.storyId);
+        return {
+          chapterId,
+          storyId: story?.id,
+          storyTitle: story?.title || '',
+          title: chapter?.title || '',
+          number: chapter?.number || 0,
+          revenue,
+          views: Number(chapter?.views || 0)
+        };
+      })
+      .sort((a, b) => b.revenue - a.revenue)
+      .slice(0, 10),
+    transactions: purchases.map(purchase => {
+      const chapter = purchase.chapterId ? chapterMap.get(purchase.chapterId) : null;
+      const story = storyMap.get(purchase.storyId || chapter?.storyId);
+      const transaction = transactions.find(item => item.chapterId === purchase.chapterId && item.storyId === (purchase.storyId || story?.id) && Math.abs(Number(item.amount || 0)) === revenueAmountFromPurchase(purchase));
+      return {
+        id: purchase.id,
+        transactionId: transaction?.id || null,
+        buyerId: purchase.userId,
+        storyId: story?.id,
+        storyTitle: story?.title || '',
+        chapterId: chapter?.id || null,
+        chapterTitle: chapter?.title || (purchase.combo ? 'Combo tron bo' : ''),
+        amount: revenueAmountFromPurchase(purchase),
+        status: transaction?.status || 'success',
+        createdAt: purchase.createdAt
+      };
+    }),
+    chart: Array.from(rowsByDay.values()).sort((a, b) => a.label.localeCompare(b.label)).slice(-7)
+  };
+}
+
+function authorStorySummary(db, story, viewerId) {
+  const allChapters = db.chapters.filter(chapter => chapter.storyId === story.id);
+  const publicChapters = allChapters.filter(isPublicChapter);
+  const revenue = authorRevenueData(db, getStoryOwnerId(story)).byStory.find(item => item.storyId === story.id)?.revenue || 0;
+  return {
+    ...storySummary(enrichStory(db, story, viewerId, true)),
+    genres: story.categories || [],
+    shortDescription: story.shortDescription || String(story.description || '').slice(0, 180),
+    publishStatus: story.hidden ? 'hidden' : isPublicStory(story) ? 'published' : story.approvalStatus || 'draft',
+    type: story.type || (story.premium ? 'vip' : 'free'),
+    chapterPrice: story.chapterPrice ?? story.price ?? 0,
+    vipFromChapter: story.vipFromChapter ?? (story.premium ? 1 : 0),
+    comboPrice: story.comboPrice ?? 0,
+    chapters: allChapters.length,
+    approvedChapters: publicChapters.length,
+    revenue,
+    comments: db.comments.filter(comment => comment.storyId === story.id).length,
+    rejectionReason: story.rejectionReason || ''
+  };
+}
+
+function authorChapterSummary(db, chapter) {
+  const story = db.stories.find(item => item.id === chapter.storyId);
+  const purchases = db.purchases.filter(purchase => purchase.chapterId === chapter.id);
+  const revenue = purchases.reduce((sum, purchase) => sum + revenueAmountFromPurchase(purchase), 0);
+  return {
+    ...chapter,
+    status: chapterStatus(chapter),
+    access: chapter.isPremium ? 'vip' : 'free',
+    words: wordCount(chapter.content),
+    comments: db.comments.filter(comment => comment.chapterId === chapter.id).length,
+    revenue,
+    storyTitle: story?.title || '',
+    rejectionReason: chapter.rejectionReason || ''
+  };
+}
+
+function promotionResponse(db, promotion) {
+  const story = db.stories.find(item => item.id === promotion.storyId);
+  const pkg = PROMOTION_PACKAGES.find(item => item.id === promotion.packageId);
+  return {
+    ...promotion,
+    packageName: promotion.packageName || pkg?.title || promotion.packageId,
+    storyTitle: story?.title || '',
+    cost: Number(promotion.cost || pkg?.price || 0)
+  };
 }
 
 function storyLink(story, chapter) {
@@ -1375,6 +1675,350 @@ async function handle(req, res) {
       return send(res, 200, { unlocked: true, user: safeUser(user) });
     }
 
+    if (req.method === 'GET' && pathname === '/api/author/stats') {
+      const user = requireUser(req, res, db);
+      if (!user) return;
+      const stories = db.stories.filter(story => getStoryOwnerId(story) === user.id);
+      const storyIds = new Set(stories.map(story => story.id));
+      const chapters = db.chapters.filter(chapter => storyIds.has(chapter.storyId));
+      const revenue = authorRevenueData(db, user.id);
+      return send(res, 200, {
+        stats: {
+          stories: stories.length,
+          chapters: chapters.length,
+          approvedChapters: chapters.filter(isPublicChapter).length,
+          pendingStories: stories.filter(story => story.approvalStatus === 'pending').length,
+          pendingChapters: chapters.filter(chapter => chapterStatus(chapter) === 'pending').length,
+          views: stories.reduce((sum, story) => sum + Number(story.views || 0), 0),
+          follows: stories.reduce((sum, story) => sum + Number(story.follows || 0), 0),
+          comments: db.comments.filter(comment => storyIds.has(comment.storyId)).length,
+          revenue: revenue.totalRevenue,
+          pendingWithdrawal: revenue.pendingWithdrawal,
+          balance: user.seeds || 0
+        }
+      });
+    }
+
+    if (req.method === 'GET' && pathname === '/api/author/stories') {
+      const user = requireUser(req, res, db);
+      if (!user) return;
+      const stories = db.stories
+        .filter(story => getStoryOwnerId(story) === user.id)
+        .sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0))
+        .map(story => authorStorySummary(db, story, user.id));
+      return send(res, 200, { stories });
+    }
+
+    if (req.method === 'POST' && pathname === '/api/author/stories') {
+      const user = requireUser(req, res, db);
+      if (!user) return;
+      const body = await parseBody(req);
+      const approvalStatus = authorStoryApprovalStatus(body, 'draft');
+      const payload = normalizeAuthorStoryInput(body, user);
+      const inputError = validateAuthorStoryPayload(payload, approvalStatus);
+      if (inputError) return badRequest(res, inputError);
+      const timestamp = now();
+      const story = {
+        id: uid('story'),
+        ownerId: user.id,
+        slug: makeUniqueSlug(db, body.slug || payload.title),
+        title: payload.title,
+        author: payload.author,
+        translator: payload.translator,
+        cover: payload.cover,
+        coverPosition: payload.coverPosition,
+        shortDescription: payload.shortDescription,
+        description: payload.description,
+        status: payload.status,
+        language: payload.language,
+        ageRating: payload.ageRating,
+        hidden: true,
+        approvalStatus,
+        chapterCountEstimate: payload.chapterCountEstimate,
+        premium: payload.premium,
+        type: payload.type,
+        price: payload.price,
+        chapterPrice: payload.chapterPrice,
+        vipFromChapter: payload.vipFromChapter,
+        comboPrice: payload.comboPrice,
+        featured: false,
+        views: 0,
+        rating: 4.5,
+        follows: 0,
+        categories: payload.categories,
+        tags: payload.tags,
+        chapterCount: 0,
+        latestChapter: null,
+        updatedAt: timestamp,
+        createdAt: timestamp
+      };
+      db.stories.unshift(story);
+      if (user.role === 'user') {
+        user.role = 'author';
+        user.updatedAt = timestamp;
+      }
+      writeDb(db);
+      return send(res, 201, { story: authorStorySummary(db, story, user.id), user: safeUser(user) });
+    }
+
+    const authorStoryParams = match(pathname, '/api/author/stories/:id');
+    if (authorStoryParams && req.method === 'GET') {
+      const user = requireUser(req, res, db);
+      if (!user) return;
+      const story = db.stories.find(item => item.id === authorStoryParams.id);
+      if (!story) return notFound(res);
+      if (!canEditStory(user, story)) return forbidden(res);
+      const chapters = db.chapters
+        .filter(chapter => chapter.storyId === story.id)
+        .sort((a, b) => a.number - b.number)
+        .map(chapter => authorChapterSummary(db, chapter));
+      return send(res, 200, { story: authorStorySummary(db, story, user.id), chapters });
+    }
+
+    if (authorStoryParams && req.method === 'PUT') {
+      const user = requireUser(req, res, db);
+      if (!user) return;
+      const story = db.stories.find(item => item.id === authorStoryParams.id);
+      if (!story) return notFound(res);
+      if (!canEditStory(user, story)) return forbidden(res);
+      const body = await parseBody(req);
+      const hasApprovalInput = body.approvalStatus !== undefined || body.statusApproval !== undefined || body.mode !== undefined;
+      const approvalStatus = hasApprovalInput ? authorStoryApprovalStatus(body, story.approvalStatus || 'draft') : (story.approvalStatus || 'draft');
+      const payload = normalizeAuthorStoryInput(body, user, story);
+      const inputError = validateAuthorStoryPayload(payload, approvalStatus);
+      if (inputError) return badRequest(res, inputError);
+      Object.assign(story, {
+        title: payload.title,
+        author: payload.author,
+        translator: payload.translator,
+        cover: payload.cover,
+        coverPosition: payload.coverPosition,
+        shortDescription: payload.shortDescription,
+        description: payload.description,
+        status: payload.status,
+        language: payload.language,
+        ageRating: payload.ageRating,
+        approvalStatus,
+        chapterCountEstimate: payload.chapterCountEstimate,
+        premium: payload.premium,
+        type: payload.type,
+        price: payload.price,
+        chapterPrice: payload.chapterPrice,
+        vipFromChapter: payload.vipFromChapter,
+        comboPrice: payload.comboPrice,
+        categories: payload.categories,
+        tags: payload.tags,
+        updatedAt: now()
+      });
+      if (body.slug || body.title) story.slug = makeUniqueSlug(db, body.slug || payload.title, story.id);
+      if (approvalStatus === 'approved') {
+        if (body.hidden !== undefined) story.hidden = Boolean(body.hidden);
+      } else {
+        story.hidden = true;
+      }
+      if (approvalStatus === 'pending') story.rejectionReason = '';
+      writeDb(db);
+      return send(res, 200, { story: authorStorySummary(db, story, user.id), user: safeUser(user) });
+    }
+
+    if (authorStoryParams && req.method === 'DELETE') {
+      const user = requireUser(req, res, db);
+      if (!user) return;
+      const index = db.stories.findIndex(item => item.id === authorStoryParams.id);
+      if (index === -1) return notFound(res);
+      const story = db.stories[index];
+      if (!canEditStory(user, story)) return forbidden(res);
+      db.stories.splice(index, 1);
+      db.chapters = db.chapters.filter(item => item.storyId !== story.id);
+      db.bookmarks = db.bookmarks.filter(item => item.storyId !== story.id);
+      db.follows = db.follows.filter(item => item.storyId !== story.id);
+      db.history = db.history.filter(item => item.storyId !== story.id);
+      db.comments = db.comments.filter(item => item.storyId !== story.id);
+      db.ratings = db.ratings.filter(item => item.storyId !== story.id);
+      db.reports = db.reports.filter(item => item.storyId !== story.id);
+      db.purchases = db.purchases.filter(item => item.storyId !== story.id);
+      db.promotions = db.promotions.filter(item => item.storyId !== story.id);
+      writeDb(db);
+      return send(res, 200, { ok: true });
+    }
+
+    if (req.method === 'GET' && pathname === '/api/author/chapters') {
+      const user = requireUser(req, res, db);
+      if (!user) return;
+      const storyId = String(url.searchParams.get('storyId') || '').trim();
+      let storyIds;
+      if (storyId) {
+        const story = db.stories.find(item => item.id === storyId);
+        if (!story) return notFound(res);
+        if (!canEditStory(user, story)) return forbidden(res);
+        storyIds = new Set([story.id]);
+      } else {
+        storyIds = new Set(db.stories.filter(story => getStoryOwnerId(story) === user.id).map(story => story.id));
+      }
+      const chapters = db.chapters
+        .filter(chapter => storyIds.has(chapter.storyId))
+        .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0))
+        .map(chapter => authorChapterSummary(db, chapter));
+      return send(res, 200, { chapters });
+    }
+
+    const authorStoryChaptersParams = match(pathname, '/api/author/stories/:id/chapters');
+    if (authorStoryChaptersParams && req.method === 'POST') {
+      const user = requireUser(req, res, db);
+      if (!user) return;
+      const story = db.stories.find(item => item.id === authorStoryChaptersParams.id);
+      if (!story) return notFound(res);
+      if (!canEditStory(user, story)) return forbidden(res);
+      const body = await parseBody(req);
+      const inputError = validateChapterInput(body);
+      if (inputError) return badRequest(res, inputError);
+      const nextNumber = Math.max(0, ...db.chapters.filter(item => item.storyId === story.id).map(item => item.number)) + 1;
+      const status = normalizeAuthorChapterStatus(body.status || body.mode, 'draft');
+      if (status === 'scheduled' && !body.scheduledAt) return badRequest(res, 'Vui long chon thoi gian len lich.');
+      const timestamp = now();
+      const chapter = {
+        id: uid('chap'),
+        storyId: story.id,
+        number: Number(body.number || nextNumber),
+        title: String(body.title || `Chuong ${nextNumber}`).trim(),
+        content: String(body.content || '').trim(),
+        preview: String(body.preview || String(body.content || '').slice(0, 320)).trim(),
+        isPremium: Boolean(body.isPremium ?? body.access === 'vip'),
+        price: parsePositiveNumber(body.price ?? body.chapterPrice, 0),
+        status,
+        scheduledAt: status === 'scheduled' ? String(body.scheduledAt) : '',
+        password: body.password ? String(body.password) : '',
+        views: 0,
+        createdAt: timestamp,
+        updatedAt: timestamp
+      };
+      db.chapters.push(chapter);
+      story.updatedAt = timestamp;
+      writeDb(db);
+      return send(res, 201, { chapter: authorChapterSummary(db, chapter), story: authorStorySummary(db, story, user.id) });
+    }
+
+    const authorChapterParams = match(pathname, '/api/author/chapters/:id');
+    if (authorChapterParams && req.method === 'PUT') {
+      const user = requireUser(req, res, db);
+      if (!user) return;
+      const chapter = db.chapters.find(item => item.id === authorChapterParams.id);
+      if (!chapter) return notFound(res);
+      if (!canEditChapter(db, user, chapter)) return forbidden(res);
+      const body = await parseBody(req);
+      const oldStoryId = chapter.storyId;
+      const targetStory = body.storyId && body.storyId !== chapter.storyId
+        ? db.stories.find(item => item.id === body.storyId)
+        : db.stories.find(item => item.id === chapter.storyId);
+      if (!targetStory) return notFound(res);
+      if (!canEditStory(user, targetStory)) return forbidden(res);
+      const hasStatusInput = body.status !== undefined || body.mode !== undefined;
+      const status = hasStatusInput ? normalizeAuthorChapterStatus(body.status || body.mode, chapterStatus(chapter)) : chapterStatus(chapter);
+      if (status === 'scheduled' && !(body.scheduledAt || chapter.scheduledAt)) return badRequest(res, 'Vui long chon thoi gian len lich.');
+      ['title', 'content', 'preview'].forEach(key => {
+        if (body[key] !== undefined) chapter[key] = String(body[key]).trim();
+      });
+      if (body.storyId) chapter.storyId = targetStory.id;
+      if (body.number !== undefined) chapter.number = Number(body.number);
+      if (body.isPremium !== undefined || body.access !== undefined) chapter.isPremium = Boolean(body.isPremium ?? body.access === 'vip');
+      if (body.price !== undefined) chapter.price = parsePositiveNumber(body.price, chapter.price);
+      if (body.password !== undefined) chapter.password = String(body.password || '');
+      if (hasStatusInput) chapter.status = status;
+      if (body.scheduledAt !== undefined) chapter.scheduledAt = String(body.scheduledAt || '');
+      if (status === 'pending') chapter.rejectionReason = '';
+      chapter.updatedAt = now();
+      refreshStoryChapterMetadata(db, targetStory);
+      if (oldStoryId !== chapter.storyId) {
+        const oldStory = db.stories.find(item => item.id === oldStoryId);
+        refreshStoryChapterMetadata(db, oldStory);
+      }
+      writeDb(db);
+      return send(res, 200, { chapter: authorChapterSummary(db, chapter), story: authorStorySummary(db, targetStory, user.id) });
+    }
+
+    if (authorChapterParams && req.method === 'DELETE') {
+      const user = requireUser(req, res, db);
+      if (!user) return;
+      const index = db.chapters.findIndex(item => item.id === authorChapterParams.id);
+      if (index === -1) return notFound(res);
+      const chapter = db.chapters[index];
+      if (!canEditChapter(db, user, chapter)) return forbidden(res);
+      db.chapters.splice(index, 1);
+      db.purchases = db.purchases.filter(item => item.chapterId !== chapter.id);
+      db.history = db.history.filter(item => item.chapterId !== chapter.id);
+      db.comments = db.comments.filter(item => item.chapterId !== chapter.id);
+      const story = db.stories.find(item => item.id === chapter.storyId);
+      refreshStoryChapterMetadata(db, story);
+      writeDb(db);
+      return send(res, 200, { ok: true });
+    }
+
+    if (req.method === 'GET' && pathname === '/api/author/revenue') {
+      const user = requireUser(req, res, db);
+      if (!user) return;
+      return send(res, 200, { revenue: authorRevenueData(db, user.id) });
+    }
+
+    if (req.method === 'GET' && pathname === '/api/author/promotions') {
+      const user = requireUser(req, res, db);
+      if (!user) return;
+      const promotions = db.promotions
+        .filter(promotion => promotion.ownerId === user.id)
+        .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+        .map(promotion => promotionResponse(db, promotion));
+      return send(res, 200, { promotions, packages: PROMOTION_PACKAGES, balance: user.seeds || 0 });
+    }
+
+    if (req.method === 'POST' && pathname === '/api/author/promotions') {
+      const user = requireUser(req, res, db);
+      if (!user) return;
+      const body = await parseBody(req);
+      const story = db.stories.find(item => item.id === body.storyId);
+      if (!story) return notFound(res);
+      if (!canEditStory(user, story)) return forbidden(res);
+      const pkg = PROMOTION_PACKAGES.find(item => item.id === body.packageId);
+      if (!pkg) return badRequest(res, 'Goi quang ba khong hop le.');
+      if (Number(user.seeds || 0) < pkg.price) return badRequest(res, 'So du xu khong du de mua goi quang ba.');
+      const timestamp = now();
+      const startsAt = body.startsAt ? new Date(body.startsAt).toISOString() : timestamp;
+      const endsAt = new Date(new Date(startsAt).getTime() + pkg.days * DAY_MS).toISOString();
+      user.seeds = Number(user.seeds || 0) - pkg.price;
+      const promotion = {
+        id: uid('promo'),
+        storyId: story.id,
+        ownerId: user.id,
+        packageId: pkg.id,
+        packageName: pkg.title,
+        cost: pkg.price,
+        status: 'active',
+        startsAt,
+        endsAt,
+        createdAt: timestamp,
+        updatedAt: timestamp
+      };
+      db.promotions.unshift(promotion);
+      db.transactions.push({
+        id: uid('txn'),
+        userId: user.id,
+        storyId: story.id,
+        promotionId: promotion.id,
+        packageId: pkg.id,
+        type: 'promotion',
+        amount: -pkg.price,
+        note: `Mua goi quang ba ${pkg.title} cho ${story.title}`,
+        createdAt: timestamp
+      });
+      createNotification(db, user.id, {
+        type: 'promo',
+        title: 'Da kich hoat goi quang ba',
+        body: `${story.title} da duoc kich hoat goi ${pkg.title}.`,
+        link: '/author/promotions',
+        storyId: story.id
+      });
+      writeDb(db);
+      return send(res, 201, { promotion: promotionResponse(db, promotion), balance: user.seeds, user: safeUser(user) });
+    }
+
     if (req.method === 'GET' && pathname === '/api/admin/stats') {
       const admin = requireAdmin(req, res, db);
       if (!admin) return;
@@ -1481,9 +2125,11 @@ async function handle(req, res) {
       if (!VALID_CHAPTER_STATUSES.includes(body.status)) return badRequest(res, 'Trạng thái chương không hợp lệ.');
       const wasPublic = isPublicChapter(chapter);
       chapter.status = body.status;
+      if (body.status === 'rejected') chapter.rejectionReason = String(body.rejectionReason || 'Can chinh sua truoc khi duyet.').slice(0, 500);
+      if (body.status === 'approved') chapter.rejectionReason = '';
       chapter.updatedAt = now();
       const story = db.stories.find(item => item.id === chapter.storyId);
-      if (story) story.updatedAt = now();
+      if (story) refreshStoryChapterMetadata(db, story);
       if (!wasPublic && story) notifyChapterPublished(db, story, chapter, admin.id);
       writeDb(db);
       return send(res, 200, { chapter: chapterAdminSummary(db, chapter) });
@@ -1510,8 +2156,17 @@ async function handle(req, res) {
       if (!story) return notFound(res);
       const body = await parseBody(req);
       if (body.approvalStatus !== undefined) {
-        if (!['pending', 'approved', 'rejected'].includes(body.approvalStatus)) return badRequest(res, 'Trạng thái duyệt không hợp lệ.');
+        if (!VALID_STORY_APPROVAL_STATUSES.includes(body.approvalStatus)) return badRequest(res, 'Trạng thái duyệt không hợp lệ.');
         story.approvalStatus = body.approvalStatus;
+        if (body.approvalStatus === 'approved') {
+          if (body.hidden === undefined) story.hidden = false;
+          story.rejectionReason = '';
+        }
+        if (body.approvalStatus === 'rejected') {
+          story.hidden = true;
+          story.rejectionReason = String(body.rejectionReason || 'Truyen can chinh sua truoc khi duyet.').slice(0, 500);
+        }
+        if (body.approvalStatus === 'pending') story.hidden = true;
       }
       if (body.hidden !== undefined) story.hidden = Boolean(body.hidden);
       story.updatedAt = now();
@@ -1530,8 +2185,17 @@ async function handle(req, res) {
       });
       if (body.hidden !== undefined) story.hidden = Boolean(body.hidden);
       if (body.approvalStatus !== undefined) {
-        if (!['pending', 'approved', 'rejected'].includes(body.approvalStatus)) return badRequest(res, 'Trạng thái duyệt không hợp lệ.');
+        if (!VALID_STORY_APPROVAL_STATUSES.includes(body.approvalStatus)) return badRequest(res, 'Trạng thái duyệt không hợp lệ.');
         story.approvalStatus = body.approvalStatus;
+        if (body.approvalStatus === 'approved') {
+          if (body.hidden === undefined) story.hidden = false;
+          story.rejectionReason = '';
+        }
+        if (body.approvalStatus === 'rejected') {
+          story.hidden = true;
+          story.rejectionReason = String(body.rejectionReason || 'Truyen can chinh sua truoc khi duyet.').slice(0, 500);
+        }
+        if (body.approvalStatus === 'pending') story.hidden = true;
       }
       if (body.chapterCountEstimate !== undefined) story.chapterCountEstimate = parsePositiveNumber(body.chapterCountEstimate, story.chapterCountEstimate);
       if (body.slug) story.slug = slugify(body.slug);
@@ -1559,6 +2223,8 @@ async function handle(req, res) {
       db.comments = db.comments.filter(item => item.storyId !== adminStoryParams.id);
       db.ratings = db.ratings.filter(item => item.storyId !== adminStoryParams.id);
       db.reports = db.reports.filter(item => item.storyId !== adminStoryParams.id);
+      db.purchases = db.purchases.filter(item => item.storyId !== adminStoryParams.id);
+      db.promotions = db.promotions.filter(item => item.storyId !== adminStoryParams.id);
       writeDb(db);
       return send(res, 200, { ok: true });
     }
@@ -1587,7 +2253,7 @@ async function handle(req, res) {
         updatedAt: now()
       };
       db.chapters.push(chapter);
-      story.updatedAt = now();
+      refreshStoryChapterMetadata(db, story);
       notifyChapterPublished(db, story, chapter, admin.id);
       writeDb(db);
       return send(res, 201, { chapter });
@@ -1610,11 +2276,13 @@ async function handle(req, res) {
       if (body.status !== undefined) {
         if (!VALID_CHAPTER_STATUSES.includes(body.status)) return badRequest(res, 'Trạng thái chương không hợp lệ.');
         chapter.status = body.status;
+        if (body.status === 'rejected') chapter.rejectionReason = String(body.rejectionReason || 'Can chinh sua truoc khi duyet.').slice(0, 500);
+        if (body.status === 'approved') chapter.rejectionReason = '';
       }
       if (body.password !== undefined) chapter.password = String(body.password || '');
       const story = db.stories.find(item => item.id === chapter.storyId);
-      if (story) story.updatedAt = now();
       chapter.updatedAt = now();
+      if (story) refreshStoryChapterMetadata(db, story);
       if (!wasPublic && story) notifyChapterPublished(db, story, chapter, admin.id);
       writeDb(db);
       return send(res, 200, { chapter: chapterAdminSummary(db, chapter) });
@@ -1629,7 +2297,7 @@ async function handle(req, res) {
       db.purchases = db.purchases.filter(item => item.chapterId !== chapter.id);
       db.history = db.history.filter(item => item.chapterId !== chapter.id);
       const story = db.stories.find(item => item.id === chapter.storyId);
-      if (story) story.updatedAt = now();
+      if (story) refreshStoryChapterMetadata(db, story);
       writeDb(db);
       return send(res, 200, { ok: true });
     }

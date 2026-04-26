@@ -31,6 +31,15 @@ async function loginToken(email = 'admin@example.com', password = '123456') {
   return login.data.token;
 }
 
+async function registerUser(email, name = 'Author Test User') {
+  const register = await request('/api/auth/register', {
+    method: 'POST',
+    body: JSON.stringify({ name, email, password: '123456' })
+  });
+  assert.equal(register.response.status, 201);
+  return register.data;
+}
+
 function readTestDb() {
   return JSON.parse(fs.readFileSync(DB_PATH, 'utf8'));
 }
@@ -189,6 +198,35 @@ test('account profile endpoint validates and persists profile fields', async () 
   assert.equal(reloaded.response.status, 200);
   assert.equal(reloaded.data.profile.website, 'https://daudotruyen.vn');
   assert.equal(reloaded.data.profile.birthday, '2000-05-20');
+
+  const bioOnly = await request('/api/me/profile', {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify({ bio: 'Chỉ sửa giới thiệu' })
+  });
+  assert.equal(bioOnly.response.status, 200);
+  assert.equal(bioOnly.data.profile.bio, 'Chỉ sửa giới thiệu');
+  assert.equal(bioOnly.data.profile.phone, '+84 912 345 678');
+  assert.equal(bioOnly.data.profile.birthday, '2000-05-20');
+
+  const emptyOptional = await request('/api/me/profile', {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify({ phone: '', address: '', bio: '' })
+  });
+  assert.equal(emptyOptional.response.status, 200);
+  assert.equal(emptyOptional.data.profile.phone, '');
+  assert.equal(emptyOptional.data.profile.address, '');
+  assert.equal(emptyOptional.data.profile.bio, '');
+
+  const avatarDataUrl = 'data:image/png;base64,iVBORw0KGgo=';
+  const avatarOnly = await request('/api/me/profile', {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify({ avatar: avatarDataUrl })
+  });
+  assert.equal(avatarOnly.response.status, 200);
+  assert.equal(avatarOnly.data.profile.avatar, avatarDataUrl);
 });
 
 test('account preferences endpoint whitelists keys and persists values', async () => {
@@ -237,15 +275,15 @@ test('password endpoint enforces policy, changes password, and creates security 
   const weak = await request('/api/me/password', {
     method: 'POST',
     headers,
-    body: JSON.stringify({ currentPassword: '123456', newPassword: 'weakpass', confirmPassword: 'weakpass' })
+    body: JSON.stringify({ currentPassword: '123456', newPassword: '12345', confirmPassword: '12345' })
   });
   assert.equal(weak.response.status, 400);
-  assert.match(weak.data.message, /chữ hoa|số|đặc biệt|8/i);
+  assert.match(weak.data.message, /6 ký tự|6/i);
 
   const mismatch = await request('/api/me/password', {
     method: 'POST',
     headers,
-    body: JSON.stringify({ currentPassword: '123456', newPassword: 'Strong!123', confirmPassword: 'Strong!124' })
+    body: JSON.stringify({ currentPassword: '123456', newPassword: 'abc123', confirmPassword: 'abc124' })
   });
   assert.equal(mismatch.response.status, 400);
   assert.match(mismatch.data.message, /khớp/i);
@@ -253,13 +291,13 @@ test('password endpoint enforces policy, changes password, and creates security 
   const changed = await request('/api/me/password', {
     method: 'POST',
     headers,
-    body: JSON.stringify({ currentPassword: '123456', newPassword: 'Strong!123', confirmPassword: 'Strong!123' })
+    body: JSON.stringify({ currentPassword: '123456', newPassword: 'abc123', confirmPassword: 'abc123' })
   });
   assert.equal(changed.response.status, 200);
 
   const loginNew = await request('/api/auth/login', {
     method: 'POST',
-    body: JSON.stringify({ email: 'password-test@example.com', password: 'Strong!123' })
+    body: JSON.stringify({ email: 'password-test@example.com', password: 'abc123' })
   });
   assert.equal(loginNew.response.status, 200);
 
@@ -874,4 +912,241 @@ test('hidden stories stay out of public listing', async () => {
   const list = await request('/api/stories?q=Hidden%20Story%20Test');
   assert.equal(list.response.status, 200);
   assert.equal(list.data.stories.length, 0);
+});
+
+test('author APIs require authentication', async () => {
+  const { response } = await request('/api/author/stats');
+  assert.equal(response.status, 401);
+});
+
+test('author can create draft and pending stories with ownerId', async () => {
+  const author = await registerUser('author-create@example.com', 'Author Create');
+  const headers = { Authorization: `Bearer ${author.token}` };
+
+  const draft = await request('/api/author/stories', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      title: 'Author Draft Story',
+      description: 'Short draft description',
+      categories: ['Test'],
+      approvalStatus: 'draft'
+    })
+  });
+  assert.equal(draft.response.status, 201);
+  assert.equal(draft.data.story.ownerId, author.user.id);
+  assert.equal(draft.data.story.approvalStatus, 'draft');
+  assert.equal(draft.data.story.hidden, true);
+
+  const pending = await request('/api/author/stories', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      title: 'Author Pending Story',
+      description: 'Pending story has enough description for moderation flow.',
+      categories: ['Test'],
+      approvalStatus: 'pending'
+    })
+  });
+  assert.equal(pending.response.status, 201);
+  assert.equal(pending.data.story.ownerId, author.user.id);
+  assert.equal(pending.data.story.approvalStatus, 'pending');
+  assert.equal(pending.data.story.hidden, true);
+});
+
+test('author cannot edit another owner story or chapter', async () => {
+  const owner = await registerUser('owner-author@example.com', 'Owner Author');
+  const intruder = await registerUser('intruder-author@example.com', 'Intruder Author');
+  const ownerHeaders = { Authorization: `Bearer ${owner.token}` };
+  const intruderHeaders = { Authorization: `Bearer ${intruder.token}` };
+
+  const story = await request('/api/author/stories', {
+    method: 'POST',
+    headers: ownerHeaders,
+    body: JSON.stringify({
+      title: 'Owned Story Lock',
+      description: 'Owned story description for permission checks.',
+      categories: ['Permission'],
+      approvalStatus: 'pending'
+    })
+  });
+  assert.equal(story.response.status, 201);
+
+  const chapter = await request(`/api/author/stories/${story.data.story.id}/chapters`, {
+    method: 'POST',
+    headers: ownerHeaders,
+    body: JSON.stringify({
+      title: 'Owned Chapter',
+      content: 'This chapter content is long enough for validation and belongs only to the original story owner.',
+      status: 'pending'
+    })
+  });
+  assert.equal(chapter.response.status, 201);
+
+  const editStory = await request(`/api/author/stories/${story.data.story.id}`, {
+    method: 'PUT',
+    headers: intruderHeaders,
+    body: JSON.stringify({ title: 'Stolen Story', approvalStatus: 'draft' })
+  });
+  assert.equal(editStory.response.status, 403);
+
+  const editChapter = await request(`/api/author/chapters/${chapter.data.chapter.id}`, {
+    method: 'PUT',
+    headers: intruderHeaders,
+    body: JSON.stringify({ title: 'Stolen Chapter', status: 'draft' })
+  });
+  assert.equal(editChapter.response.status, 403);
+});
+
+test('admin approval publishes author story to public listing', async () => {
+  const author = await registerUser('approval-author@example.com', 'Approval Author');
+  const authorHeaders = { Authorization: `Bearer ${author.token}` };
+  const adminToken = await loginToken();
+  const adminHeaders = { Authorization: `Bearer ${adminToken}` };
+  const title = 'Author Approval Public Story';
+
+  const create = await request('/api/author/stories', {
+    method: 'POST',
+    headers: authorHeaders,
+    body: JSON.stringify({
+      title,
+      description: 'This author story should become public only after admin approval.',
+      categories: ['Approval'],
+      approvalStatus: 'pending'
+    })
+  });
+  assert.equal(create.response.status, 201);
+
+  const before = await request(`/api/stories?q=${encodeURIComponent(title)}`);
+  assert.equal(before.response.status, 200);
+  assert.equal(before.data.stories.length, 0);
+
+  const approve = await request(`/api/admin/stories/${create.data.story.id}/status`, {
+    method: 'PATCH',
+    headers: adminHeaders,
+    body: JSON.stringify({ approvalStatus: 'approved' })
+  });
+  assert.equal(approve.response.status, 200);
+  assert.equal(approve.data.story.approvalStatus, 'approved');
+  assert.equal(approve.data.story.hidden, false);
+
+  const after = await request(`/api/stories?q=${encodeURIComponent(title)}`);
+  assert.equal(after.response.status, 200);
+  assert.equal(after.data.stories.length, 1);
+});
+
+test('draft rejected and hidden author stories are not public', async () => {
+  const author = await registerUser('visibility-author@example.com', 'Visibility Author');
+  const headers = { Authorization: `Bearer ${author.token}` };
+  const adminHeaders = { Authorization: `Bearer ${await loginToken()}` };
+
+  const draft = await request('/api/author/stories', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ title: 'Author Draft Not Public', description: 'Draft hidden by default.', categories: ['Visibility'], approvalStatus: 'draft' })
+  });
+  const rejected = await request('/api/author/stories', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ title: 'Author Rejected Not Public', description: 'Rejected hidden by moderation.', categories: ['Visibility'], approvalStatus: 'pending' })
+  });
+  const hidden = await request('/api/author/stories', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ title: 'Author Approved Hidden Not Public', description: 'Approved but then hidden.', categories: ['Visibility'], approvalStatus: 'pending' })
+  });
+  assert.equal(draft.response.status, 201);
+  assert.equal(rejected.response.status, 201);
+  assert.equal(hidden.response.status, 201);
+
+  await request(`/api/admin/stories/${rejected.data.story.id}/status`, {
+    method: 'PATCH',
+    headers: adminHeaders,
+    body: JSON.stringify({ approvalStatus: 'rejected', rejectionReason: 'Need edits' })
+  });
+  await request(`/api/admin/stories/${hidden.data.story.id}/status`, {
+    method: 'PATCH',
+    headers: adminHeaders,
+    body: JSON.stringify({ approvalStatus: 'approved', hidden: true })
+  });
+
+  for (const title of ['Author Draft Not Public', 'Author Rejected Not Public', 'Author Approved Hidden Not Public']) {
+    const list = await request(`/api/stories?q=${encodeURIComponent(title)}`);
+    assert.equal(list.response.status, 200);
+    assert.equal(list.data.stories.length, 0);
+  }
+});
+
+test('author revenue only includes owned stories', async () => {
+  const first = await registerUser('revenue-author-a@example.com', 'Revenue Author A');
+  const second = await registerUser('revenue-author-b@example.com', 'Revenue Author B');
+  const firstHeaders = { Authorization: `Bearer ${first.token}` };
+  const secondHeaders = { Authorization: `Bearer ${second.token}` };
+
+  const firstStory = await request('/api/author/stories', {
+    method: 'POST',
+    headers: firstHeaders,
+    body: JSON.stringify({ title: 'Revenue Owned Story', description: 'Owned revenue story.', categories: ['Revenue'], approvalStatus: 'draft' })
+  });
+  const secondStory = await request('/api/author/stories', {
+    method: 'POST',
+    headers: secondHeaders,
+    body: JSON.stringify({ title: 'Revenue Other Story', description: 'Other revenue story.', categories: ['Revenue'], approvalStatus: 'draft' })
+  });
+  assert.equal(firstStory.response.status, 201);
+  assert.equal(secondStory.response.status, 201);
+
+  const db = readTestDb();
+  db.purchases.push(
+    { id: 'pur_author_revenue_owned', userId: 'u_user', storyId: firstStory.data.story.id, chapterId: null, price: 75, createdAt: new Date().toISOString() },
+    { id: 'pur_author_revenue_other', userId: 'u_user', storyId: secondStory.data.story.id, chapterId: null, price: 125, createdAt: new Date().toISOString() }
+  );
+  db.transactions.push(
+    { id: 'txn_author_revenue_owned', userId: 'u_user', storyId: firstStory.data.story.id, type: 'purchase', amount: -75, createdAt: new Date().toISOString() },
+    { id: 'txn_author_revenue_other', userId: 'u_user', storyId: secondStory.data.story.id, type: 'purchase', amount: -125, createdAt: new Date().toISOString() }
+  );
+  writeTestDb(db);
+
+  const revenue = await request('/api/author/revenue', { headers: firstHeaders });
+  assert.equal(revenue.response.status, 200);
+  assert.equal(revenue.data.revenue.totalRevenue, 75);
+  assert.ok(revenue.data.revenue.byStory.some(item => item.storyId === firstStory.data.story.id && item.revenue === 75));
+  assert.ok(!revenue.data.revenue.byStory.some(item => item.storyId === secondStory.data.story.id && item.revenue > 0));
+});
+
+test('promotion purchase deducts wallet and creates transaction', async () => {
+  const author = await registerUser('promotion-author@example.com', 'Promotion Author');
+  const headers = { Authorization: `Bearer ${author.token}` };
+  const story = await request('/api/author/stories', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      title: 'Promotion Owned Story',
+      description: 'Story used to buy a promotion package.',
+      categories: ['Promotion'],
+      approvalStatus: 'draft'
+    })
+  });
+  assert.equal(story.response.status, 201);
+
+  const topup = await request('/api/wallet/topup', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ packageId: 'seed-100' })
+  });
+  assert.equal(topup.response.status, 200);
+  const beforeBalance = topup.data.balance;
+
+  const buy = await request('/api/author/promotions', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ storyId: story.data.story.id, packageId: 'promo-1' })
+  });
+  assert.equal(buy.response.status, 201);
+  assert.equal(buy.data.promotion.storyId, story.data.story.id);
+  assert.equal(buy.data.balance, beforeBalance - 120);
+
+  const db = readTestDb();
+  assert.ok(db.promotions.some(item => item.id === buy.data.promotion.id && item.ownerId === author.user.id));
+  assert.ok(db.transactions.some(item => item.type === 'promotion' && item.promotionId === buy.data.promotion.id && item.amount === -120));
 });

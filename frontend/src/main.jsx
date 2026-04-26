@@ -406,7 +406,7 @@ function AuthorRoute() {
   return (
     <>
       <PageSeo title="Dashboard tác giả" description="Quản lý truyện, chương, doanh thu, thống kê và gói quảng bá dành cho tác giả." canonical="/author" />
-      <AuthorDashboard user={user} />
+      <AuthorDashboard user={user} apiClient={api} />
     </>
   );
 }
@@ -561,7 +561,13 @@ function PublicHeader() {
 
 function Footer() {
   const readerLinks = ['Trang chủ', 'Danh sách truyện', 'Thể loại', 'Bảng xếp hạng', 'Truyện ngắn', 'Hoàn thành', 'Ví xu'];
-  const authorLinks = ['Khu vực tác giả', 'Đăng truyện mới', 'Quản lý truyện', 'Thống kê doanh thu', 'AI Tools Beta', 'Vinh danh dịch giả'];
+  const authorLinks = [
+    ['Khu vực tác giả', '/author'],
+    ['Đăng truyện mới', '/author/stories/new'],
+    ['Quản lý truyện', '/author/stories'],
+    ['Thống kê doanh thu', '/author/revenue'],
+    ['Quảng bá', '/author/promotions']
+  ];
   const supportLinks = ['Liên hệ', 'Phản hồi / Báo lỗi', 'Câu hỏi thường gặp', 'Điều khoản sử dụng', 'Chính sách bảo mật', 'Xóa dữ liệu', 'Quy định nội dung'];
 
   return (
@@ -595,7 +601,7 @@ function Footer() {
           </div>
           <div>
             <h4>Dành cho tác giả</h4>
-            {authorLinks.map(item => <Link key={item} to={item === 'Đăng truyện mới' ? '/dang-truyen' : '/ai-tools'}>{item}</Link>)}
+            {authorLinks.map(([label, to]) => <Link key={label} to={to}>{label}</Link>)}
           </div>
           <div>
             <h4>Hỗ trợ & pháp lý</h4>

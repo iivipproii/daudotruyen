@@ -649,12 +649,33 @@ const privacyPreferenceFields = [
   ['publicComments', 'Công khai bình luận']
 ];
 
-const socialLinkFields = [
-  ['facebook', 'Facebook'],
-  ['instagram', 'Instagram'],
-  ['tiktok', 'TikTok'],
-  ['youtube', 'YouTube']
-];
+const profilePatchFields = ['name', 'email', 'phone', 'birthday', 'gender', 'address', 'bio'];
+const avatarFileTypes = new Set(['image/png', 'image/jpeg', 'image/webp']);
+const avatarAccept = 'image/png,image/jpeg,image/webp';
+const avatarMaxBytes = 2 * 1024 * 1024;
+
+function isAvatarValue(value) {
+  return Boolean(value) && (/^https?:\/\//i.test(value) || /^data:image\/(png|jpeg|jpg|webp);base64,/i.test(value));
+}
+
+function readAvatarFile(file) {
+  return new Promise((resolve, reject) => {
+    if (!file) return resolve('');
+    if (!avatarFileTypes.has(file.type)) return reject(new Error('File không hợp lệ. Chỉ chấp nhận PNG, JPG hoặc WEBP.'));
+    if (file.size > avatarMaxBytes) return reject(new Error('Ảnh quá lớn. Vui lòng chọn ảnh tối đa 2MB.'));
+    const reader = new FileReader();
+    reader.onload = () => {
+      const value = String(reader.result || '');
+      if (!/^data:image\/(png|jpeg|jpg|webp);base64,/i.test(value)) {
+        reject(new Error('File không hợp lệ. Chỉ chấp nhận PNG, JPG hoặc WEBP.'));
+        return;
+      }
+      resolve(value);
+    };
+    reader.onerror = () => reject(new Error('Không đọc được ảnh. Vui lòng thử ảnh khác.'));
+    reader.readAsDataURL(file);
+  });
+}
 
 function defaultSettingsProfile(user = {}) {
   return {
@@ -664,11 +685,8 @@ function defaultSettingsProfile(user = {}) {
     birthday: user?.birthday || '',
     gender: user?.gender || '',
     address: user?.address || '',
-    website: user?.website || '',
     bio: user?.bio || '',
-    avatar: user?.avatar && /^https?:\/\//i.test(user.avatar) ? user.avatar : '',
-    cover: user?.cover && /^https?:\/\//i.test(user.cover) ? user.cover : '',
-    socialLinks: { facebook: '', instagram: '', tiktok: '', youtube: '', ...(user?.socialLinks || {}) }
+    avatar: isAvatarValue(user?.avatar) ? user.avatar : ''
   };
 }
 
@@ -676,11 +694,14 @@ function normalizeSettingsProfile(data, user) {
   const profile = data?.profile || {};
   return {
     ...defaultSettingsProfile(user),
-    ...profile,
-    socialLinks: {
-      ...defaultSettingsProfile(user).socialLinks,
-      ...(profile.socialLinks || {})
-    }
+    name: profile.name ?? user?.name ?? '',
+    email: profile.email ?? user?.email ?? '',
+    phone: profile.phone ?? user?.phone ?? '',
+    birthday: profile.birthday ?? user?.birthday ?? '',
+    gender: profile.gender ?? user?.gender ?? '',
+    address: profile.address ?? user?.address ?? '',
+    bio: profile.bio ?? user?.bio ?? '',
+    avatar: isAvatarValue(profile.avatar) ? profile.avatar : ''
   };
 }
 
@@ -707,21 +728,61 @@ function defaultSettingsPreferences(theme = 'light') {
 
 function SettingsMessage({ state }) {
   if (!state?.text) return null;
-  return <div className={state.type === 'error' ? 'acct-error' : 'acct-success'}>{state.text}</div>;
+  const className = state.type === 'error' ? 'acct-error' : state.type === 'warning' ? 'acct-warning' : 'acct-success';
+  return <div className={className}>{state.text}</div>;
+}
+
+function EyeIcon({ visible }) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M2.4 12s3.4-6 9.6-6 9.6 6 9.6 6-3.4 6-9.6 6-9.6-6-9.6-6Z" />
+      <circle cx="12" cy="12" r="3" />
+      {visible ? null : <path d="M4 4l16 16" />}
+    </svg>
+  );
+}
+
+function PasswordField({ label, value, onChange, autoComplete, visible, onToggle }) {
+  return (
+    <label className="acct-password-field">
+      <span>{label}</span>
+      <div className="acct-password-wrap">
+        <input
+          required
+          type={visible ? 'text' : 'password'}
+          autoComplete={autoComplete}
+          value={value}
+          onChange={event => onChange(event.target.value)}
+        />
+        <button type="button" className="acct-password-toggle" aria-label={visible ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'} onClick={onToggle}>
+          <EyeIcon visible={visible} />
+        </button>
+      </div>
+    </label>
+  );
 }
 
 export function AccountSettings({ user, updateUser, logout, theme, toggleTheme, apiClient }) {
   const navigate = useNavigate();
   const location = useLocation();
   const syncedThemeRef = useRef(false);
+  const avatarInputRef = useRef(null);
   const [profile, setProfile] = useState(() => defaultSettingsProfile(user));
+  const [savedProfile, setSavedProfile] = useState(() => defaultSettingsProfile(user));
   const [password, setPassword] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
+  const [passwordVisible, setPasswordVisible] = useState({ currentPassword: false, newPassword: false, confirmPassword: false });
   const [prefs, setPrefs] = useState(() => defaultSettingsPreferences(theme));
   const [danger, setDanger] = useState({ password: '', phrase: '' });
   const [initialLoading, setInitialLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
-  const [saving, setSaving] = useState({ profile: false, password: false, danger: false, logoutAll: false });
-  const [savingPrefs, setSavingPrefs] = useState({});
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [savingAvatar, setSavingAvatar] = useState(false);
+  const [savingPassword, setSavingPassword] = useState(false);
+  const [savingPreferences, setSavingPreferences] = useState({});
+  const [savingDanger, setSavingDanger] = useState(false);
+  const [savingLogoutAll, setSavingLogoutAll] = useState(false);
+  const [avatarReading, setAvatarReading] = useState(false);
+  const [draggingAvatar, setDraggingAvatar] = useState(false);
   const [messages, setMessages] = useState({});
 
   function setMessage(section, type, text) {
@@ -741,7 +802,9 @@ export function AccountSettings({ user, updateUser, logout, theme, toggleTheme, 
         apiClient('/me/profile'),
         apiClient('/me/preferences')
       ]);
-      setProfile(normalizeSettingsProfile(profileData, user));
+      const normalizedProfile = normalizeSettingsProfile(profileData, user);
+      setProfile(normalizedProfile);
+      setSavedProfile(normalizedProfile);
       const nextPrefs = { ...defaultSettingsPreferences(theme), ...(preferenceData.preferences || {}) };
       setPrefs(nextPrefs);
       if (!syncedThemeRef.current && ['light', 'dark'].includes(nextPrefs.theme) && nextPrefs.theme !== theme) {
@@ -773,32 +836,98 @@ export function AccountSettings({ user, updateUser, logout, theme, toggleTheme, 
     setProfile(current => ({ ...current, ...next }));
   }
 
-  function patchSocialLink(key, value) {
-    setProfile(current => ({ ...current, socialLinks: { ...current.socialLinks, [key]: value } }));
+  function profilePatchPayload() {
+    return profilePatchFields.reduce((payload, key) => {
+      const value = profile[key] ?? '';
+      if (value !== (savedProfile[key] ?? '')) payload[key] = value;
+      return payload;
+    }, {});
+  }
+
+  function togglePasswordField(key) {
+    setPasswordVisible(current => ({ ...current, [key]: !current[key] }));
+  }
+
+  async function handleAvatarFile(file) {
+    setMessage('avatar', 'warning', 'Đang tải ảnh...');
+    setAvatarReading(true);
+    try {
+      const avatar = await readAvatarFile(file);
+      patchProfile({ avatar });
+      setMessage('avatar', 'success', 'Ảnh đã sẵn sàng. Bấm lưu để cập nhật ảnh đại diện.');
+    } catch (err) {
+      setMessage('avatar', 'error', err.message || 'Không tải được ảnh.');
+    } finally {
+      setAvatarReading(false);
+      if (avatarInputRef.current) avatarInputRef.current.value = '';
+    }
+  }
+
+  function handleAvatarInput(event) {
+    handleAvatarFile(event.target.files?.[0]);
+  }
+
+  function handleAvatarDrop(event) {
+    event.preventDefault();
+    setDraggingAvatar(false);
+    handleAvatarFile(event.dataTransfer.files?.[0]);
+  }
+
+  function clearAvatar() {
+    patchProfile({ avatar: '' });
+    setMessage('avatar', 'warning', 'Ảnh đại diện đã được đặt về mặc định. Bấm lưu để cập nhật.');
   }
 
   async function saveProfile(event) {
     event.preventDefault();
-    setSaving(current => ({ ...current, profile: true }));
+    const payload = profilePatchPayload();
+    if (!Object.keys(payload).length) {
+      setMessage('profile', 'success', 'Hồ sơ đã được cập nhật.');
+      return;
+    }
+    setSavingProfile(true);
     setMessage('profile', '', '');
     try {
       const result = await apiClient('/me/profile', {
         method: 'PATCH',
-        body: JSON.stringify(profile)
+        body: JSON.stringify(payload)
       });
-      setProfile(normalizeSettingsProfile(result, result.user || user));
+      const normalizedProfile = normalizeSettingsProfile(result, result.user || user);
+      setProfile(normalizedProfile);
+      setSavedProfile(normalizedProfile);
       if (result.user) updateUser?.(result.user);
       setMessage('profile', 'success', 'Đã lưu hồ sơ. Dữ liệu sẽ được giữ sau khi tải lại trang.');
     } catch (err) {
       setMessage('profile', 'error', err.message || 'Không lưu được hồ sơ.');
     } finally {
-      setSaving(current => ({ ...current, profile: false }));
+      setSavingProfile(false);
+    }
+  }
+
+  async function saveAvatar(event) {
+    event.preventDefault();
+    setSavingAvatar(true);
+    setMessage('avatar', '', '');
+    try {
+      const result = await apiClient('/me/profile', {
+        method: 'PATCH',
+        body: JSON.stringify({ avatar: profile.avatar || '' })
+      });
+      const normalizedProfile = normalizeSettingsProfile(result, result.user || user);
+      setProfile(normalizedProfile);
+      setSavedProfile(normalizedProfile);
+      if (result.user) updateUser?.(result.user);
+      setMessage('avatar', 'success', 'Đã lưu ảnh đại diện.');
+    } catch (err) {
+      setMessage('avatar', 'error', err.message || 'Không lưu được ảnh đại diện.');
+    } finally {
+      setSavingAvatar(false);
     }
   }
 
   async function savePassword(event) {
     event.preventDefault();
-    setSaving(current => ({ ...current, password: true }));
+    setSavingPassword(true);
     setMessage('password', '', '');
     try {
       await apiClient('/me/password', {
@@ -810,14 +939,14 @@ export function AccountSettings({ user, updateUser, logout, theme, toggleTheme, 
     } catch (err) {
       setMessage('password', 'error', err.message || 'Không đổi được mật khẩu.');
     } finally {
-      setSaving(current => ({ ...current, password: false }));
+      setSavingPassword(false);
     }
   }
 
   async function updatePreference(key, value) {
     const previous = prefs[key];
     setPrefs(current => ({ ...current, [key]: value }));
-    setSavingPrefs(current => ({ ...current, [key]: true }));
+    setSavingPreferences(current => ({ ...current, [key]: true }));
     setMessage('preferences', '', '');
     try {
       const result = await apiClient('/me/preferences', {
@@ -831,14 +960,14 @@ export function AccountSettings({ user, updateUser, logout, theme, toggleTheme, 
       setPrefs(current => ({ ...current, [key]: previous }));
       setMessage('preferences', 'error', err.message || 'Không lưu được cài đặt. Thay đổi đã được hoàn tác.');
     } finally {
-      setSavingPrefs(current => ({ ...current, [key]: false }));
+      setSavingPreferences(current => ({ ...current, [key]: false }));
     }
   }
 
   async function updateThemePreference(value) {
     const previous = prefs.theme;
     setPrefs(current => ({ ...current, theme: value }));
-    setSavingPrefs(current => ({ ...current, theme: true }));
+    setSavingPreferences(current => ({ ...current, theme: true }));
     setMessage('preferences', '', '');
     try {
       const result = await apiClient('/me/preferences', {
@@ -853,12 +982,12 @@ export function AccountSettings({ user, updateUser, logout, theme, toggleTheme, 
       setPrefs(current => ({ ...current, theme: previous }));
       setMessage('preferences', 'error', err.message || 'Không lưu được giao diện. Thay đổi đã được hoàn tác.');
     } finally {
-      setSavingPrefs(current => ({ ...current, theme: false }));
+      setSavingPreferences(current => ({ ...current, theme: false }));
     }
   }
 
   async function logoutEverywhere() {
-    setSaving(current => ({ ...current, logoutAll: true }));
+    setSavingLogoutAll(true);
     setMessage('danger', '', '');
     try {
       await apiClient('/me/logout-all', { method: 'POST' });
@@ -866,13 +995,13 @@ export function AccountSettings({ user, updateUser, logout, theme, toggleTheme, 
       navigate('/dang-nhap', { replace: true });
     } catch (err) {
       setMessage('danger', 'error', err.message || 'Không đăng xuất được các thiết bị.');
-      setSaving(current => ({ ...current, logoutAll: false }));
+      setSavingLogoutAll(false);
     }
   }
 
   async function deactivateAccount(event) {
     event.preventDefault();
-    setSaving(current => ({ ...current, danger: true }));
+    setSavingDanger(true);
     setMessage('danger', '', '');
     try {
       await apiClient('/me/deactivate', {
@@ -883,7 +1012,7 @@ export function AccountSettings({ user, updateUser, logout, theme, toggleTheme, 
       navigate('/dang-nhap', { replace: true });
     } catch (err) {
       setMessage('danger', 'error', err.message || 'Không vô hiệu hóa được tài khoản.');
-      setSaving(current => ({ ...current, danger: false }));
+      setSavingDanger(false);
     }
   }
 
@@ -916,36 +1045,72 @@ export function AccountSettings({ user, updateUser, logout, theme, toggleTheme, 
         {settingsNav.map(([id, label]) => <a key={id} href={`#${id}`}>{label}</a>)}
       </nav>
 
-      <form id="profile" className="acct-panel acct-settings-section acct-settings-form" onSubmit={saveProfile}>
-        <div className="acct-settings-section-head">
-          <span>Hồ sơ cá nhân</span>
-          <h2>Thông tin công khai và liên hệ</h2>
-        </div>
-        <SettingsMessage state={messages.profile} />
-        <div className="acct-media-preview">
-          <img src={profile.avatar || '/images/logo.png'} alt="Ảnh đại diện hiện tại" onError={handleImageError} />
-          <div style={{ backgroundImage: `url(${profile.cover || coverFallback})` }} aria-label="Ảnh bìa hiện tại" />
-        </div>
-        <div className="acct-settings-fields two">
-          <label>Tên hiển thị<input required maxLength="80" value={profile.name} onChange={event => patchProfile({ name: event.target.value })} /></label>
-          <label>Email<input required type="email" value={profile.email} onChange={event => patchProfile({ email: event.target.value })} /></label>
-          <label>Số điện thoại<input value={profile.phone} onChange={event => patchProfile({ phone: event.target.value })} placeholder="+84..." /></label>
-          <label>Ngày sinh<input type="date" value={profile.birthday} onChange={event => patchProfile({ birthday: event.target.value })} /></label>
-          <label>Giới tính<select value={profile.gender} onChange={event => patchProfile({ gender: event.target.value })}><option value="">Chưa chọn</option><option value="female">Nữ</option><option value="male">Nam</option><option value="other">Khác</option><option value="prefer-not">Không công khai</option></select></label>
-          <label>Website<input type="url" value={profile.website} onChange={event => patchProfile({ website: event.target.value })} placeholder="https://example.com" /></label>
-          <label>Avatar URL<input type="url" value={profile.avatar} onChange={event => patchProfile({ avatar: event.target.value })} placeholder="https://..." /></label>
-          <label>Cover URL<input type="url" value={profile.cover} onChange={event => patchProfile({ cover: event.target.value })} placeholder="https://..." /></label>
-        </div>
-        <label>Địa chỉ<input maxLength="200" value={profile.address} onChange={event => patchProfile({ address: event.target.value })} placeholder="Tỉnh/thành phố hoặc địa chỉ liên hệ" /></label>
-        <label>Giới thiệu<textarea maxLength="500" rows="5" value={profile.bio} onChange={event => patchProfile({ bio: event.target.value })} placeholder="Viết ngắn gọn về bạn" /></label>
-        <div className="acct-social-links">
-          <h3>Social links</h3>
-          <div className="acct-settings-fields two">
-            {socialLinkFields.map(([key, label]) => <label key={key}>{label}<input type="url" value={profile.socialLinks[key] || ''} onChange={event => patchSocialLink(key, event.target.value)} placeholder="https://..." /></label>)}
+      <section id="profile" className="acct-settings-profile-grid">
+        <form className="acct-panel acct-settings-section acct-settings-form acct-avatar-card" onSubmit={saveAvatar}>
+          <div className="acct-settings-section-head">
+            <span>Ảnh đại diện</span>
+            <h2>Avatar tài khoản</h2>
           </div>
-        </div>
-        <button type="submit" disabled={saving.profile}>{saving.profile ? 'Đang lưu...' : 'Lưu hồ sơ'}</button>
-      </form>
+          <SettingsMessage state={messages.avatar} />
+          <div
+            className={`acct-avatar-uploader${draggingAvatar ? ' dragging' : ''}`}
+            role="button"
+            tabIndex="0"
+            aria-label="Chọn hoặc kéo thả ảnh đại diện"
+            onClick={() => avatarInputRef.current?.click()}
+            onKeyDown={event => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                avatarInputRef.current?.click();
+              }
+            }}
+            onDragEnter={event => {
+              event.preventDefault();
+              setDraggingAvatar(true);
+            }}
+            onDragOver={event => {
+              event.preventDefault();
+              setDraggingAvatar(true);
+            }}
+            onDragLeave={() => setDraggingAvatar(false)}
+            onDrop={handleAvatarDrop}
+          >
+            <img
+              src={profile.avatar || '/images/logo.png'}
+              alt="Ảnh đại diện hiện tại"
+              onError={event => { event.currentTarget.src = '/images/logo.png'; }}
+            />
+            <input ref={avatarInputRef} hidden type="file" accept={avatarAccept} onChange={handleAvatarInput} />
+            <div>
+              <strong>{avatarReading ? 'Đang tải ảnh...' : 'Kéo thả ảnh vào đây'}</strong>
+              <small>PNG, JPG hoặc WEBP, tối đa 2MB.</small>
+            </div>
+          </div>
+          <div className="acct-avatar-actions">
+            <button type="button" onClick={() => avatarInputRef.current?.click()} disabled={avatarReading || savingAvatar}>Đổi ảnh</button>
+            <button type="button" className="ghost" onClick={clearAvatar} disabled={avatarReading || savingAvatar}>Xóa ảnh</button>
+          </div>
+          <button type="submit" disabled={avatarReading || savingAvatar}>{savingAvatar ? 'Đang lưu...' : 'Lưu ảnh đại diện'}</button>
+        </form>
+
+        <form className="acct-panel acct-settings-section acct-settings-form" onSubmit={saveProfile}>
+          <div className="acct-settings-section-head">
+            <span>Hồ sơ cá nhân</span>
+            <h2>Thông tin công khai và liên hệ</h2>
+          </div>
+          <SettingsMessage state={messages.profile} />
+          <div className="acct-settings-fields two">
+            <label>Tên hiển thị<input required maxLength="80" value={profile.name} onChange={event => patchProfile({ name: event.target.value })} /></label>
+            <label>Email<input required type="email" value={profile.email} onChange={event => patchProfile({ email: event.target.value })} /></label>
+            <label>Số điện thoại<input value={profile.phone} onChange={event => patchProfile({ phone: event.target.value })} placeholder="+84..." /></label>
+            <label>Ngày sinh<input type="date" value={profile.birthday} onChange={event => patchProfile({ birthday: event.target.value })} /></label>
+            <label>Giới tính<select value={profile.gender} onChange={event => patchProfile({ gender: event.target.value })}><option value="">Chưa chọn</option><option value="female">Nữ</option><option value="male">Nam</option><option value="other">Khác</option><option value="prefer-not">Không công khai</option></select></label>
+          </div>
+          <label>Địa chỉ<input maxLength="200" value={profile.address} onChange={event => patchProfile({ address: event.target.value })} placeholder="Tỉnh/thành phố hoặc địa chỉ liên hệ" /></label>
+          <label>Giới thiệu<textarea maxLength="500" rows="5" value={profile.bio} onChange={event => patchProfile({ bio: event.target.value })} placeholder="Viết ngắn gọn về bạn" /></label>
+          <button type="submit" disabled={savingProfile}>{savingProfile ? 'Đang lưu...' : 'Lưu hồ sơ'}</button>
+        </form>
+      </section>
 
       <form id="security" className="acct-panel acct-settings-section acct-settings-form" onSubmit={savePassword}>
         <div className="acct-settings-section-head">
@@ -955,14 +1120,35 @@ export function AccountSettings({ user, updateUser, logout, theme, toggleTheme, 
         <SettingsMessage state={messages.password} />
         <div className="acct-password-policy" aria-live="polite">
           <strong>Chính sách mật khẩu</strong>
-          <p>Tối thiểu 8 ký tự, có chữ hoa, chữ thường, số và ký tự đặc biệt. Mật khẩu mới không được trùng mật khẩu hiện tại.</p>
+          <p>Mật khẩu mới cần tối thiểu 6 ký tự. Mật khẩu mới không được trùng mật khẩu hiện tại.</p>
         </div>
         <div className="acct-settings-fields three">
-          <label>Mật khẩu hiện tại<input required type="password" autoComplete="current-password" value={password.currentPassword} onChange={event => setPassword({ ...password, currentPassword: event.target.value })} /></label>
-          <label>Mật khẩu mới<input required type="password" autoComplete="new-password" value={password.newPassword} onChange={event => setPassword({ ...password, newPassword: event.target.value })} /></label>
-          <label>Xác nhận mật khẩu<input required type="password" autoComplete="new-password" value={password.confirmPassword} onChange={event => setPassword({ ...password, confirmPassword: event.target.value })} /></label>
+          <PasswordField
+            label="Mật khẩu hiện tại"
+            autoComplete="current-password"
+            value={password.currentPassword}
+            visible={passwordVisible.currentPassword}
+            onToggle={() => togglePasswordField('currentPassword')}
+            onChange={value => setPassword(current => ({ ...current, currentPassword: value }))}
+          />
+          <PasswordField
+            label="Mật khẩu mới"
+            autoComplete="new-password"
+            value={password.newPassword}
+            visible={passwordVisible.newPassword}
+            onToggle={() => togglePasswordField('newPassword')}
+            onChange={value => setPassword(current => ({ ...current, newPassword: value }))}
+          />
+          <PasswordField
+            label="Nhập lại mật khẩu mới"
+            autoComplete="new-password"
+            value={password.confirmPassword}
+            visible={passwordVisible.confirmPassword}
+            onToggle={() => togglePasswordField('confirmPassword')}
+            onChange={value => setPassword(current => ({ ...current, confirmPassword: value }))}
+          />
         </div>
-        <button type="submit" disabled={saving.password}>{saving.password ? 'Đang đổi...' : 'Đổi mật khẩu'}</button>
+        <button type="submit" disabled={savingPassword}>{savingPassword ? 'Đang đổi...' : 'Đổi mật khẩu'}</button>
       </form>
 
       <section id="notifications" className="acct-panel acct-settings-section acct-settings-form">
@@ -974,8 +1160,8 @@ export function AccountSettings({ user, updateUser, logout, theme, toggleTheme, 
         <div className="acct-toggle-list">
           {notificationPreferenceFields.map(([key, label]) => (
             <label className="acct-switch acct-toggle-row" key={key}>
-              <input type="checkbox" checked={Boolean(prefs[key])} disabled={Boolean(savingPrefs[key])} aria-label={label} onChange={event => updatePreference(key, event.target.checked)} />
-              <span><b>{label}</b><small>{savingPrefs[key] ? 'Đang lưu...' : prefs[key] ? 'Đang bật' : 'Đang tắt'}</small></span>
+              <input type="checkbox" checked={Boolean(prefs[key])} disabled={Boolean(savingPreferences[key])} aria-label={label} onChange={event => updatePreference(key, event.target.checked)} />
+              <span><b>{label}</b><small>{savingPreferences[key] ? 'Đang lưu...' : prefs[key] ? 'Đang bật' : 'Đang tắt'}</small></span>
             </label>
           ))}
         </div>
@@ -990,8 +1176,8 @@ export function AccountSettings({ user, updateUser, logout, theme, toggleTheme, 
         <div className="acct-toggle-list">
           {privacyPreferenceFields.map(([key, label]) => (
             <label className="acct-switch acct-toggle-row" key={key}>
-              <input type="checkbox" checked={Boolean(prefs[key])} disabled={Boolean(savingPrefs[key])} aria-label={label} onChange={event => updatePreference(key, event.target.checked)} />
-              <span><b>{label}</b><small>{savingPrefs[key] ? 'Đang lưu...' : prefs[key] ? 'Công khai' : 'Riêng tư'}</small></span>
+              <input type="checkbox" checked={Boolean(prefs[key])} disabled={Boolean(savingPreferences[key])} aria-label={label} onChange={event => updatePreference(key, event.target.checked)} />
+              <span><b>{label}</b><small>{savingPreferences[key] ? 'Đang lưu...' : prefs[key] ? 'Công khai' : 'Riêng tư'}</small></span>
             </label>
           ))}
         </div>
@@ -1004,11 +1190,11 @@ export function AccountSettings({ user, updateUser, logout, theme, toggleTheme, 
         </div>
         <SettingsMessage state={messages.preferences} />
         <div className="acct-settings-fields two">
-          <label>Chủ đề<select value={theme === 'dark' ? 'dark' : 'light'} disabled={Boolean(savingPrefs.theme)} onChange={event => updateThemePreference(event.target.value)}><option value="light">Sáng</option><option value="dark">Tối</option></select></label>
-          <label>Ngôn ngữ<select value={prefs.language} disabled={Boolean(savingPrefs.language)} onChange={event => updatePreference('language', event.target.value)}><option value="vi">Tiếng Việt</option><option value="en">English</option></select></label>
-          <label>Cỡ chữ đọc truyện<input type="range" min="14" max="28" value={prefs.readerFontSize} disabled={Boolean(savingPrefs.readerFontSize)} onChange={event => updatePreference('readerFontSize', Number(event.target.value))} /><small>{prefs.readerFontSize}px</small></label>
-          <label>Khoảng dòng<input type="range" min="1.4" max="2.4" step="0.1" value={prefs.readerLineHeight} disabled={Boolean(savingPrefs.readerLineHeight)} onChange={event => updatePreference('readerLineHeight', Number(event.target.value))} /><small>{prefs.readerLineHeight}</small></label>
-          <label>Nền đọc<select value={prefs.readerBackground} disabled={Boolean(savingPrefs.readerBackground)} onChange={event => updatePreference('readerBackground', event.target.value)}><option value="default">Mặc định</option><option value="paper">Giấy</option><option value="sepia">Sepia</option><option value="night">Đêm</option></select></label>
+          <label>Chủ đề<select value={theme === 'dark' ? 'dark' : 'light'} disabled={Boolean(savingPreferences.theme)} onChange={event => updateThemePreference(event.target.value)}><option value="light">Sáng</option><option value="dark">Tối</option></select></label>
+          <label>Ngôn ngữ<select value={prefs.language} disabled={Boolean(savingPreferences.language)} onChange={event => updatePreference('language', event.target.value)}><option value="vi">Tiếng Việt</option><option value="en">English</option></select></label>
+          <label>Cỡ chữ đọc truyện<input type="range" min="14" max="28" value={prefs.readerFontSize} disabled={Boolean(savingPreferences.readerFontSize)} onChange={event => updatePreference('readerFontSize', Number(event.target.value))} /><small>{prefs.readerFontSize}px</small></label>
+          <label>Khoảng dòng<input type="range" min="1.4" max="2.4" step="0.1" value={prefs.readerLineHeight} disabled={Boolean(savingPreferences.readerLineHeight)} onChange={event => updatePreference('readerLineHeight', Number(event.target.value))} /><small>{prefs.readerLineHeight}</small></label>
+          <label>Nền đọc<select value={prefs.readerBackground} disabled={Boolean(savingPreferences.readerBackground)} onChange={event => updatePreference('readerBackground', event.target.value)}><option value="default">Mặc định</option><option value="paper">Giấy</option><option value="sepia">Sepia</option><option value="night">Đêm</option></select></label>
         </div>
       </section>
 
@@ -1022,14 +1208,14 @@ export function AccountSettings({ user, updateUser, logout, theme, toggleTheme, 
           <div>
             <h3>Đăng xuất mọi thiết bị</h3>
             <p>Thu hồi token hiện tại và các phiên cũ bằng cách tăng phiên bản đăng nhập của tài khoản.</p>
-            <button type="button" className="danger" disabled={saving.logoutAll} onClick={logoutEverywhere}>{saving.logoutAll ? 'Đang đăng xuất...' : 'Đăng xuất mọi thiết bị'}</button>
+            <button type="button" className="danger" disabled={savingLogoutAll} onClick={logoutEverywhere}>{savingLogoutAll ? 'Đang đăng xuất...' : 'Đăng xuất mọi thiết bị'}</button>
           </div>
           <form onSubmit={deactivateAccount}>
             <h3>Vô hiệu hóa tài khoản</h3>
             <p>Tài khoản sẽ bị khóa đăng nhập. Dữ liệu nội dung không bị xóa cứng trong thao tác này.</p>
             <label>Mật khẩu xác nhận<input type="password" value={danger.password} onChange={event => setDanger({ ...danger, password: event.target.value })} /></label>
             <label>Nhập VO HIEU HOA<input value={danger.phrase} onChange={event => setDanger({ ...danger, phrase: event.target.value })} /></label>
-            <button type="submit" className="danger" disabled={saving.danger || danger.phrase !== 'VO HIEU HOA' || !danger.password}>{saving.danger ? 'Đang xử lý...' : 'Vô hiệu hóa tài khoản'}</button>
+            <button type="submit" className="danger" disabled={savingDanger || danger.phrase !== 'VO HIEU HOA' || !danger.password}>{savingDanger ? 'Đang xử lý...' : 'Vô hiệu hóa tài khoản'}</button>
           </form>
         </div>
       </section>

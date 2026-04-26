@@ -46,8 +46,10 @@ function statusLabel(status) {
     locked: 'Đã khóa',
     approved: 'Đã duyệt',
     pending: 'Chờ duyệt',
+    draft: 'Nháp',
     rejected: 'Từ chối',
     reviewing: 'Đang xử lý',
+    scheduled: 'Đã lên lịch',
     resolved: 'Đã xử lý',
     open: 'Chờ xử lý',
     published: 'Đã xuất bản',
@@ -379,7 +381,7 @@ export function AdminDashboard({ apiClient, user }) {
       try {
         const result = await apiClient(`/admin/chapters/${id}/status`, {
           method: 'PATCH',
-          body: JSON.stringify({ status: patch.status })
+          body: JSON.stringify({ status: patch.status, rejectionReason: patch.rejectionReason })
         });
         if (!result?.chapter) throw new Error('API không trả về dữ liệu chương đã cập nhật.');
         setState(current => ({
@@ -861,10 +863,12 @@ export function ChapterModerationTable({ chapters, onUpdate }) {
         <input value={query} onChange={event => setQuery(event.target.value)} placeholder="Tìm chương, truyện, tác giả..." />
         <select value={status} onChange={event => setStatus(event.target.value)}>
           <option value="all">Tất cả trạng thái</option>
+          <option value="draft">Nháp</option>
           <option value="pending">Chờ duyệt</option>
           <option value="reviewing">Đang xử lý</option>
           <option value="approved">Đã duyệt</option>
           <option value="rejected">Từ chối</option>
+          <option value="scheduled">Đã lên lịch</option>
           <option value="hidden">Đã ẩn</option>
         </select>
         <select value={story} onChange={event => setStory(event.target.value)}>

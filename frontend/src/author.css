@@ -18,6 +18,75 @@
   box-shadow: var(--prod-shadow);
 }
 
+.ad-warning,
+.ad-loading {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid rgba(245, 158, 11, .28);
+  border-radius: 14px;
+  background: rgba(245, 158, 11, .12);
+  color: #92400e;
+  font-weight: 850;
+}
+
+.ad-warning span {
+  color: var(--prod-muted);
+  font-weight: 700;
+}
+
+.ad-loading {
+  border-color: var(--prod-line);
+  background: var(--prod-surface-strong);
+  color: var(--prod-muted);
+}
+
+.ad-badge-stack {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ad-badge {
+  width: max-content;
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: var(--prod-soft);
+  color: var(--prod-muted);
+  font-size: .78rem;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.ad-badge.success {
+  background: rgba(22, 163, 74, .12);
+  color: #16a34a;
+}
+
+.ad-badge.warning {
+  background: rgba(245, 158, 11, .14);
+  color: #b45309;
+}
+
+.ad-badge.danger {
+  background: rgba(239, 68, 68, .12);
+  color: #dc2626;
+}
+
+.ad-badge.dark {
+  background: rgba(15, 23, 42, .12);
+  color: var(--prod-text);
+}
+
+.ad-badge.info {
+  background: rgba(14, 165, 233, .12);
+  color: #0284c7;
+}
+
 .ad-hero,
 .ad-panel {
   border: 1px solid var(--prod-line);
@@ -334,6 +403,13 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.ad-story-table .ad-badge-stack,
+.ad-story-table .ad-badge {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
 }
 
 .ad-row-actions {

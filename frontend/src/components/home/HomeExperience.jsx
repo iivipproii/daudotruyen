@@ -989,6 +989,13 @@ export function ProductionFooter({ apiClient }) {
     ['DMCA', '/dmca'],
     ['Quy định nội dung', '/quy-dinh-noi-dung']
   ];
+  const authorLinks = [
+    ['Khu vực tác giả', '/author'],
+    ['Đăng truyện mới', '/author/stories/new'],
+    ['Quản lý truyện', '/author/stories'],
+    ['Thống kê doanh thu', '/author/revenue'],
+    ['Quảng bá', '/author/promotions']
+  ];
 
   async function submitNewsletter(event) {
     event.preventDefault();
@@ -1044,6 +1051,7 @@ export function ProductionFooter({ apiClient }) {
           <strong>Thể loại phổ biến</strong>
           {mockCategories.slice(0, 5).map(category => <Link key={category} to={`/the-loai/${encodeURIComponent(category)}`}>{category}</Link>)}
         </div>
+        <FooterColumn title="Dành cho tác giả" links={authorLinks} />
         <FooterColumn title="Hỗ trợ" links={supportLinks} />
         <div className="prod-footer-col prod-newsletter-col">
           <strong>Đăng ký nhận thông báo</strong>
