@@ -145,6 +145,7 @@ function RouteScrollReset() {
 function Shell({ children }) {
   const location = useLocation();
   const publishing = location.pathname === '/dang-truyen';
+  const home = location.pathname === '/';
 
   if (publishing) {
     return <PublishShell>{children}</PublishShell>;
@@ -153,7 +154,7 @@ function Shell({ children }) {
   return (
     <div className="app-shell public-shell">
       <RouteScrollReset />
-      <PublicHeaderEnhanced />
+      {home && <PublicHeaderEnhanced />}
       <main className="container">{children}</main>
       <Footer />
     </div>
@@ -1942,12 +1943,31 @@ const DEFAULT_WALLET_PACKAGES = [
   { id: 'seed-500', seeds: 500, bonus: 150, price: 500000, label: 'Cao cấp' }
 ];
 
+const STORY_CATEGORY_GROUPS = [
+  { icon: '⚔', title: 'Võ Hiệp & Kiếm Hiệp', items: ['Tiên Hiệp', 'Kiếm Hiệp', 'Huyền Huyễn', 'Kỳ Ảo', 'Tu Tiên', 'Tu Chân', 'Phong Thần'] },
+  { icon: '▦', title: 'Hiện Đại & Đô Thị', items: ['Đô Thị', 'Hiện Đại', 'Khoa Huyễn', 'Hệ Thống', 'Đời Sống', 'Doanh Trường', 'Giải Trí', 'Thể Thao', 'Truyện Teen'] },
+  { icon: '♥', title: 'Tình Cảm & Romance', items: ['Ngôn Tình', 'Đam Mỹ', 'Bách Hợp', 'Tình Cảm', 'Romance', 'Học Đường', 'Văn Phòng', 'Tổng Tài', 'Ngược', 'Sủng', 'Nữ Cường', 'Nữ Phụ'] },
+  { icon: '◢', title: 'Đặc Biệt & Fantasy', items: ['Xuyên Không', 'Xuyên Nhanh', 'Trọng Sinh', 'Dị Giới', 'Võng Du', 'Mạt Thế', 'Dị Năng', 'Siêu Anh Hùng', 'Ma Pháp'] },
+  { icon: '✊', title: 'Hành Động & Phiêu Lưu', items: ['Hành Động', 'Phiêu Lưu', 'Thám Hiểm', 'Sinh Tồn', 'Zombie', 'Quái Vật', 'Siêu Nhiên'] },
+  { icon: '●', title: 'Kinh Dị & Bí Ẩn', items: ['Kinh Dị', 'Ma Quỷ', 'Linh Dị', 'Trinh Thám', 'Bí Ẩn', 'Tâm Lý', 'Tội Phạm'] },
+  { icon: '▥', title: 'Lịch Sử & Cổ Đại', items: ['Lịch Sử', 'Cổ Đại', 'Cung Đình', 'Cung Đấu', 'Hoàng Gia', 'Chiến Tranh', 'Quân Sự', 'Quan Trường', 'Võ Tướng', 'Đông Phương'] },
+  { icon: '☻', title: 'Hài Hước & Nhẹ Nhàng', items: ['Hài Hước', 'Hài Kịch', 'Parody', 'Slice of Life', 'Ấm Áp', 'Gia Đình', 'Hàng Ngày', 'Điền Văn', 'Gia Đấu'] },
+  { icon: '✜', title: 'Game & Technology', items: ['Game', 'VRMMO', 'LitRPG', 'Công Nghệ', 'AI', 'Cyberpunk', 'Tương Lai'] },
+  { icon: '+', title: 'Mở rộng', items: ['HE', 'SE', 'BE', 'OE', 'Ngọt', 'Chữa Lành', 'Ngược Nam', 'Ngược Nữ', 'Ngược Luyến Tàn Tâm', 'Truy Thê', 'Trả Thù', 'Vả Mặt', 'Sảng Văn', 'Cưới Trước Yêu Sau', 'Cường Thủ Hào Đoạt', 'Dưỡng Thê', 'Hào Môn Thế Gia', 'Gương Vỡ Lại Lành', 'Gương Vỡ Không Lành', 'Thế Thân', 'Nam Phụ Thượng Vị', 'Không CP', 'Ngôn Tình Thực Tế', 'Thanh Xuân Vườn Trường', 'Học Bá', 'Showbiz', 'Bác Sĩ', 'Cảnh Sát', 'Quân Nhân', 'Dân Quốc', 'Thập Niên', 'Phương Đông', 'Hoán Đổi Thân Xác', 'Đọc Tâm', 'Nhân Thú', 'Hư Cấu Kỳ Ảo', 'Phép Thuật', 'Xuyên Sách', 'Có Sử Dụng AI', 'Quy tắc', 'Đề Cử', 'Review truyện', 'Tiểu Thuyết', 'Truyện Sáng Tác', 'Truyện Việt', 'Vô Tri'] },
+  { icon: '⚠', title: 'Nội dung người lớn', items: ['Sắc', 'H', 'H+', 'Cao H+ (*)'] },
+  { icon: '•••', title: 'Khác', items: ['Phương Tây', 'Light Novel', 'Việt Nam', 'Zhihu', 'Đoản Văn', 'Review Sách', 'Khác'] }
+];
+
+const STORY_CATEGORIES = Array.from(new Set(STORY_CATEGORY_GROUPS.flatMap(group => group.items)));
+
 function Wallet() {
   const { user, updateUser } = useAuth();
   const [data, setData] = useState({ packages: [], transactions: [] });
   const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
   const [selected, setSelected] = useState('seed-50');
   const [method, setMethod] = useState('MoMo');
+  const [paying, setPaying] = useState(false);
 
   const load = async () => {
     const [packs, txns] = await Promise.all([api('/wallet/packages'), api('/wallet/transactions')]);
@@ -1956,29 +1976,42 @@ function Wallet() {
   useEffect(() => { load().catch(err => setError(err.message)); }, []);
 
   async function topup(packageId) {
+    setPaying(true);
+    setError('');
+    setSuccess('');
     try {
-      const result = await api('/wallet/topup', { method: 'POST', body: JSON.stringify({ packageId }) });
+      const result = await api('/wallet/topup', { method: 'POST', body: JSON.stringify({ packageId, method }) });
       updateUser(result.user);
       await load();
-    } catch (err) { setError(err.message); }
+      setSuccess(`Nạp thành công ${result.amount || 0} Đậu bằng ${method}.`);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setPaying(false);
+    }
   }
 
-  const selectedPack = DEFAULT_WALLET_PACKAGES.find(pack => pack.id === selected) || DEFAULT_WALLET_PACKAGES[2];
+  const packages = data.packages.length ? data.packages.map(pack => ({ ...pack, featured: pack.id === 'seed-50' })) : DEFAULT_WALLET_PACKAGES;
+  const selectedPack = packages.find(pack => pack.id === selected) || packages[0] || DEFAULT_WALLET_PACKAGES[2];
+  const usedSeeds = Math.abs(data.transactions.filter(txn => txn.amount < 0).reduce((sum, txn) => sum + txn.amount, 0));
+  const toppedSeeds = data.transactions.filter(txn => txn.type === 'topup').reduce((sum, txn) => sum + Math.max(0, txn.amount), 0);
+  const bonusSeeds = data.transactions.filter(txn => txn.type === 'bonus').reduce((sum, txn) => sum + Math.max(0, txn.amount), 0);
 
   return (
     <div className="wallet-page">
       <div className="catalog-breadcrumb">Trang chủ › Ví Đậu</div>
       <div className="wallet-title"><span>🪙</span><div><h1>Ví Đậu</h1><p>Nạp tiền vào ví sẽ chuyển thành Đậu để mua chương truyện yêu thích</p></div></div>
       <ErrorBox message={error} />
-      <section className="wallet-balance-panel"><p>Số dư hiện tại</p><h2>🪙 {user.seeds} <span>Đậu</span></h2><div><span>🛒 Đã dùng: 106 Đậu</span><span>💵 Đã nạp: 170 Đậu</span><span>🎁 Thưởng: 23 Đậu</span></div></section>
+      {success && <div className="success-box">{success}</div>}
+      <section className="wallet-balance-panel"><p>Số dư hiện tại</p><h2>🪙 {formatNumber(data.balance ?? user.seeds)} <span>Đậu</span></h2><div><span>🛒 Đã dùng: {formatNumber(usedSeeds)} Đậu</span><span>💵 Đã nạp: {formatNumber(toppedSeeds)} Đậu</span><span>🎁 Thưởng: {formatNumber(bonusSeeds)} Đậu</span></div></section>
       <div className="wallet-feature-row"><span>🪙 <b>1 Đậu</b><small>= 1.000đ</small></span><span>📖 <b>Mua lẻ</b><small>1–2 Đậu/chương</small></span><span>📦 <b>Combo</b><small>Tiết kiệm hơn 50%</small></span></div>
       <h2 className="wallet-section-title">◇ Chọn gói nạp</h2>
-      <div className="wallet-packages">{DEFAULT_WALLET_PACKAGES.map(pack => <button key={pack.id} type="button" className={selected === pack.id ? 'active' : ''} onClick={() => setSelected(pack.id)}>{pack.featured && <b>Phổ biến nhất</b>}<strong>{pack.seeds}<small>{pack.bonus ? ` +${pack.bonus} Đậu` : ' Đậu'}</small></strong><em>{pack.bonus ? `Tặng thêm ${pack.bonus} Đậu` : 'Không bonus'}</em><span>{pack.price.toLocaleString('vi-VN')}đ</span><small>{pack.label}</small></button>)}</div>
+      <div className="wallet-packages">{packages.map(pack => <button key={pack.id} type="button" className={selected === pack.id ? 'active' : ''} onClick={() => setSelected(pack.id)}>{pack.featured && <b>Phổ biến nhất</b>}<strong>{pack.seeds}<small>{pack.bonus ? ` +${pack.bonus} Đậu` : ' Đậu'}</small></strong><em>{pack.bonus ? `Tặng thêm ${pack.bonus} Đậu` : 'Không bonus'}</em><span>{pack.price.toLocaleString('vi-VN')}đ</span><small>{pack.label}</small></button>)}</div>
       <h2 className="wallet-section-title">▰ Phương thức thanh toán</h2>
-      <div className="payment-methods">{['MoMo', 'VNPay', 'ZaloPay', 'Chuyển khoản'].map(item => <button key={item} className={method === item ? 'active' : ''} onClick={() => setMethod(item)}>{item}</button>)}</div>
-      <button className="button wallet-pay" onClick={() => topup(selected)}>◎ Nạp {selectedPack.price.toLocaleString('vi-VN')}đ — nhận {selectedPack.seeds + (selectedPack.bonus || 0)} Đậu</button>
+      <div className="payment-methods">{['MoMo', 'VNPay', 'ZaloPay', 'Chuyển khoản'].map(item => <button key={item} type="button" className={method === item ? 'active' : ''} onClick={() => setMethod(item)}>{item}</button>)}</div>
+      <button className="button wallet-pay" type="button" disabled={paying} onClick={() => topup(selected)}>{paying ? 'Đang xử lý...' : `◎ Nạp ${selectedPack.price.toLocaleString('vi-VN')}đ — nhận ${selectedPack.seeds + (selectedPack.bonus || 0)} Đậu`}</button>
       <small className="wallet-safe">🛡 Thanh toán an toàn, được mã hóa SSL</small>
-      <HomeSection title="Lịch sử giao dịch" subtitle="Các giao dịch gần đây" kicker="History"><div className="wallet-txn-list">{data.transactions.map(txn => <div key={txn.id}><span>{txn.type === 'purchase' ? '🛒' : '💵'}</span><strong>{txn.note}</strong><small>{formatDateShort(txn.createdAt)}</small><b className={txn.amount > 0 ? 'plus' : 'minus'}>{txn.amount > 0 ? '+' : ''}{txn.amount}</b></div>)}</div></HomeSection>
+      <HomeSection title="Lịch sử giao dịch" subtitle="Các giao dịch gần đây" kicker="History"><div className="wallet-txn-list">{data.transactions.map(txn => <div key={txn.id}><span>{txn.type === 'purchase' ? '🛒' : txn.type === 'bonus' ? '🎁' : '💵'}</span><strong>{txn.note}</strong><small>{formatDateShort(txn.createdAt)}</small><b className={txn.amount > 0 ? 'plus' : 'minus'}>{txn.amount > 0 ? '+' : ''}{formatNumber(txn.amount)}</b></div>)}{data.transactions.length === 0 && <div className="wallet-empty">Chưa có giao dịch nào.</div>}</div></HomeSection>
       <section className="wallet-faq"><h3>◉ Câu hỏi thường gặp</h3><p><b>Đậu có hết hạn không?</b><br />Không, Đậu không có thời hạn sử dụng.</p><p><b>Có hoàn tiền không?</b><br />Đậu đã nạp không được hoàn tiền.</p><p><b>Mua combo có lợi hơn không?</b><br />Có, combo tiết kiệm hơn 50% so với mua lẻ từng chương.</p></section>
     </div>
   );
@@ -2006,6 +2039,8 @@ function Admin() {
   const [chapters, setChapters] = useState([]);
   const [chapterForm, setChapterForm] = useState({ title: '', content: '', isPremium: false, price: 0 });
   const [error, setError] = useState('');
+  const [storyQuery, setStoryQuery] = useState('');
+  const [storyFilter, setStoryFilter] = useState('all');
   const load = async () => {
     const [s, list, u, r] = await Promise.all([api('/admin/stats'), api('/admin/stories'), api('/admin/users'), api('/admin/reports')]);
     setStats(s.stats); setStories(list.stories); setUsers(u.users); setReports(r.reports || []);
@@ -2076,6 +2111,17 @@ function Admin() {
     await load();
   }
   if (!stats) return <Loader />;
+  const visibleStories = stories.filter(story => {
+    const keyword = storyQuery.trim().toLowerCase();
+    const matchesKeyword = !keyword || [story.title, story.author, ...(story.categories || [])].join(' ').toLowerCase().includes(keyword);
+    const matchesFilter =
+      storyFilter === 'all' ||
+      (storyFilter === 'visible' && !story.hidden) ||
+      (storyFilter === 'hidden' && story.hidden) ||
+      story.status === storyFilter ||
+      story.approvalStatus === storyFilter;
+    return matchesKeyword && matchesFilter;
+  });
   return (
     <>
       <div className="page-title"><h1>Admin Dashboard</h1><p>Quản trị truyện, người dùng và giao dịch Đậu.</p></div>
@@ -2085,7 +2131,45 @@ function Admin() {
         <form className="panel stack-form" onSubmit={createStory}><h2>Thêm truyện</h2><input placeholder="Tên truyện" value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} /><input placeholder="Tác giả" value={form.author} onChange={e => setForm({ ...form, author: e.target.value })} /><input placeholder="Thể loại, cách nhau bằng dấu phẩy" value={form.categories} onChange={e => setForm({ ...form, categories: e.target.value })} /><textarea placeholder="Mô tả" value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} /><label><input type="checkbox" checked={form.premium} onChange={e => setForm({ ...form, premium: e.target.checked })} /> Truyện trả phí</label><label><input type="checkbox" checked={form.featured} onChange={e => setForm({ ...form, featured: e.target.checked })} /> Ghim nổi bật</label><button className="button">Tạo truyện</button></form>
         <div className="panel"><h2>Người dùng</h2><div className="list-panel compact">{users.map(user => <div key={user.id}><span>{user.name}</span><small>{user.email} · {user.role} · {user.seeds} Đậu</small></div>)}</div></div>
       </div>
-      <Section title="Quản lý truyện" subtitle="Duyệt, ẩn/hiện, sửa tên và chọn truyện để quản lý chương."><div className="list-panel">{stories.map(story => <div key={story.id} className={selectedStory?.id === story.id ? 'active-admin-row' : ''}><span><button className="small-link" onClick={() => selectStory(story)}>{story.title}</button><small>{story.author} · {story.chapterCount} chương · {statusLabel(story.status)} · {approvalLabel(story.approvalStatus)} · {story.hidden ? 'Đang ẩn' : 'Đang hiện'}</small></span><button className="ghost" onClick={() => updateStory(story, { approvalStatus: story.approvalStatus === 'approved' ? 'pending' : 'approved' })}>{story.approvalStatus === 'approved' ? 'Đưa chờ duyệt' : 'Duyệt'}</button><button className="ghost" onClick={() => updateStory(story, { hidden: !story.hidden })}>{story.hidden ? 'Hiện' : 'Ẩn'}</button><button className="ghost" onClick={() => renameStory(story)}>Sửa</button><button className="ghost danger" onClick={() => deleteStory(story.id)}>Xóa</button></div>)}</div></Section>
+      <Section title="Quản lý truyện" subtitle="Duyệt, ẩn/hiện, sửa tên và chọn truyện để quản lý chương.">
+        <div className="admin-story-toolbar">
+          <input placeholder="Tìm theo tên truyện, tác giả, thể loại..." value={storyQuery} onChange={e => setStoryQuery(e.target.value)} />
+          <select value={storyFilter} onChange={e => setStoryFilter(e.target.value)}>
+            <option value="all">Tất cả truyện</option>
+            <option value="pending">Chờ duyệt</option>
+            <option value="approved">Đã duyệt</option>
+            <option value="rejected">Từ chối</option>
+            <option value="ongoing">Đang ra</option>
+            <option value="completed">Hoàn thành</option>
+            <option value="visible">Đang hiện</option>
+            <option value="hidden">Đang ẩn</option>
+          </select>
+        </div>
+        <div className="admin-story-list">
+          {visibleStories.map(story => (
+            <article key={story.id} className={selectedStory?.id === story.id ? 'admin-story-card active' : 'admin-story-card'}>
+              <button type="button" className="admin-story-cover" onClick={() => selectStory(story)}><img src={story.cover} alt={story.title} /></button>
+              <div className="admin-story-body">
+                <div className="admin-story-topline">
+                  <button type="button" className="small-link admin-story-title" onClick={() => selectStory(story)}>{story.title}</button>
+                  <span className={`admin-pill ${story.approvalStatus || 'pending'}`}>{approvalLabel(story.approvalStatus)}</span>
+                  <span className={`admin-pill ${story.hidden ? 'hidden' : 'visible'}`}>{story.hidden ? 'Đang ẩn' : 'Đang hiện'}</span>
+                </div>
+                <p>{story.author} · {story.chapterCount || 0} chương · {statusLabel(story.status)} · {formatNumber(story.views || 0)} lượt đọc</p>
+                <div className="admin-story-cats">{(story.categories || []).slice(0, 5).map(item => <span key={item}>{item}</span>)}</div>
+              </div>
+              <div className="admin-story-actions">
+                <button className="ghost" onClick={() => selectStory(story)}>Chương</button>
+                <button className="ghost" onClick={() => updateStory(story, { approvalStatus: story.approvalStatus === 'approved' ? 'pending' : 'approved' })}>{story.approvalStatus === 'approved' ? 'Đưa chờ duyệt' : 'Duyệt'}</button>
+                <button className="ghost" onClick={() => updateStory(story, { hidden: !story.hidden })}>{story.hidden ? 'Hiện' : 'Ẩn'}</button>
+                <button className="ghost" onClick={() => renameStory(story)}>Sửa</button>
+                <button className="ghost danger" onClick={() => deleteStory(story.id)}>Xóa</button>
+              </div>
+            </article>
+          ))}
+          {visibleStories.length === 0 && <div className="center-card">Không có truyện phù hợp bộ lọc.</div>}
+        </div>
+      </Section>
       <Section title="Quản lý chương" subtitle={selectedStory ? `Đang chọn: ${selectedStory.title}` : 'Chọn một truyện ở danh sách trên để thêm/sửa/xóa chương.'}>
         {selectedStory ? (
           <div className="chapter-admin-grid">
@@ -2142,24 +2226,7 @@ function StoryPublish() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const draftKey = 'daudo_story_publish_draft';
-  const [categories] = useState([
-    'Tiên Hiệp', 'Kiếm Hiệp', 'Huyền Huyễn', 'Kỳ Ảo', 'Tu Tiên', 'Tu Chân', 'Phong Thần',
-    'Hiện Đại & Đô Thị', 'Đô Thị', 'Hiện Đại', 'Khoa Huyễn', 'Hệ Thống', 'Đời Sống', 'Doanh Trường', 'Giải Trí', 'Thể Thao', 'Truyện Teen',
-    'Tình Cảm & Romance', 'Ngôn Tình', 'Đam Mỹ', 'Bách Hợp', 'Tình Cảm', 'Romance', 'Học Đường', 'Văn Phòng', 'Tổng Tài', 'Ngược', 'Sủng', 'Nữ Cường', 'Nữ Phụ',
-    'Đặc Biệt & Fantasy', 'Xuyên Không', 'Xuyên Nhanh', 'Trọng Sinh', 'Dị Giới', 'Võng Du', 'Mạt Thế', 'Dị Năng', 'Siêu Anh Hùng', 'Ma Pháp',
-    'Hành Động & Phiêu Lưu', 'Hành Động', 'Phiêu Lưu', 'Thám Hiểm', 'Sinh Tồn', 'Zombie', 'Quái Vật', 'Siêu Nhiên',
-    'Kinh Dị & Bí Ẩn', 'Kinh Dị', 'Ma Quỷ', 'Linh Dị', 'Trinh Thám', 'Bí Ẩn', 'Tâm Lý', 'Tội Phạm',
-    'Lịch Sử & Cổ Đại', 'Lịch Sử', 'Cổ Đại', 'Cung Đình', 'Cung Đấu', 'Hoàng Gia', 'Chiến Tranh', 'Quân Sự', 'Quan Trường', 'Võ Tướng', 'Đông Phương',
-    'Hài Hước & Nhẹ Nhàng', 'Hài Hước', 'Hài Kịch', 'Parody', 'Slice of Life', 'Ấm Áp', 'Gia Đình', 'Hàng Ngày', 'Điền Văn', 'Gia Đấu',
-    'Game & Technology', 'Game', 'VRMMO', 'LitRPG', 'Công Nghệ', 'AI', 'Cyberpunk', 'Tương Lai',
-    'Mở rộng', 'HE', 'SE', 'BE', 'OE', 'Ngọt', 'Chữa Lành', 'Ngược Nam', 'Ngược Nữ', 'Ngược Luyến Tàn Tâm', 'Truy Thê', 'Trả Thù', 'Vả Mặt', 'Sảng Văn',
-    'Cưới Trước Yêu Sau', 'Cường Thủ Hào Đoạt', 'Dưỡng Thê', 'Hào Môn Thế Gia', 'Gương Vỡ Lại Lành', 'Gương Vỡ Không Lành', 'Thế Thân', 'Nam Phụ Thượng Vị',
-    'Không CP', 'Ngôn Tình Thực Tế', 'Thanh Xuân Vườn Trường', 'Học Bá', 'Showbiz', 'Bác Sĩ', 'Cảnh Sát', 'Quân Nhân', 'Dân Quốc', 'Thập Niên', 'Phương Đông',
-    'Hoán Đổi Thân Xác', 'Đọc Tâm', 'Nhân Thú', 'Hư Cấu Kỳ Ảo', 'Phép Thuật', 'Xuyên Sách', 'Có Sử Dụng AI',
-    'Quy tắc', 'Đề Cử', 'Review truyện', 'Tiểu Thuyết', 'Truyện Sáng Tác', 'Truyện Việt', 'Vô Tri',
-    'Nội dung người lớn', 'Sắc', 'H', 'H+', 'Cao H+ (*)',
-    'Khác', 'Phương Tây', 'Light Novel', 'Việt Nam', 'Zhihu', 'Đoản Văn', 'Review Sách'
-  ]);
+  const [categories] = useState(STORY_CATEGORIES);
   const [form, setForm] = useState({
     title: '',
     author: '',
@@ -2199,6 +2266,9 @@ function StoryPublish() {
   }, [form, draftEnabled]);
 
   const filteredCategories = categories.filter(item => item.toLowerCase().includes(search.toLowerCase()));
+  const filteredCategoryGroups = STORY_CATEGORY_GROUPS
+    .map(group => ({ ...group, items: group.items.filter(item => item.toLowerCase().includes(search.trim().toLowerCase())) }))
+    .filter(group => group.items.length > 0);
 
   function toggleCategory(item) {
     setForm(prev => {
@@ -2341,22 +2411,32 @@ function StoryPublish() {
             </div>
           </div>
 
-          <section className="category-block publish-category-block">
-            <h2>Thể loại</h2>
-            <label>Chọn thể loại *</label>
-            <input placeholder="Tìm kiếm thể loại..." value={search} onChange={e => setSearch(e.target.value)} />
-            <div className="category-title">Đang chọn: {form.categories.length}/5</div>
-            <div className="chip-wrap">
-              {filteredCategories.map(item => (
-                <button
-                  type="button"
-                  key={item}
-                  className={form.categories.includes(item) ? 'chip active' : 'chip'}
-                  onClick={() => toggleCategory(item)}
-                >
-                  {item}
-                </button>
+          <section className="publish-category-picker">
+            <div className="publish-category-heading">
+              <h2><span>◇</span> Thể loại</h2>
+              <small>{form.categories.length}/5 đã chọn</small>
+            </div>
+            <label>Chọn thể loại <b>*</b><span title="Có thể chọn tối đa 5 thể loại">?</span></label>
+            <div className="publish-category-search"><span>⌕</span><input placeholder="Tìm kiếm thể loại..." value={search} onChange={e => setSearch(e.target.value)} /></div>
+            <div className="publish-category-scroll">
+              {filteredCategoryGroups.map(group => (
+                <section className="publish-category-group" key={group.title}>
+                  <h3><span>{group.icon}</span>{group.title}</h3>
+                  <div className="publish-category-grid">
+                    {group.items.map(item => (
+                      <button
+                        type="button"
+                        key={item}
+                        className={form.categories.includes(item) ? 'active' : ''}
+                        onClick={() => toggleCategory(item)}
+                      >
+                        {item}
+                      </button>
+                    ))}
+                  </div>
+                </section>
               ))}
+              {filteredCategories.length === 0 && <div className="publish-category-empty">Không tìm thấy thể loại phù hợp.</div>}
             </div>
           </section>
         </section>
