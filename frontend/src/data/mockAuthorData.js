@@ -1,32 +1,9 @@
-export const authorGenres = [
-  'Tiên hiệp',
-  'Huyền huyễn',
-  'Đô thị',
-  'Ngôn tình',
-  'Trinh thám',
-  'Xuyên không',
-  'Trọng sinh',
-  'Khoa huyễn',
-  'Kiếm hiệp',
-  'Chữa lành',
-  'Hài hước',
-  'Truyện Việt'
-];
+import { AUTHOR_CATEGORIES, AUTHOR_CATEGORY_GROUPS } from './storyCategories.js';
 
-export const authorTags = [
-  'tu tiên',
-  'hệ thống',
-  'nữ cường',
-  'ngọt',
-  'ngược',
-  'showbiz',
-  'dị năng',
-  'cổ đại',
-  'học đường',
-  'mạt thế',
-  'hài hước',
-  'slow burn'
-];
+export { AUTHOR_CATEGORY_GROUPS };
+
+export const authorGenres = AUTHOR_CATEGORIES;
+export const authorTags = AUTHOR_CATEGORIES;
 
 export const mockAuthorStories = [
   {
@@ -36,8 +13,8 @@ export const mockAuthorStories = [
     cover: '/images/cover-8.jpg',
     shortDescription: 'Điều tra viên theo dấu chuỗi án mạng trong thành phố nơi mọi camera đều nói dối.',
     description: 'Một điều tra viên trẻ bị cuốn vào chuỗi vụ án kỳ lạ, nơi dữ liệu, ký ức và lời khai đều có thể bị chỉnh sửa. Càng đi sâu, cô càng phát hiện thành phố này chưa từng ngủ vì nó luôn cần che giấu một sự thật.',
-    genres: ['Trinh thám', 'Đô thị', 'Tâm lý'],
-    tags: ['bí ẩn', 'điều tra', 'đô thị'],
+    genres: ['Trinh Thám', 'Đô Thị', 'Tâm Lý'],
+    tags: ['Bí Ẩn', 'Trinh Thám', 'Đô Thị'],
     status: 'ongoing',
     publishStatus: 'published',
     approvalStatus: 'approved',
@@ -59,8 +36,8 @@ export const mockAuthorStories = [
     cover: '/images/cover-5.jpg',
     shortDescription: 'Trở lại tuổi mười tám, cô mở một tiệm sách nhỏ nơi mọi vị khách đều mang bí mật.',
     description: 'Một câu chuyện chữa lành về lựa chọn thứ hai trong đời. Nhân vật chính trở lại tuổi mười tám và chọn sống chậm, nhưng tiệm sách của cô lại trở thành điểm giao của những số phận chưa kịp nói lời tạm biệt.',
-    genres: ['Trọng sinh', 'Chữa lành', 'Đô thị'],
-    tags: ['chữa lành', 'trọng sinh', 'đời thường'],
+    genres: ['Trọng Sinh', 'Chữa Lành', 'Đô Thị'],
+    tags: ['Chữa Lành', 'Trọng Sinh', 'Đời Sống'],
     status: 'ongoing',
     publishStatus: 'published',
     approvalStatus: 'approved',
@@ -82,8 +59,8 @@ export const mockAuthorStories = [
     cover: '/images/cover-10.jpg',
     shortDescription: 'Một quán trà xuyên qua nhiều thế giới, nơi mỗi chén trà đổi lấy một câu chuyện.',
     description: 'Bản thảo đang hoàn thiện về một quán trà ở rìa các thế giới. Mỗi khách ghé quán phải kể lại ký ức quan trọng nhất để đổi lấy một chén trà có thể thay đổi số phận.',
-    genres: ['Xuyên không', 'Chữa lành', 'Dị giới'],
-    tags: ['dị giới', 'ấm áp', 'quán trà'],
+    genres: ['Xuyên Không', 'Chữa Lành', 'Dị Giới'],
+    tags: ['Dị Giới', 'Ấm Áp', 'Slice of Life'],
     status: 'paused',
     publishStatus: 'draft',
     approvalStatus: 'draft',

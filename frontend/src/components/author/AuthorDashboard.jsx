@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link, NavLink, useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
-  authorGenres,
   authorTags,
   mockAuthorChapters,
   mockAuthorStories,
@@ -10,6 +9,7 @@ import {
   mockPromotionPackages,
   mockRevenueRows
 } from '../../data/mockAuthorData';
+import { ADULT_CATEGORY_ITEMS, AUTHOR_CATEGORY_GROUPS } from '../../data/storyCategories';
 
 const coverFallback = '/images/cover-1.jpg';
 
@@ -48,6 +48,10 @@ function chapterStatusText(status) {
 }
 
 function getCurrentView(pathname) {
+  if (pathname.includes('/chapters/bulk') || pathname.includes('/dang-truyen/them-nhieu-chuong')) return 'chapter-bulk';
+  if (pathname.includes('/chapters/new')) return 'chapter-new';
+  if (pathname.match(/\/author\/stories\/[^/]+\/chapters$/)) return 'chapter-choice';
+  if (pathname.includes('/preview')) return 'story-preview';
   if (pathname.includes('/stories/new') || pathname.includes('/stories/') && pathname.includes('/edit')) return 'story-form';
   if (pathname.includes('/stories')) return 'stories';
   if (pathname.includes('/chapters')) return 'chapters';
@@ -72,11 +76,16 @@ function normalizeStoryForForm(story) {
       author: '',
       cover: '/images/cover-1.jpg',
       coverPosition: '50% 50%',
-      shortDescription: '',
       description: '',
+      translator: '',
+      mainCharacters: '',
       genres: [],
       tags: [],
       status: 'ongoing',
+      language: 'Tiếng Việt',
+      ageRating: 'all',
+      chapterCountEstimate: '',
+      hidden: false,
       type: 'free',
       vipFromChapter: 1,
       chapterPrice: 3,
@@ -89,9 +98,15 @@ function normalizeStoryForForm(story) {
     author: story.author || '',
     cover: story.cover || '/images/cover-1.jpg',
     coverPosition: story.coverPosition || '50% 50%',
-    shortDescription: story.shortDescription || String(story.description || '').slice(0, 180),
+    description: story.description || story.shortDescription || '',
+    translator: story.translator || '',
+    mainCharacters: story.mainCharacters || '',
     genres: story.genres || story.categories || [],
     tags: story.tags || [],
+    language: story.language || 'Tiếng Việt',
+    ageRating: story.ageRating || 'all',
+    chapterCountEstimate: story.chapterCountEstimate || '',
+    hidden: Boolean(story.hidden),
     type: story.type || (story.premium ? 'vip' : 'free'),
     chapterPrice: story.chapterPrice ?? story.price ?? 0,
     vipFromChapter: story.vipFromChapter ?? (story.premium ? 1 : 0),
@@ -106,11 +121,17 @@ function buildStoryPayload(form, approvalStatus) {
     author: form.author,
     cover: form.cover,
     coverPosition: form.coverPosition,
-    shortDescription: form.shortDescription,
+    shortDescription: String(form.description || '').trim().slice(0, 180),
     description: form.description,
+    translator: form.translator,
+    mainCharacters: form.mainCharacters,
     categories: form.genres || [],
     tags: form.tags || [],
     status: form.status,
+    language: form.language,
+    ageRating: form.ageRating,
+    chapterCountEstimate: form.chapterCountEstimate,
+    hidden: Boolean(form.hidden),
     type: form.type,
     premium,
     price: premium ? Number(form.chapterPrice || 0) : 0,
@@ -179,6 +200,79 @@ function statusTone(status) {
     hidden: 'dark',
     scheduled: 'info'
   }[status] || 'muted';
+}
+
+function textWordCount(value) {
+  return String(value || '').trim().split(/\s+/).filter(Boolean).length;
+}
+
+function romanToNumber(value) {
+  const input = String(value || '').toUpperCase();
+  if (!/^[IVXLCDM]+$/.test(input)) return Number(value) || 0;
+  const map = { I: 1, V: 5, X: 10, L: 50, C: 100, D: 500, M: 1000 };
+  return input.split('').reduce((sum, char, index, chars) => {
+    const current = map[char] || 0;
+    const next = map[chars[index + 1]] || 0;
+    return sum + (current < next ? -current : current);
+  }, 0);
+}
+
+function parseChapterHeading(line) {
+  const match = String(line || '').match(/^\s*(?:(?:quyển|quyen)\s+([0-9ivxlcdm]+)\s*[-:–—]\s*)?(chương|chuong|chapter|hồi|hoi|quyển|quyen|phó\s*bản|pho\s*ban)\s+([0-9ivxlcdm]+)(?:\s*[:\-–—]\s*(.+))?\s*$/i);
+  if (!match) return null;
+  const number = romanToNumber(match[3]);
+  const suffix = String(match[4] || '').trim();
+  const heading = String(line || '').trim();
+  return { number, title: suffix || heading, heading };
+}
+
+function parseBulkChapterText(text, startNumber = 1) {
+  const source = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+  if (!source) return [];
+  const lines = source.split('\n');
+  const sections = [];
+  let current = null;
+  lines.forEach(line => {
+    const heading = parseChapterHeading(line);
+    if (heading) {
+      if (current) sections.push(current);
+      current = { ...heading, body: [] };
+      return;
+    }
+    if (current) current.body.push(line);
+  });
+  if (current) sections.push(current);
+
+  if (!sections.length) {
+    return [{
+      localId: `chapter-${Date.now()}-0`,
+      number: startNumber,
+      title: `Chương ${startNumber}`,
+      content: source,
+      wordCount: textWordCount(source),
+      warnings: ['Không phát hiện heading chương, hệ thống tạo một chương duy nhất.']
+    }];
+  }
+
+  return sections.map((section, index) => {
+    const content = section.body.join('\n').trim();
+    const number = section.number || startNumber + index;
+    const warnings = [];
+    if (!content) warnings.push('Nội dung chương rỗng.');
+    if (textWordCount(content) > 0 && textWordCount(content) < 80) warnings.push('Chương hơi ngắn.');
+    return {
+      localId: `chapter-${Date.now()}-${index}`,
+      number,
+      title: section.title || `Chương ${number}`,
+      content,
+      wordCount: textWordCount(content),
+      warnings
+    };
+  });
+}
+
+function nextChapterNumberForStory(chapters, storyId) {
+  return Math.max(0, ...chapters.filter(chapter => chapter.storyId === storyId).map(chapter => Number(chapter.number || 0))) + 1;
 }
 
 function StatusBadge({ status, hidden = false, children }) {
@@ -359,7 +453,7 @@ export function AuthorDashboard({ user, apiClient }) {
           ? current.chapters.map(item => item.id === next.id ? next : item)
           : [next, ...current.chapters]
       }));
-      setToast(status === 'pending' ? 'Đã gửi chương chờ duyệt trong dữ liệu mẫu.' : 'Đã lưu chương trong dữ liệu mẫu.');
+      setToast(status === 'published' ? 'Đã đăng chương trong dữ liệu mẫu.' : status === 'pending' ? 'Đã gửi chương chờ duyệt trong dữ liệu mẫu.' : 'Đã lưu chương trong dữ liệu mẫu.');
       return next;
     }
 
@@ -367,8 +461,42 @@ export function AuthorDashboard({ user, apiClient }) {
       ? await apiClient(`/author/chapters/${form.id}`, { method: 'PUT', body: JSON.stringify(payload) })
       : await apiClient(`/author/stories/${payload.storyId}/chapters`, { method: 'POST', body: JSON.stringify(payload) });
     await loadAuthorData();
-    setToast(status === 'pending' ? 'Đã gửi chương chờ duyệt.' : status === 'scheduled' ? 'Đã lên lịch chương.' : 'Đã lưu nháp chương.');
+    setToast(status === 'published' ? 'Đã đăng chương.' : status === 'pending' ? 'Đã gửi chương chờ duyệt.' : status === 'scheduled' ? 'Đã lên lịch chương.' : 'Đã lưu nháp chương.');
     return result.chapter;
+  }
+
+  async function saveBulkChapters(storyId, payload) {
+    if (state.usingMock || !apiClient) {
+      const story = state.stories.find(item => item.id === storyId);
+      const created = (payload.chapters || []).map((chapter, index) => ({
+        ...chapter,
+        id: `demo-bulk-${Date.now()}-${index}`,
+        storyId,
+        storyTitle: story?.title || '',
+        status: payload.mode === 'published' ? 'approved' : payload.mode || 'draft',
+        access: payload.access === 'vip' ? 'vip' : 'free',
+        isPremium: payload.access === 'vip',
+        price: payload.access === 'vip' ? Number(payload.price || 0) : 0,
+        words: textWordCount(chapter.content),
+        updatedAt: new Date().toISOString(),
+        createdAt: new Date().toISOString()
+      }));
+      setState(current => ({
+        ...current,
+        chapters: [...created, ...current.chapters],
+        stories: current.stories.map(item => item.id === storyId ? { ...item, chapters: Number(item.chapters || item.chapterCount || 0) + created.length, updatedAt: new Date().toISOString() } : item)
+      }));
+      setToast(`Đã lưu ${created.length} chương trong dữ liệu mẫu.`);
+      return { created: created.length, skipped: 0, errors: [], chapters: created };
+    }
+
+    const result = await apiClient(`/author/stories/${storyId}/chapters/bulk`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+    await loadAuthorData();
+    setToast(`Đã lưu ${result.created || 0} chương.`);
+    return result;
   }
 
   async function deleteChapter(id) {
@@ -411,8 +539,11 @@ export function AuthorDashboard({ user, apiClient }) {
     setToast(`Đã mua gói ${pkg.title}.`);
   }
 
-  const currentError = state.errors[currentView === 'story-form' ? 'stories' : currentView];
-  const currentLoading = state.loading[currentView === 'story-form' ? 'stories' : currentView];
+  const storiesBackedViews = ['story-form', 'story-preview', 'chapter-choice', 'chapter-new', 'chapter-bulk'];
+  const currentError = state.errors[storiesBackedViews.includes(currentView) ? 'stories' : currentView];
+  const currentLoading = storiesBackedViews.includes(currentView)
+    ? state.loading.stories || state.loading.chapters
+    : state.loading[currentView];
 
   return (
     <div className="ad-page">
@@ -434,7 +565,7 @@ export function AuthorDashboard({ user, apiClient }) {
       <nav className="ad-tabs">
         <NavLink end to="/author">Tổng quan</NavLink>
         <NavLink to="/author/stories">Truyện của tôi</NavLink>
-        <NavLink to="/author/chapters">Quản lý chương truyện</NavLink>
+        <NavLink to="/author/chapters">Quản lý truyện</NavLink>
         <NavLink to="/author/revenue">Kinh doanh / doanh thu</NavLink>
         <NavLink to="/author/promotions">Quảng bá / gói dịch vụ</NavLink>
       </nav>
@@ -445,6 +576,10 @@ export function AuthorDashboard({ user, apiClient }) {
       {!currentLoading && currentView === 'overview' && <OverviewTab stories={state.stories} chapters={state.chapters} promotions={state.promotions} stats={state.stats} revenue={state.revenue} />}
       {!currentLoading && currentView === 'stories' && <AuthorStoryTable stories={state.stories} onUpdate={updateStory} onDelete={deleteStory} />}
       {!currentLoading && currentView === 'story-form' && <StoryEditorForm story={editingStory} loading={Boolean(params.id && !editingStory)} onSave={saveStory} />}
+      {!currentLoading && currentView === 'story-preview' && <AuthorPrivatePreview story={editingStory} chapters={state.chapters.filter(chapter => chapter.storyId === params.id)} loading={Boolean(params.id && !editingStory)} />}
+      {!currentLoading && currentView === 'chapter-choice' && <ChapterMethodChooser story={editingStory} loading={Boolean(params.id && !editingStory)} />}
+      {!currentLoading && currentView === 'chapter-new' && <SingleChapterPage story={editingStory} stories={state.stories} chapters={state.chapters} loading={Boolean(params.id && !editingStory)} onSave={saveChapter} />}
+      {!currentLoading && currentView === 'chapter-bulk' && <BulkChapterPage story={editingStory} stories={state.stories} chapters={state.chapters} loading={Boolean(params.id && !editingStory)} apiClient={apiClient} usingMock={state.usingMock} onSaveBulk={saveBulkChapters} />}
       {!currentLoading && currentView === 'chapters' && <ChapterManager stories={state.stories} chapters={state.chapters} onSave={saveChapter} onDelete={deleteChapter} />}
       {!currentLoading && currentView === 'revenue' && <RevenueTab revenue={state.revenue} />}
       {!currentLoading && currentView === 'promotions' && <PromotionPackages stories={state.stories} promotions={state.promotions} packages={state.packages} onBuy={buyPromotion} />}
@@ -492,6 +627,10 @@ export function AuthorStatsCards({ totals }) {
 }
 
 export function AuthorStoryTable({ stories, onUpdate, onDelete }) {
+  return <AuthorStoryDashboardView stories={stories} onUpdate={onUpdate} onDelete={onDelete} />;
+}
+
+/*
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState('');
   const filtered = stories.filter(story => {
@@ -544,6 +683,167 @@ export function AuthorStoryTable({ stories, onUpdate, onDelete }) {
     </section>
   );
 }
+*/
+
+function AuthorStoryDashboardView({ stories, onUpdate, onDelete }) {
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState('');
+  const [genre, setGenre] = useState('');
+  const [sort, setSort] = useState('updated');
+  const [viewMode, setViewMode] = useState('grid');
+  const genres = useMemo(() => Array.from(new Set(stories.flatMap(story => story.genres || story.categories || []))).filter(Boolean).sort((a, b) => a.localeCompare(b, 'vi')), [stories]);
+  const stats = useMemo(() => ({
+    total: stories.length,
+    pending: stories.filter(story => story.approvalStatus === 'pending').length,
+    public: stories.filter(story => story.approvalStatus === 'approved' && !story.hidden).length,
+    draftRejected: stories.filter(story => ['draft', 'rejected'].includes(story.approvalStatus)).length,
+    chapters: stories.reduce((sum, story) => sum + Number(story.chapters ?? story.chapterCount ?? 0), 0),
+    views: stories.reduce((sum, story) => sum + Number(story.views || 0), 0)
+  }), [stories]);
+  const filtered = stories.filter(story => {
+    const haystack = `${story.title} ${story.author} ${(story.genres || story.categories || []).join(' ')} ${(story.tags || []).join(' ')}`.toLowerCase();
+    const matchQuery = !query || haystack.includes(query.toLowerCase());
+    const matchFilter = !filter || story.approvalStatus === filter || story.publishStatus === filter || story.status === filter || (filter === 'hidden' && story.hidden);
+    const matchGenre = !genre || (story.genres || story.categories || []).includes(genre);
+    return matchQuery && matchFilter && matchGenre;
+  }).sort((a, b) => {
+    if (sort === 'chapters') return Number(b.chapters ?? b.chapterCount ?? 0) - Number(a.chapters ?? a.chapterCount ?? 0);
+    if (sort === 'views') return Number(b.views || 0) - Number(a.views || 0);
+    if (sort === 'revenue') return Number(b.revenue || 0) - Number(a.revenue || 0);
+    return new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0);
+  });
+  const firstStory = stories[0];
+
+  return (
+    <div className="ad-story-dashboard">
+      <section className="ad-panel ad-story-head">
+        <div>
+          <h2>Quản lý truyện</h2>
+          <p>Quản lý kho truyện, trạng thái duyệt và chương đã đăng</p>
+        </div>
+        <div className="ad-head-actions">
+          <Link className="ad-primary" to="/author/stories/new">+ Đăng truyện mới</Link>
+          <Link className="ad-secondary" to={firstStory ? `/author/stories/${firstStory.id}/chapters/bulk` : '/author/stories/new'}>+ Thêm nhiều chương</Link>
+        </div>
+      </section>
+
+      <div className="ad-story-stats">
+        {[
+          ['Truyện của tôi', stats.total],
+          ['Đang chờ duyệt', stats.pending],
+          ['Đã public', stats.public],
+          ['Nháp / từ chối', stats.draftRejected],
+          ['Tổng chương', stats.chapters],
+          ['Lượt đọc', formatNumber(stats.views)]
+        ].map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}
+      </div>
+
+      <section className="ad-panel">
+        <div className="ad-story-toolbar">
+          <input value={query} onChange={event => setQuery(event.target.value)} placeholder="Tìm theo tên truyện, tác giả, tag..." />
+          <select value={filter} onChange={event => setFilter(event.target.value)}>
+            <option value="">Tất cả</option>
+            <option value="draft">Nháp</option>
+            <option value="pending">Chờ duyệt</option>
+            <option value="approved">Đã duyệt</option>
+            <option value="rejected">Từ chối</option>
+            <option value="hidden">Đang ẩn</option>
+            <option value="ongoing">Đang ra</option>
+            <option value="completed">Hoàn thành</option>
+            <option value="paused">Tạm dừng</option>
+          </select>
+          <select value={genre} onChange={event => setGenre(event.target.value)}>
+            <option value="">Tất cả thể loại</option>
+            {genres.map(item => <option key={item} value={item}>{item}</option>)}
+          </select>
+          <select value={sort} onChange={event => setSort(event.target.value)}>
+            <option value="updated">Mới nhất</option>
+            <option value="chapters">Nhiều chương</option>
+            <option value="views">Nhiều lượt đọc</option>
+            <option value="revenue">Doanh thu cao</option>
+          </select>
+          <div className="ad-view-toggle">
+            <button type="button" className={viewMode === 'grid' ? 'active' : ''} onClick={() => setViewMode('grid')}>Lưới</button>
+            <button type="button" className={viewMode === 'table' ? 'active' : ''} onClick={() => setViewMode('table')}>Bảng</button>
+          </div>
+        </div>
+
+        {viewMode === 'grid' ? (
+          <div className="ad-story-grid">
+            {filtered.map(story => <StoryManagementCard key={story.id} story={story} onUpdate={onUpdate} onDelete={onDelete} />)}
+          </div>
+        ) : (
+          <div className="ad-story-table">
+            <div className="header"><span>Truyện</span><span>Duyệt</span><span>Xuất bản</span><span>Chương</span><span>Lượt đọc</span><span>Doanh thu</span><span>Thao tác</span></div>
+            {filtered.map(story => <StoryManagementRow key={story.id} story={story} onUpdate={onUpdate} onDelete={onDelete} />)}
+          </div>
+        )}
+
+        {filtered.length === 0 && (
+          <div className="ad-empty-state">
+            <h3>Bạn chưa có truyện nào.</h3>
+            <p>Đăng truyện đầu tiên để bắt đầu thêm chương trong khu tác giả.</p>
+            <Link className="ad-primary" to="/author/stories/new">Đăng truyện đầu tiên</Link>
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function StoryManagementRow({ story, onUpdate, onDelete }) {
+  return (
+    <div>
+      <span className="ad-story-cell"><img src={story.cover || coverFallback} alt={story.title} onError={handleImageError} /><b>{story.title}</b></span>
+      <span className="ad-badge-stack"><StatusBadge status={story.approvalStatus} />{story.hidden && <StatusBadge hidden />}</span>
+      <span>{statusText(story.status)} · {story.hidden ? 'Đang ẩn' : story.approvalStatus === 'approved' ? 'Đã public' : 'Chưa public'}</span>
+      <span>{formatNumber(story.chapters ?? story.chapterCount)}</span>
+      <span>{formatNumber(story.views)}</span>
+      <span>{formatCurrency(story.revenue)}</span>
+      <StoryActions story={story} onUpdate={onUpdate} onDelete={onDelete} />
+    </div>
+  );
+}
+
+function StoryManagementCard({ story, onUpdate, onDelete }) {
+  const categories = story.genres || story.categories || [];
+  return (
+    <article className="ad-story-card">
+      <div className="ad-story-cover">
+        <img src={story.cover || coverFallback} alt={story.title} onError={handleImageError} />
+        <span className="ad-cover-badges"><StatusBadge status={story.approvalStatus} />{story.hidden && <StatusBadge hidden />}</span>
+      </div>
+      <div className="ad-story-card-body">
+        <h3>{story.title}</h3>
+        <p>{story.author || 'Tác giả'}</p>
+        <div className="ad-chip-row">{categories.slice(0, 3).map(item => <span key={item}>{item}</span>)}</div>
+        <div className="ad-story-metrics">
+          <span><b>{formatNumber(story.chapters ?? story.chapterCount)}</b> chương</span>
+          <span><b>{formatNumber(story.views)}</b> đọc</span>
+          <span><b>{formatCurrency(story.revenue)}</b></span>
+        </div>
+        <small>Cập nhật {formatDate(story.updatedAt)}</small>
+        {story.approvalStatus === 'rejected' && <button type="button" className="ad-reason" onClick={() => window.alert(story.rejectionReason || 'Admin chưa ghi lý do cụ thể.')}>Xem lý do từ chối</button>}
+      </div>
+      <StoryActions story={story} onUpdate={onUpdate} onDelete={onDelete} />
+    </article>
+  );
+}
+
+function StoryActions({ story, onUpdate, onDelete }) {
+  return (
+    <span className="ad-row-actions">
+      <Link to={`/author/stories/${story.id}/edit`}>Sửa</Link>
+      <Link to={`/author/stories/${story.id}/chapters/new`}>Thêm chương</Link>
+      <Link to={`/author/stories/${story.id}/chapters/bulk`}>Thêm nhiều</Link>
+      <Link to={`/author/stories/${story.id}/preview`}>Bản nháp</Link>
+      {story.approvalStatus === 'approved' && !story.hidden && <Link to={`/truyen/${story.slug}`}>Public</Link>}
+      {story.approvalStatus === 'approved' && <button type="button" onClick={() => onUpdate(story.id, { hidden: !story.hidden })}>{story.hidden ? 'Hiện' : 'Ẩn'}</button>}
+      {story.approvalStatus === 'rejected' && <button type="button" onClick={() => onUpdate(story.id, { approvalStatus: 'pending' })}>Gửi duyệt lại</button>}
+      <button type="button" onClick={() => onDelete(story.id)}>Xóa</button>
+    </span>
+  );
+}
 
 export function StoryEditorForm({ story, loading, onSave }) {
   const navigate = useNavigate();
@@ -559,8 +859,7 @@ export function StoryEditorForm({ story, loading, onSave }) {
   function validate(mode) {
     if (!form.title.trim()) return 'Vui lòng nhập tên truyện.';
     if (mode === 'draft') return '';
-    if (form.shortDescription.trim().length < 20) return 'Mô tả ngắn cần ít nhất 20 ký tự.';
-    if (form.description.trim().length < 80) return 'Mô tả dài cần ít nhất 80 ký tự.';
+    if (form.description.trim().length < 80) return 'Mô tả cần ít nhất 80 ký tự.';
     if (!form.genres.length) return 'Vui lòng chọn ít nhất một thể loại.';
     if ((form.type === 'vip' || form.type === 'mixed') && Number(form.chapterPrice) <= 0) return 'Giá chương VIP phải lớn hơn 0.';
     return '';
@@ -576,7 +875,7 @@ export function StoryEditorForm({ story, loading, onSave }) {
     setError('');
     try {
       const saved = await onSave(form, mode === 'submit' ? 'submit' : 'draft');
-      navigate(mode === 'submit' ? '/author/stories' : `/author/stories/${saved.id}/edit`);
+      navigate(mode === 'submit' ? `/author/stories/${saved.id}/chapters/new` : `/author/stories/${saved.id}/edit`);
     } catch (err) {
       setError(err.message || 'Không thể lưu truyện.');
     } finally {
@@ -596,11 +895,15 @@ export function StoryEditorForm({ story, loading, onSave }) {
       <div className="ad-editor-grid">
         <div className="ad-form-stack">
           <CoverUploader value={form.cover} position={form.coverPosition} onChange={(cover, coverPosition = form.coverPosition) => setForm({ ...form, cover, coverPosition })} />
+          <div className="ad-two-inputs">
+            <label>Người dịch<input value={form.translator} onChange={event => setForm({ ...form, translator: event.target.value })} placeholder="Nếu có" /></label>
+            <label>Nhân vật chính<input value={form.mainCharacters} onChange={event => setForm({ ...form, mainCharacters: event.target.value })} placeholder="VD: Minh An, Lục Dao" /></label>
+          </div>
           <label>Tên truyện<input value={form.title} onChange={event => setForm({ ...form, title: event.target.value })} placeholder="Nhập tên truyện" /></label>
           <label>Bút danh / tác giả<input value={form.author} onChange={event => setForm({ ...form, author: event.target.value })} placeholder="Để trống nếu dùng tên tài khoản" /></label>
-          <label>Mô tả ngắn<textarea rows="3" value={form.shortDescription} onChange={event => setForm({ ...form, shortDescription: event.target.value })} placeholder="Tóm tắt ngắn hiển thị ở card truyện" /></label>
-          <label>Mô tả dài<textarea rows="8" value={form.description} onChange={event => setForm({ ...form, description: event.target.value })} placeholder="Giới thiệu nội dung, nhân vật, điểm hấp dẫn..." /></label>
-          <GenreMultiSelect label="Thể loại" options={authorGenres} selected={form.genres} onChange={genres => setForm({ ...form, genres })} max={5} />
+          <label>Mô tả<textarea rows="9" value={form.description} onChange={event => setForm({ ...form, description: event.target.value })} placeholder="Giới thiệu nội dung, nhân vật, điểm hấp dẫn..." /></label>
+          <GroupedCategorySelect selected={form.genres} onChange={genres => setForm({ ...form, genres, ageRating: genres.some(item => ADULT_CATEGORY_ITEMS.includes(item)) ? '18' : form.ageRating })} max={5} />
+          {form.genres.some(item => ADULT_CATEGORY_ITEMS.includes(item)) && <div className="ad-adult-warning">Nội dung 18+ cần tuân thủ quy định và có thể cần duyệt kỹ hơn.</div>}
           <GenreMultiSelect label="Tag" options={authorTags} selected={form.tags} onChange={tags => setForm({ ...form, tags })} max={8} />
         </div>
         <aside className="ad-form-side">
@@ -615,6 +918,15 @@ export function StoryEditorForm({ story, loading, onSave }) {
                 <label>Giá combo<input type="number" min="1" value={form.comboPrice} onChange={event => setForm({ ...form, comboPrice: event.target.value })} /></label>
               </>
             )}
+          </section>
+          <section>
+            <h3>Thông tin bổ sung</h3>
+            <div className="ad-two-inputs">
+              <label>Ngôn ngữ gốc<select value={form.language} onChange={event => setForm({ ...form, language: event.target.value })}><option>Tiếng Việt</option><option>Tiếng Trung</option><option>Tiếng Anh</option><option>Tiếng Nhật</option></select></label>
+              <label>Độ tuổi<select value={form.ageRating} onChange={event => setForm({ ...form, ageRating: event.target.value })}><option value="all">Tất cả</option><option value="13">13+</option><option value="16">16+</option><option value="18">18+</option></select></label>
+            </div>
+            <label>Số chương dự kiến<input type="number" min="0" value={form.chapterCountEstimate} onChange={event => setForm({ ...form, chapterCountEstimate: event.target.value })} /></label>
+            <label className="ad-switch"><input type="checkbox" checked={form.hidden} onChange={event => setForm({ ...form, hidden: event.target.checked })} /><span>Ẩn khỏi website</span></label>
           </section>
           <section className="ad-guide">
             <h3>Quy định đăng truyện</h3>
@@ -651,6 +963,48 @@ export function CoverUploader({ value, position = '50% 50%', onChange }) {
   );
 }
 
+export function GroupedCategorySelect({ selected, onChange, max = 5 }) {
+  const [search, setSearch] = useState('');
+  const keyword = search.trim().toLowerCase();
+  const filteredGroups = AUTHOR_CATEGORY_GROUPS.map(group => ({
+    ...group,
+    items: keyword ? group.items.filter(item => item.toLowerCase().includes(keyword)) : group.items
+  })).filter(group => group.items.length);
+
+  function toggle(item) {
+    const exists = selected.includes(item);
+    const next = exists ? selected.filter(value => value !== item) : [...selected, item].slice(0, max);
+    onChange(next);
+  }
+
+  return (
+    <section className="ad-category-picker">
+      <div className="ad-category-top">
+        <div><strong>Thể loại</strong><span>{selected.length}/{max}</span></div>
+        <input value={search} onChange={event => setSearch(event.target.value)} placeholder="Tìm kiếm thể loại..." />
+      </div>
+      <div className="ad-selected-categories">
+        {selected.length ? selected.map(item => <span key={item}>{item}</span>) : <span>Chưa chọn thể loại</span>}
+      </div>
+      <div className="ad-category-groups">
+        {filteredGroups.map(group => (
+          <div key={group.title} className="ad-category-group">
+            <div className="ad-category-group-head"><span>{group.icon}</span><strong>{group.title}</strong></div>
+            <div className="ad-category-chip-grid">
+              {group.items.map(item => (
+                <button type="button" key={item} className={selected.includes(item) ? 'active' : ''} onClick={() => toggle(item)}>
+                  {item}
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
+        {!filteredGroups.length && <EmptyState>Không tìm thấy thể loại phù hợp.</EmptyState>}
+      </div>
+    </section>
+  );
+}
+
 export function GenreMultiSelect({ label, options, selected, onChange, max }) {
   function toggle(item) {
     const exists = selected.includes(item);
@@ -672,9 +1026,58 @@ function StoryPreview({ story }) {
       <div>
         <span>{story.genres?.join(' · ') || 'Chưa chọn thể loại'}</span>
         <h3>{story.title || 'Tên truyện preview'}</h3>
-        <p>{story.shortDescription || 'Mô tả ngắn sẽ hiển thị tại đây.'}</p>
+        <p>{String(story.description || story.shortDescription || 'Mô tả sẽ hiển thị tại đây.').slice(0, 220)}</p>
       </div>
     </article>
+  );
+}
+
+function StorySearchPicker({ stories, selectedStoryId, onSelect, placeholder = 'Gõ tên truyện, tác giả hoặc thể loại...' }) {
+  const selectedStory = stories.find(story => story.id === selectedStoryId);
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+  const normalizedQuery = query.trim().toLowerCase();
+  const suggestions = stories.filter(story => {
+    if (!normalizedQuery) return true;
+    return `${story.title} ${story.author} ${(story.genres || story.categories || []).join(' ')}`.toLowerCase().includes(normalizedQuery);
+  }).slice(0, 8);
+
+  function choose(story) {
+    onSelect(story.id);
+    setQuery('');
+    setOpen(false);
+  }
+
+  return (
+    <div className="ad-story-search" onBlur={() => window.setTimeout(() => setOpen(false), 120)}>
+      <label>Chọn truyện</label>
+      <input
+        value={query}
+        onFocus={() => setOpen(true)}
+        onChange={event => {
+          setQuery(event.target.value);
+          setOpen(true);
+        }}
+        placeholder={selectedStory ? selectedStory.title : placeholder}
+      />
+      {selectedStory && (
+        <div className="ad-selected-story">
+          <strong>{selectedStory.title}</strong>
+          <span>{selectedStory.author || 'Tác giả'} · {(selectedStory.genres || selectedStory.categories || []).slice(0, 3).join(' · ') || 'Chưa có thể loại'}</span>
+        </div>
+      )}
+      {open && (
+        <div className="ad-story-suggestions">
+          {suggestions.map(story => (
+            <button type="button" key={story.id} onMouseDown={event => event.preventDefault()} onClick={() => choose(story)}>
+              <img src={story.cover || coverFallback} alt="" onError={handleImageError} />
+              <span><strong>{story.title}</strong><small>{story.author || 'Tác giả'} · {(story.genres || story.categories || []).slice(0, 2).join(' · ')}</small></span>
+            </button>
+          ))}
+          {!suggestions.length && <div className="ad-story-suggestion-empty">Không tìm thấy truyện phù hợp.</div>}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -692,7 +1095,7 @@ export function ChapterManager({ stories, chapters, onSave, onDelete }) {
   if (!stories.length) {
     return (
       <section className="ad-panel">
-        <div className="ad-panel-head"><div><h2>Quản lý chương</h2><p>Chưa có truyện để đăng chương.</p></div><Link className="ad-primary" to="/author/stories/new">Đăng truyện đầu tiên</Link></div>
+        <div className="ad-panel-head"><div><h2>Quản lý truyện</h2><p>Chưa có truyện để đăng chương.</p></div><Link className="ad-primary" to="/author/stories/new">Đăng truyện đầu tiên</Link></div>
         <EmptyState>Bạn chưa có truyện nào, bắt đầu đăng truyện đầu tiên.</EmptyState>
       </section>
     );
@@ -709,11 +1112,14 @@ export function ChapterManager({ stories, chapters, onSave, onDelete }) {
     <div className="ad-chapter-layout">
       <section className="ad-panel">
         <div className="ad-panel-head">
-          <div><h2>Quản lý chương</h2><p>{filtered.length} chương phù hợp</p></div>
-          <button type="button" onClick={() => setEditing({ storyId: selectedStoryId })}>Tạo chương mới</button>
+          <div><h2>Quản lý truyện</h2><p>{selectedStoryId ? `${filtered.length} chương phù hợp` : 'Chọn truyện để quản lý chương'}</p></div>
+          <div className="ad-head-actions">
+            <Link className="ad-primary" to={`/author/stories/${selectedStoryId}/chapters/new`}>Thêm chương</Link>
+            <Link className="ad-secondary" to={`/author/stories/${selectedStoryId}/chapters/bulk`}>Thêm nhiều chương</Link>
+          </div>
         </div>
         <div className="ad-toolbar">
-          <select value={selectedStoryId} onChange={event => setSelectedStoryId(event.target.value)}>{stories.map(story => <option key={story.id} value={story.id}>{story.title}</option>)}</select>
+          <StorySearchPicker stories={stories} selectedStoryId={selectedStoryId} onSelect={setSelectedStoryId} />
           <input value={query} onChange={event => setQuery(event.target.value)} placeholder="Tìm chương..." />
           <select value={filter} onChange={event => setFilter(event.target.value)}><option value="">Tất cả</option><option value="draft">Nháp</option><option value="pending">Chờ duyệt</option><option value="approved">Đã duyệt</option><option value="rejected">Từ chối</option><option value="scheduled">Đã lên lịch</option><option value="vip">VIP</option><option value="free">Miễn phí</option></select>
         </div>
@@ -765,7 +1171,7 @@ export function ChapterEditor({ chapter, stories, selectedStoryId, onSave, onCan
   function validate(status) {
     if (!form.storyId) return 'Vui lòng chọn truyện.';
     if (!form.title.trim()) return 'Vui lòng nhập tiêu đề chương.';
-    if (form.content.trim().length < 80) return 'Nội dung chương cần ít nhất 80 ký tự.';
+    if (!form.content.trim()) return 'Vui lòng nhập nội dung chương.';
     if (status === 'scheduled' && !form.scheduledAt) return 'Vui lòng chọn thời gian lên lịch.';
     if (form.access === 'vip' && Number(form.price || 0) <= 0) return 'Giá chương VIP phải lớn hơn 0.';
     return '';
@@ -792,7 +1198,7 @@ export function ChapterEditor({ chapter, stories, selectedStoryId, onSave, onCan
     <section className="ad-panel ad-chapter-editor">
       <div className="ad-panel-head"><div><h2>{chapter.id ? 'Sửa chương' : 'Tạo chương mới'}</h2><p>Chương gửi duyệt sẽ chưa hiển thị ngoài public reader.</p></div><button type="button" onClick={onCancel}>Đóng</button></div>
       {error && <ErrorNotice message={error} />}
-      <label>Truyện<select value={form.storyId} onChange={event => setForm({ ...form, storyId: event.target.value })}>{stories.map(story => <option key={story.id} value={story.id}>{story.title}</option>)}</select></label>
+      <StorySearchPicker stories={stories} selectedStoryId={form.storyId} onSelect={storyId => setForm({ ...form, storyId })} />
       <div className="ad-two-inputs"><label>Số chương<input type="number" min="1" value={form.number} onChange={event => setForm({ ...form, number: Number(event.target.value) })} /></label><label>Trạng thái truy cập<select value={form.access} onChange={event => setForm({ ...form, access: event.target.value })}><option value="free">Miễn phí</option><option value="vip">VIP</option></select></label></div>
       {form.access === 'vip' && <label>Giá chương<input type="number" min="1" value={form.price} onChange={event => setForm({ ...form, price: event.target.value })} /></label>}
       <label>Tiêu đề chương<input value={form.title} onChange={event => setForm({ ...form, title: event.target.value })} placeholder="VD: Chương 1: Gió nổi trong thành" /></label>
@@ -803,7 +1209,7 @@ export function ChapterEditor({ chapter, stories, selectedStoryId, onSave, onCan
         <button type="button" onClick={() => setPreview(value => !value)}>{preview ? 'Ẩn preview' : 'Preview'}</button>
         <button type="button" disabled={Boolean(saving)} onClick={() => submit('draft')}>{saving === 'draft' ? 'Đang lưu...' : 'Lưu nháp'}</button>
         <button type="button" disabled={Boolean(saving)} onClick={() => submit('scheduled')}>{saving === 'scheduled' ? 'Đang lưu...' : 'Lên lịch'}</button>
-        <button type="button" disabled={Boolean(saving)} onClick={() => submit('pending')}>{saving === 'pending' ? 'Đang gửi...' : 'Gửi duyệt'}</button>
+        <button type="button" disabled={Boolean(saving)} onClick={() => submit('published')}>{saving === 'published' ? 'Đang đăng...' : 'Đăng chương'}</button>
       </div>
       {preview && <article className="ad-chapter-preview"><h3>{form.title || 'Tiêu đề chương'}</h3>{form.content.split('\n').map((line, index) => line ? <p key={index}>{line}</p> : <br key={index} />)}</article>}
     </section>
@@ -818,6 +1224,314 @@ export function ChapterStats({ chapters }) {
     vip: chapters.filter(item => item.access === 'vip').length
   };
   return <div className="ad-chapter-stats"><span>{formatNumber(totals.reads)} lượt đọc</span><span>{formatNumber(totals.comments)} bình luận</span><span>{formatCurrency(totals.revenue)}</span><span>{totals.vip} chương VIP</span></div>;
+}
+
+function AuthorPrivatePreview({ story, chapters, loading }) {
+  if (loading) return <LoadingBlock text="Đang tải bản nháp..." />;
+  if (!story) return <EmptyState>Không tìm thấy truyện cần preview.</EmptyState>;
+  const sorted = chapters.slice().sort((a, b) => Number(a.number) - Number(b.number));
+  return (
+    <section className="ad-panel">
+      <div className="ad-panel-head">
+        <div><h2>Preview riêng tư</h2><p>Chỉ chủ truyện hoặc admin xem được trong khu tác giả.</p></div>
+        <Link className="ad-secondary" to={`/author/stories/${story.id}/edit`}>Sửa truyện</Link>
+      </div>
+      <article className="ad-private-preview">
+        <img src={story.cover || coverFallback} alt={story.title} onError={handleImageError} />
+        <div>
+          <div className="ad-badge-stack"><StatusBadge status={story.approvalStatus} />{story.hidden && <StatusBadge hidden />}</div>
+          <h3>{story.title}</h3>
+          <p>{story.description || story.shortDescription}</p>
+          <div className="ad-chip-row">{(story.genres || story.categories || []).slice(0, 5).map(item => <span key={item}>{item}</span>)}</div>
+        </div>
+      </article>
+      <div className="ad-chapter-list">
+        {sorted.map(chapter => (
+          <article key={chapter.id}>
+            <span><b>#{chapter.number} {chapter.title}</b><small>{chapterStatusText(chapter.status)} · {formatNumber(chapter.words || chapter.wordCount || textWordCount(chapter.content))} từ</small></span>
+            <em>{chapter.access === 'vip' ? 'VIP' : 'Miễn phí'}</em>
+            <div><Link to="/author/chapters">Quản lý</Link></div>
+          </article>
+        ))}
+      </div>
+      {!sorted.length && <EmptyState>Truyện này chưa có chương.</EmptyState>}
+    </section>
+  );
+}
+
+function ChapterMethodChooser({ story, loading }) {
+  if (loading) return <LoadingBlock text="Đang tải truyện..." />;
+  if (!story) return <EmptyState>Không tìm thấy truyện cần thêm chương.</EmptyState>;
+  return (
+    <section className="ad-panel">
+      <div className="ad-panel-head">
+        <div><h2>Chọn cách thêm chương</h2><p>{story.title}</p></div>
+        <Link className="ad-secondary" to="/author/stories">Quay lại</Link>
+      </div>
+      <div className="ad-method-grid">
+        <Link to={`/author/stories/${story.id}/chapters/new`}>
+          <strong>Thêm 1 chương</strong>
+          <span>Tạo một chương mới với trình soạn thảo đầy đủ.</span>
+          <small>Trình soạn thảo đầy đủ · Lên lịch xuất bản · Cài giá chương</small>
+        </Link>
+        <Link to={`/author/stories/${story.id}/chapters/bulk`}>
+          <strong>Thêm nhiều chương</strong>
+          <span>Dán nội dung hoặc tải file để tự động tách chương.</span>
+          <small>Tự động phát hiện chương · Upload Word/TXT · Preview trước khi đăng</small>
+        </Link>
+      </div>
+    </section>
+  );
+}
+
+function SingleChapterPage({ story, stories, chapters, loading, onSave }) {
+  const navigate = useNavigate();
+  if (loading) return <LoadingBlock text="Đang tải form chương..." />;
+  if (!story) return <EmptyState>Không tìm thấy truyện cần thêm chương.</EmptyState>;
+  const nextNumber = nextChapterNumberForStory(chapters, story.id);
+  return (
+    <div className="ad-stack">
+      <section className="ad-panel ad-story-head">
+        <div><h2>Thêm 1 chương</h2><p>{story.title} · Chương tiếp theo dự kiến #{nextNumber}</p></div>
+        <Link className="ad-secondary" to={`/author/stories/${story.id}/chapters/bulk`}>Thêm nhiều chương</Link>
+      </section>
+      <ChapterEditor
+        key={`${story.id}-${nextNumber}`}
+        chapter={{ storyId: story.id, number: nextNumber, status: 'draft' }}
+        stories={stories}
+        selectedStoryId={story.id}
+        onCancel={() => navigate('/author/stories')}
+        onSave={async (chapter, status) => {
+          await onSave(chapter, status);
+          navigate('/author/chapters');
+        }}
+      />
+    </div>
+  );
+}
+
+function BulkChapterPage({ story, stories, chapters, loading, apiClient, usingMock, onSaveBulk }) {
+  const navigate = useNavigate();
+  const params = useParams();
+  const [selectedStoryId, setSelectedStoryId] = useState(story?.id || stories[0]?.id || '');
+  const [activeTab, setActiveTab] = useState('paste');
+  const [rawText, setRawText] = useState('');
+  const [parsed, setParsed] = useState([]);
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [startNumber, setStartNumber] = useState(1);
+  const [renumber, setRenumber] = useState(true);
+  const [access, setAccess] = useState('free');
+  const [price, setPrice] = useState(0);
+  const [mode, setMode] = useState('published');
+  const [scheduledAt, setScheduledAt] = useState('');
+  const [fileInfo, setFileInfo] = useState(null);
+  const [processing, setProcessing] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+  const selectedStory = story || stories.find(item => item.id === selectedStoryId);
+  const storyChapters = chapters.filter(chapter => chapter.storyId === selectedStory?.id);
+  const nextNumber = selectedStory ? nextChapterNumberForStory(chapters, selectedStory.id) : 1;
+
+  useEffect(() => {
+    if (story?.id) setSelectedStoryId(story.id);
+    else if (!selectedStoryId && stories[0]?.id) setSelectedStoryId(stories[0].id);
+  }, [story?.id, stories, selectedStoryId]);
+
+  useEffect(() => {
+    setStartNumber(nextNumber);
+  }, [nextNumber, selectedStory?.id]);
+
+  const previewChapters = useMemo(() => {
+    const seen = new Set();
+    const existing = new Set(storyChapters.map(chapter => Number(chapter.number)));
+    const start = Number(startNumber || nextNumber || 1);
+    return parsed.map((chapter, index) => {
+      const number = renumber ? start + index : Number(chapter.number || start + index);
+      const warnings = [...(chapter.warnings || [])];
+      if (!String(chapter.title || '').trim()) warnings.push('Tên chương rỗng.');
+      if (!String(chapter.content || '').trim()) warnings.push('Nội dung chương rỗng.');
+      if (existing.has(Number(number)) || seen.has(Number(number))) warnings.push('Trùng số chương.');
+      seen.add(Number(number));
+      const wordTotal = textWordCount(chapter.content);
+      if (wordTotal > 0 && wordTotal < 80 && !warnings.some(item => item.includes('ngắn'))) warnings.push('Chương hơi ngắn.');
+      const blocked = warnings.some(item => item.includes('rỗng') || item.includes('Trùng'));
+      return { ...chapter, number, wordCount: wordTotal, warnings, blocked };
+    });
+  }, [parsed, renumber, startNumber, nextNumber, storyChapters]);
+
+  function setParsedChapters(chaptersToSet) {
+    const normalized = chaptersToSet.map((chapter, index) => ({
+      localId: chapter.localId || `bulk-${Date.now()}-${index}`,
+      number: chapter.number || Number(startNumber || nextNumber) + index,
+      title: chapter.title || '',
+      content: chapter.content || '',
+      wordCount: chapter.wordCount || textWordCount(chapter.content),
+      warnings: chapter.warnings || []
+    }));
+    setParsed(normalized);
+    setSelectedIds(new Set(normalized.map(chapter => chapter.localId)));
+  }
+
+  function checkChapters() {
+    if (!rawText.trim()) {
+      setError('Vui lòng dán nội dung cần tách chương.');
+      return;
+    }
+    setError('');
+    setParsedChapters(parseBulkChapterText(rawText, Number(startNumber || nextNumber)));
+  }
+
+  function updateChapter(localId, patch) {
+    setParsed(current => current.map(chapter => chapter.localId === localId ? { ...chapter, ...patch } : chapter));
+  }
+
+  function toggleChapter(localId) {
+    setSelectedIds(current => {
+      const next = new Set(current);
+      if (next.has(localId)) next.delete(localId);
+      else next.add(localId);
+      return next;
+    });
+  }
+
+  async function handleFile(file) {
+    if (!file || !selectedStory) return;
+    setProcessing(true);
+    setError('');
+    setFileInfo({ name: file.name, size: file.size, status: 'Đang xử lý...' });
+    try {
+      const extension = file.name.split('.').pop().toLowerCase();
+      if ((usingMock || !apiClient) && extension === 'txt') {
+        const text = await file.text();
+        setRawText(text);
+        const parsedText = parseBulkChapterText(text, Number(startNumber || nextNumber));
+        setParsedChapters(parsedText);
+        setFileInfo({ name: file.name, size: file.size, status: 'Đã tách chương', count: parsedText.length });
+        return;
+      }
+      if (usingMock || !apiClient) throw new Error('Upload DOCX cần backend API.');
+      const body = new FormData();
+      body.append('file', file);
+      const result = await apiClient(`/author/stories/${selectedStory.id}/chapters/import`, { method: 'POST', body });
+      setParsedChapters(result.chapters || []);
+      setFileInfo({ name: file.name, size: file.size, status: 'Đã tách chương', count: result.chapters?.length || 0 });
+    } catch (err) {
+      setError(err.message || 'Không thể đọc file.');
+      setFileInfo(current => current ? { ...current, status: 'Lỗi xử lý' } : null);
+    } finally {
+      setProcessing(false);
+    }
+  }
+
+  async function submitBatch(modeOverride) {
+    if (!selectedStory) {
+      setError('Vui lòng chọn truyện.');
+      return;
+    }
+    const selected = previewChapters.filter(chapter => selectedIds.has(chapter.localId));
+    if (!selected.length) {
+      setError('Vui lòng chọn ít nhất một chương hợp lệ.');
+      return;
+    }
+    if (selected.some(chapter => chapter.blocked)) {
+      setError('Vui lòng sửa các chương đang lỗi trước khi lưu.');
+      return;
+    }
+    setSubmitting(true);
+    setError('');
+    try {
+      const result = await onSaveBulk(selectedStory.id, {
+        chapters: selected.map(chapter => ({ number: chapter.number, title: chapter.title, content: chapter.content, wordCount: chapter.wordCount })),
+        mode: modeOverride || mode,
+        access,
+        price: Number(price || 0),
+        renumber: false,
+        scheduledAt
+      });
+      if (result.errors?.length) {
+        setError(`${result.skipped || result.errors.length} chương bị bỏ qua: ${result.errors.map(item => `#${item.number || item.index}: ${item.reason}`).join(', ')}`);
+      } else {
+        navigate('/author/chapters');
+      }
+    } catch (err) {
+      setError(err.message || 'Không thể lưu batch chương.');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  if (loading) return <LoadingBlock text="Đang tải form thêm nhiều chương..." />;
+  if (!stories.length) return <EmptyState>Bạn cần đăng truyện trước khi thêm chương.</EmptyState>;
+
+  return (
+    <div className="ad-stack">
+      <section className="ad-panel ad-story-head">
+        <div>
+          <Link className="ad-back-link" to="/author/stories">Quay lại</Link>
+          <h2>Thêm nhiều chương</h2>
+          <p>{selectedStory?.title || 'Chọn truyện'} · Chương tiếp theo dự kiến #{nextNumber}</p>
+        </div>
+        {!params.id && (
+          <StorySearchPicker stories={stories} selectedStoryId={selectedStoryId} onSelect={setSelectedStoryId} />
+        )}
+      </section>
+
+      {error && <ErrorNotice message={error} />}
+
+      <section className="ad-panel">
+        <div className="ad-bulk-tabs">
+          <button type="button" className={activeTab === 'paste' ? 'active' : ''} onClick={() => setActiveTab('paste')}>Dán nội dung</button>
+          <button type="button" className={activeTab === 'file' ? 'active' : ''} onClick={() => setActiveTab('file')}>Tải file</button>
+        </div>
+
+        {activeTab === 'paste' ? (
+          <textarea className="ad-bulk-textarea" rows="16" value={rawText} onChange={event => setRawText(event.target.value)} placeholder={`Chương 1: Tên chương 1\nNội dung chương 1...\n\nChương 2 - Tên chương 2\nNội dung chương 2...\n\nHỗ trợ: Chương N, Chuong N, Chapter N, Hồi N, Quyển N - Chương N, Phó bản N`} />
+        ) : (
+          <label className="ad-file-drop" onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); handleFile(event.dataTransfer.files?.[0]); }}>
+            <strong>Kéo thả hoặc chọn file</strong>
+            <span>Hỗ trợ .txt và .docx. PDF sẽ báo rõ nếu backend chưa hỗ trợ.</span>
+            <input type="file" accept=".txt,.docx,.pdf,text/plain,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/pdf" onChange={event => handleFile(event.target.files?.[0])} />
+          </label>
+        )}
+
+        {fileInfo && <div className="ad-file-info"><span>{fileInfo.name}</span><span>{formatNumber(fileInfo.size)} bytes</span><b>{fileInfo.status}</b>{fileInfo.count !== undefined && <span>{fileInfo.count} chương phát hiện</span>}</div>}
+
+        <div className="ad-bulk-options">
+          <label>Bắt đầu từ chương<input type="number" min="1" value={startNumber} onChange={event => setStartNumber(event.target.value)} /></label>
+          <label className="ad-check"><input type="checkbox" checked={renumber} onChange={event => setRenumber(event.target.checked)} /> Tự đánh số lại</label>
+          <label>Áp dụng giá<select value={access} onChange={event => setAccess(event.target.value)}><option value="free">Miễn phí tất cả</option><option value="vip">Có phí tất cả</option><option value="inherit">Kế thừa cấu hình truyện</option></select></label>
+          {access === 'vip' && <label>Giá chương<input type="number" min="1" value={price} onChange={event => setPrice(event.target.value)} /></label>}
+          <label>Trạng thái khi lưu<select value={mode} onChange={event => setMode(event.target.value)}><option value="published">Published</option><option value="draft">Nháp</option><option value="scheduled">Scheduled</option></select></label>
+          {mode === 'scheduled' && <label>Lịch đăng<input type="datetime-local" value={scheduledAt} onChange={event => setScheduledAt(event.target.value)} /></label>}
+        </div>
+
+        <div className="ad-form-actions">
+          <button type="button" onClick={checkChapters} disabled={processing}>Kiểm tra / Tách chương</button>
+          <button type="button" onClick={() => submitBatch('draft')} disabled={submitting || !previewChapters.length}>Lưu tất cả thành nháp</button>
+          <button type="button" onClick={() => submitBatch(mode)} disabled={submitting || !previewChapters.length}>{submitting ? 'Đang lưu...' : 'Đăng tất cả chương hợp lệ'}</button>
+        </div>
+      </section>
+
+      {previewChapters.length > 0 && (
+        <section className="ad-panel">
+          <div className="ad-panel-head"><div><h2>Preview trước khi đăng</h2><p>{previewChapters.filter(chapter => selectedIds.has(chapter.localId) && !chapter.blocked).length} chương hợp lệ đang được chọn</p></div></div>
+          <div className="ad-bulk-preview">
+            {previewChapters.map(chapter => (
+              <article key={chapter.localId} className={chapter.blocked ? 'invalid' : ''}>
+                <label className="ad-check"><input type="checkbox" checked={selectedIds.has(chapter.localId)} onChange={() => toggleChapter(chapter.localId)} /> Chọn</label>
+                <input type="number" min="1" value={chapter.number} disabled={renumber} onChange={event => updateChapter(chapter.localId, { number: Number(event.target.value) })} />
+                <input value={chapter.title} onChange={event => updateChapter(chapter.localId, { title: event.target.value })} placeholder="Tên chương" />
+                <span>{formatNumber(chapter.wordCount)} từ</span>
+                <button type="button" onClick={() => setParsed(current => current.filter(item => item.localId !== chapter.localId))}>Xóa</button>
+                <textarea rows="5" value={chapter.content} onChange={event => updateChapter(chapter.localId, { content: event.target.value })} />
+                <div className="ad-warning-list">{chapter.warnings.length ? chapter.warnings.map(item => <small key={item}>{item}</small>) : <small>Hợp lệ</small>}</div>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
+    </div>
+  );
 }
 
 function RevenueTab({ revenue }) {

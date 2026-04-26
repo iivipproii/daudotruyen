@@ -9,7 +9,14 @@
     "reset-db": "node src/reset-db.js",
     "test": "node --test"
   },
-  "keywords": ["truyen", "node", "api"],
+  "keywords": [
+    "truyen",
+    "node",
+    "api"
+  ],
   "author": "",
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "mammoth": "^1.12.0"
+  }
 }

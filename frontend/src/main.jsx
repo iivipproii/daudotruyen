@@ -27,6 +27,7 @@ import {
 import { AuthorDashboard } from './components/author/AuthorDashboard.jsx';
 import { AdminDashboard as AdminCMSDashboard, NotificationPage as CMSNotificationPage } from './components/admin/AdminCMS.jsx';
 import { PageSeo } from './components/shared/Seo.jsx';
+import { AUTHOR_CATEGORIES } from './data/storyCategories.js';
 
 const API_BASE = (() => {
   const configured = String(import.meta.env.VITE_API_URL || '').trim();
@@ -38,44 +39,13 @@ const API_BASE = (() => {
 })();
 const AuthContext = createContext(null);
 const ThemeContext = createContext(null);
-const STORY_CATEGORIES = [
-  'TiÃªn Hiá»‡p', 'Kiáº¿m Hiá»‡p', 'Huyá»n Huyá»…n', 'Ká»³ áº¢o', 'Tu TiÃªn', 'Tu ChÃ¢n', 'Phong Tháº§n',
-  'Hiá»‡n Äáº¡i & ÄÃ´ Thá»‹', 'ÄÃ´ Thá»‹', 'Hiá»‡n Äáº¡i', 'Khoa Huyá»…n', 'Há»‡ Thá»‘ng', 'Äá»i Sá»‘ng', 'Doanh TrÆ°á»ng', 'Giáº£i TrÃ­', 'Thá»ƒ Thao', 'Truyá»‡n Teen',
-  'TÃ¬nh Cáº£m & Romance', 'NgÃ´n TÃ¬nh', 'Äam Má»¹', 'BÃ¡ch Há»£p', 'TÃ¬nh Cáº£m', 'Romance', 'Há»c ÄÆ°á»ng', 'VÄƒn PhÃ²ng', 'Tá»•ng TÃ i', 'NgÆ°á»£c', 'Sá»§ng', 'Ná»¯ CÆ°á»ng', 'Ná»¯ Phá»¥',
-  'Äáº·c Biá»‡t & Fantasy', 'XuyÃªn KhÃ´ng', 'XuyÃªn Nhanh', 'Trá»ng Sinh', 'Dá»‹ Giá»›i', 'VÃµng Du', 'Máº¡t Tháº¿', 'Dá»‹ NÄƒng', 'SiÃªu Anh HÃ¹ng', 'Ma PhÃ¡p',
-  'HÃ nh Äá»™ng & PhiÃªu LÆ°u', 'HÃ nh Äá»™ng', 'PhiÃªu LÆ°u', 'ThÃ¡m Hiá»ƒm', 'Sinh Tá»“n', 'Zombie', 'QuÃ¡i Váº­t', 'SiÃªu NhiÃªn',
-  'Kinh Dá»‹ & BÃ­ áº¨n', 'Kinh Dá»‹', 'Ma Quá»·', 'Linh Dá»‹', 'Trinh ThÃ¡m', 'BÃ­ áº¨n', 'TÃ¢m LÃ½', 'Tá»™i Pháº¡m',
-  'Lá»‹ch Sá»­ & Cá»• Äáº¡i', 'Lá»‹ch Sá»­', 'Cá»• Äáº¡i', 'Cung ÄÃ¬nh', 'Cung Äáº¥u', 'HoÃ ng Gia', 'Chiáº¿n Tranh', 'QuÃ¢n Sá»±', 'Quan TrÆ°á»ng', 'VÃµ TÆ°á»›ng', 'ÄÃ´ng PhÆ°Æ¡ng',
-  'HÃ i HÆ°á»›c & Nháº¹ NhÃ ng', 'HÃ i HÆ°á»›c', 'HÃ i Ká»‹ch', 'Parody', 'Slice of Life', 'áº¤m Ãp', 'Gia ÄÃ¬nh', 'HÃ ng NgÃ y', 'Äiá»n VÄƒn', 'Gia Äáº¥u',
-  'Game & Technology', 'Game', 'VRMMO', 'LitRPG', 'CÃ´ng Nghá»‡', 'AI', 'Cyberpunk', 'TÆ°Æ¡ng Lai',
-  'Má»Ÿ rá»™ng', 'HE', 'SE', 'BE', 'OE', 'Ngá»t', 'Chá»¯a LÃ nh', 'NgÆ°á»£c Nam', 'NgÆ°á»£c Ná»¯', 'NgÆ°á»£c Luyáº¿n TÃ n TÃ¢m', 'Truy ThÃª', 'Tráº£ ThÃ¹', 'Váº£ Máº·t', 'Sáº£ng VÄƒn',
-  'CÆ°á»›i TrÆ°á»›c YÃªu Sau', 'CÆ°á»ng Thá»§ HÃ o Äoáº¡t', 'DÆ°á»¡ng ThÃª', 'HÃ o MÃ´n Tháº¿ Gia', 'GÆ°Æ¡ng Vá»¡ Láº¡i LÃ nh', 'GÆ°Æ¡ng Vá»¡ KhÃ´ng LÃ nh', 'Tháº¿ ThÃ¢n', 'Nam Phá»¥ ThÆ°á»£ng Vá»‹',
-  'KhÃ´ng CP', 'NgÃ´n TÃ¬nh Thá»±c Táº¿', 'Thanh XuÃ¢n VÆ°á»n TrÆ°á»ng', 'Há»c BÃ¡', 'Showbiz', 'BÃ¡c SÄ©', 'Cáº£nh SÃ¡t', 'QuÃ¢n NhÃ¢n', 'DÃ¢n Quá»‘c', 'Tháº­p NiÃªn', 'PhÆ°Æ¡ng ÄÃ´ng',
-  'HoÃ¡n Äá»•i ThÃ¢n XÃ¡c', 'Äá»c TÃ¢m', 'NhÃ¢n ThÃº', 'HÆ° Cáº¥u Ká»³ áº¢o', 'PhÃ©p Thuáº­t', 'XuyÃªn SÃ¡ch', 'CÃ³ Sá»­ Dá»¥ng AI',
-  'Quy táº¯c', 'Äá» Cá»­', 'Review truyá»‡n', 'Tiá»ƒu Thuyáº¿t', 'Truyá»‡n SÃ¡ng TÃ¡c', 'Truyá»‡n Viá»‡t', 'VÃ´ Tri',
-  'Ná»™i dung ngÆ°á»i lá»›n', 'Sáº¯c', 'H', 'H+', 'Cao H+ (*)',
-  'KhÃ¡c', 'PhÆ°Æ¡ng TÃ¢y', 'Light Novel', 'Viá»‡t Nam', 'Zhihu', 'Äoáº£n VÄƒn', 'Review SÃ¡ch'
-];
-
-const PUBLISH_STORY_CATEGORIES = [
-  'Tiên Hiệp', 'Kiếm Hiệp', 'Huyền Huyễn', 'Kỳ Ảo', 'Tu Tiên', 'Tu Chân', 'Phong Thần',
-  'Hiện Đại & Đô Thị', 'Đô Thị', 'Hiện Đại', 'Khoa Huyễn', 'Hệ Thống', 'Đời Sống', 'Doanh Trường', 'Giải Trí', 'Thể Thao', 'Truyện Teen',
-  'Tình Cảm & Romance', 'Ngôn Tình', 'Đam Mỹ', 'Bách Hợp', 'Tình Cảm', 'Romance', 'Học Đường', 'Văn Phòng', 'Tổng Tài', 'Ngược', 'Sủng', 'Nữ Cường', 'Nữ Phụ',
-  'Đặc Biệt & Fantasy', 'Xuyên Không', 'Xuyên Nhanh', 'Trọng Sinh', 'Dị Giới', 'Võng Du', 'Mạt Thế', 'Dị Năng', 'Siêu Anh Hùng', 'Ma Pháp',
-  'Hành Động & Phiêu Lưu', 'Hành Động', 'Phiêu Lưu', 'Thám Hiểm', 'Sinh Tồn', 'Zombie', 'Quái Vật', 'Siêu Nhiên',
-  'Kinh Dị & Bí Ẩn', 'Kinh Dị', 'Ma Quỷ', 'Linh Dị', 'Trinh Thám', 'Bí Ẩn', 'Tâm Lý', 'Tội Phạm',
-  'Lịch Sử & Cổ Đại', 'Lịch Sử', 'Cổ Đại', 'Cung Đình', 'Cung Đấu', 'Hoàng Gia', 'Chiến Tranh', 'Quân Sự', 'Quan Trường', 'Võ Tướng', 'Đông Phương',
-  'Hài Hước & Nhẹ Nhàng', 'Hài Hước', 'Hài Kịch', 'Parody', 'Slice of Life', 'Ấm Áp', 'Gia Đình', 'Hằng Ngày', 'Điền Văn', 'Gia Đấu',
-  'Game & Technology', 'Game', 'VRMMO', 'LitRPG', 'Công Nghệ', 'AI', 'Cyberpunk', 'Tương Lai',
-  'Mở rộng', 'HE', 'SE', 'BE', 'OE', 'Ngọt', 'Chữa Lành', 'Ngược Nam', 'Ngược Nữ', 'Truy Thê', 'Trả Thù', 'Vả Mặt', 'Sảng Văn',
-  'Không CP', 'Showbiz', 'Bác Sĩ', 'Cảnh Sát', 'Quân Nhân', 'Dân Quốc', 'Thập Niên', 'Phương Đông',
-  'Quy tắc', 'Đề Cử', 'Review truyện', 'Tiểu Thuyết', 'Truyện Sáng Tác', 'Truyện Việt',
-  'Khác', 'Phương Tây', 'Light Novel', 'Việt Nam', 'Zhihu', 'Đoản Văn', 'Review Sách'
-];
+const STORY_CATEGORIES = AUTHOR_CATEGORIES;
+const PUBLISH_STORY_CATEGORIES = AUTHOR_CATEGORIES;
 
 async function api(path, options = {}) {
   const token = localStorage.getItem('daudo_token');
-  const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+  const isFormData = options.body instanceof FormData;
+  const headers = { ...(isFormData ? {} : { 'Content-Type': 'application/json' }), ...(options.headers || {}) };
   if (token) headers.Authorization = `Bearer ${token}`;
   const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
   const text = await response.text();
@@ -192,11 +162,15 @@ function App() {
               <Route path="/author/stories" element={<Protected><AuthorRoute /></Protected>} />
               <Route path="/author/stories/new" element={<Protected><AuthorRoute /></Protected>} />
               <Route path="/author/stories/:id/edit" element={<Protected><AuthorRoute /></Protected>} />
+              <Route path="/author/stories/:id/preview" element={<Protected><AuthorRoute /></Protected>} />
+              <Route path="/author/stories/:id/chapters" element={<Protected><AuthorRoute /></Protected>} />
+              <Route path="/author/stories/:id/chapters/new" element={<Protected><AuthorRoute /></Protected>} />
+              <Route path="/author/stories/:id/chapters/bulk" element={<Protected><AuthorRoute /></Protected>} />
               <Route path="/author/chapters" element={<Protected><AuthorRoute /></Protected>} />
               <Route path="/author/revenue" element={<Protected><AuthorRoute /></Protected>} />
               <Route path="/author/promotions" element={<Protected><AuthorRoute /></Protected>} />
               <Route path="/dang-truyen" element={<Protected><Navigate to="/author/stories/new" replace /></Protected>} />
-              <Route path="/dang-truyen/them-nhieu-chuong" element={<Protected admin><BulkChapterPublish /></Protected>} />
+              <Route path="/dang-truyen/them-nhieu-chuong" element={<Protected><AuthorRoute /></Protected>} />
               <Route path="/admin" element={<Protected admin><AdminRoute /></Protected>} />
               <Route path="/quan-tri-vien" element={<Protected admin><AdminRoute /></Protected>} />
               <Route path="/admin/users" element={<Protected admin><AdminRoute /></Protected>} />
@@ -235,8 +209,7 @@ function RouteScrollReset() {
 }
 
 function Shell({ children }) {
-  const location = useLocation();
-  const publishing = location.pathname.startsWith('/dang-truyen/them-nhieu-chuong');
+  const publishing = false;
 
   if (publishing) {
     return <PublishShell>{children}</PublishShell>;
@@ -1560,41 +1533,41 @@ function CatalogEnhancedOld() {
 
   return (
     <div className="catalog-page">
-      <div className="page-title catalog-title"><h1>Danh sÃ¡ch truyá»‡n</h1><p>TÃ¬m kiáº¿m, lá»c thá»ƒ loáº¡i, tráº¡ng thÃ¡i vÃ  sáº¯p xáº¿p theo xu hÆ°á»›ng.</p></div>
+      <div className="page-title catalog-title"><h1>Danh sách truyện</h1><p>Tìm kiếm, lọc thể loại, trạng thái và sắp xếp theo xu hướng.</p></div>
       <form className="filters catalog-filters" onSubmit={submit}>
-        <div className="filter-search"><label>Tá»« khÃ³a</label><input placeholder="TÃ¬m tÃªn truyá»‡n, tÃ¡c giáº£..." value={form.q} onChange={e => setForm({ ...form, q: e.target.value })} /></div>
-        <div><label>Thá»ƒ loáº¡i</label><select value={form.category} onChange={e => setForm({ ...form, category: e.target.value })}>
-          <option value="">Táº¥t cáº£ thá»ƒ loáº¡i</option>
+        <div className="filter-search"><label>Từ khóa</label><input placeholder="Tìm tên truyện, tác giả..." value={form.q} onChange={e => setForm({ ...form, q: e.target.value })} /></div>
+        <div><label>Thể loại</label><select value={form.category} onChange={e => setForm({ ...form, category: e.target.value })}>
+          <option value="">Tất cả thể loại</option>
           {categories.map(item => <option key={item} value={item}>{item}</option>)}
         </select></div>
-        <div><label>Tráº¡ng thÃ¡i</label><select value={form.status} onChange={e => setForm({ ...form, status: e.target.value })}>
-          <option value="">Má»i tráº¡ng thÃ¡i</option>
-          <option value="ongoing">Äang ra</option>
-          <option value="completed">HoÃ n thÃ nh</option>
+        <div><label>Trạng thái</label><select value={form.status} onChange={e => setForm({ ...form, status: e.target.value })}>
+          <option value="">Mọi trạng thái</option>
+          <option value="ongoing">Đang ra</option>
+          <option value="completed">Hoàn thành</option>
         </select></div>
-        <div><label>Loáº¡i truyá»‡n</label><select value={form.premium} onChange={e => setForm({ ...form, premium: e.target.value })}>
-          <option value="">Táº¥t cáº£</option>
-          <option value="false">Miá»…n phÃ­</option>
-          <option value="true">Tráº£ phÃ­</option>
+        <div><label>Loại truyện</label><select value={form.premium} onChange={e => setForm({ ...form, premium: e.target.value })}>
+          <option value="">Tất cả</option>
+          <option value="false">Miễn phí</option>
+          <option value="true">Trả phí</option>
         </select></div>
-        <div><label>Sáº¯p xáº¿p</label><select value={form.sort} onChange={e => setForm({ ...form, sort: e.target.value })}>
-          <option value="updated">Má»›i cáº­p nháº­t</option>
-          <option value="views">LÆ°á»£t xem</option>
-          <option value="rating">ÄÃ¡nh giÃ¡</option>
-          <option value="follows">Theo dÃµi</option>
-          <option value="chapters">Sá»‘ chÆ°Æ¡ng</option>
+        <div><label>Sắp xếp</label><select value={form.sort} onChange={e => setForm({ ...form, sort: e.target.value })}>
+          <option value="updated">Mới cập nhật</option>
+          <option value="views">Lượt xem</option>
+          <option value="rating">Đánh giá</option>
+          <option value="follows">Theo dõi</option>
+          <option value="chapters">Số chương</option>
         </select></div>
-        <button className="button">Lá»c</button>
+        <button className="button">Lọc</button>
       </form>
       <div className="catalog-chips">
-        <button onClick={() => quickPatch({ status: 'completed' })}>HoÃ n thÃ nh</button>
-        <button onClick={() => quickPatch({ sort: 'views' })}>Äá»c nhiá»u</button>
-        <button onClick={() => quickPatch({ sort: 'rating' })}>ÄÃ¡nh giÃ¡ cao</button>
-        <button onClick={() => quickPatch({ premium: 'false' })}>Miá»…n phÃ­</button>
-        <button onClick={() => quickPatch({ q: '', category: '', status: '', premium: '', sort: 'updated' })}>XÃ³a lá»c</button>
+        <button onClick={() => quickPatch({ status: 'completed' })}>Hoàn thành</button>
+        <button onClick={() => quickPatch({ sort: 'views' })}>Đọc nhiều</button>
+        <button onClick={() => quickPatch({ sort: 'rating' })}>Đánh giá cao</button>
+        <button onClick={() => quickPatch({ premium: 'false' })}>Miễn phí</button>
+        <button onClick={() => quickPatch({ q: '', category: '', status: '', premium: '', sort: 'updated' })}>Xóa lọc</button>
       </div>
       <ErrorBox message={error} />
-      <div className="catalog-summary">{stories.length} truyá»‡n phÃ¹ há»£p</div>
+      <div className="catalog-summary">{stories.length} truyện phù hợp</div>
       <div className="grid stories">{stories.map(story => <StoryCard key={story.id} story={story} />)}</div>
     </div>
   );

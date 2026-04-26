@@ -12,8 +12,11 @@ let server;
 let baseUrl;
 
 function request(pathname, options = {}) {
+  const headers = options.body instanceof FormData
+    ? { ...(options.headers || {}) }
+    : { 'Content-Type': 'application/json', ...(options.headers || {}) };
   return fetch(`${baseUrl}${pathname}`, {
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+    headers,
     ...options
   }).then(async response => {
     const text = await response.text();
@@ -1033,6 +1036,101 @@ test('admin approval publishes author story to public listing', async () => {
   const after = await request(`/api/stories?q=${encodeURIComponent(title)}`);
   assert.equal(after.response.status, 200);
   assert.equal(after.data.stories.length, 1);
+});
+
+test('author can add single and bulk chapters before story approval', async () => {
+  const author = await registerUser('pending-chapter-author@example.com', 'Pending Chapter Author');
+  const authorHeaders = { Authorization: `Bearer ${author.token}` };
+  const adminHeaders = { Authorization: `Bearer ${await loginToken()}` };
+  const title = 'Pending Story With Ready Chapters';
+
+  const create = await request('/api/author/stories', {
+    method: 'POST',
+    headers: authorHeaders,
+    body: JSON.stringify({
+      title,
+      description: 'Pending story with chapters that can be prepared before admin approval.',
+      categories: ['Author Flow'],
+      approvalStatus: 'pending'
+    })
+  });
+  assert.equal(create.response.status, 201);
+  assert.equal(create.data.story.approvalStatus, 'pending');
+
+  const single = await request(`/api/author/stories/${create.data.story.id}/chapters`, {
+    method: 'POST',
+    headers: authorHeaders,
+    body: JSON.stringify({
+      number: 1,
+      title: 'Chapter One Ready',
+      content: 'This is a prepared chapter added while the story is still pending approval. It should be saved for the author immediately.',
+      status: 'published'
+    })
+  });
+  assert.equal(single.response.status, 201);
+  assert.equal(single.data.chapter.status, 'approved');
+
+  const duplicate = await request(`/api/author/stories/${create.data.story.id}/chapters`, {
+    method: 'POST',
+    headers: authorHeaders,
+    body: JSON.stringify({
+      number: 1,
+      title: 'Duplicate Chapter Number',
+      content: 'This duplicate chapter number should be rejected by validation.',
+      status: 'published'
+    })
+  });
+  assert.equal(duplicate.response.status, 400);
+
+  const bulk = await request(`/api/author/stories/${create.data.story.id}/chapters/bulk`, {
+    method: 'POST',
+    headers: authorHeaders,
+    body: JSON.stringify({
+      mode: 'published',
+      access: 'free',
+      renumber: false,
+      chapters: [
+        { number: 2, title: 'Bulk Chapter Two', content: 'Second prepared chapter content for bulk creation before approval.' },
+        { number: 3, title: 'Bulk Chapter Three', content: 'Third prepared chapter content for bulk creation before approval.' }
+      ]
+    })
+  });
+  assert.equal(bulk.response.status, 201);
+  assert.equal(bulk.data.created, 2);
+  assert.equal(bulk.data.errors.length, 0);
+
+  const uploadBody = new FormData();
+  uploadBody.append('file', new Blob([`Chuong 4: Imported Four\nImported chapter four content.\n\nChapter 5 - Imported Five\nImported chapter five content.`], { type: 'text/plain' }), 'chapters.txt');
+  const imported = await request(`/api/author/stories/${create.data.story.id}/chapters/import`, {
+    method: 'POST',
+    headers: authorHeaders,
+    body: uploadBody
+  });
+  assert.equal(imported.response.status, 200);
+  assert.equal(imported.data.chapters.length, 2);
+  assert.equal(imported.data.chapters[0].number, 4);
+
+  const authorChapters = await request(`/api/author/chapters?storyId=${create.data.story.id}`, { headers: authorHeaders });
+  assert.equal(authorChapters.response.status, 200);
+  assert.equal(authorChapters.data.chapters.length, 3);
+
+  const beforePublic = await request(`/api/stories/${create.data.story.slug}`);
+  assert.equal(beforePublic.response.status, 404);
+
+  const approve = await request(`/api/admin/stories/${create.data.story.id}/status`, {
+    method: 'PATCH',
+    headers: adminHeaders,
+    body: JSON.stringify({ approvalStatus: 'approved' })
+  });
+  assert.equal(approve.response.status, 200);
+
+  const detail = await request(`/api/stories/${create.data.story.slug}`);
+  assert.equal(detail.response.status, 200);
+  assert.equal(detail.data.chapters.length, 3);
+
+  const reader = await request(`/api/stories/${create.data.story.slug}/chapters/1`);
+  assert.equal(reader.response.status, 200);
+  assert.equal(reader.data.chapter.title, 'Chapter One Ready');
 });
 
 test('draft rejected and hidden author stories are not public', async () => {

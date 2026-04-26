@@ -2,12 +2,14 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const mammoth = require('mammoth');
 
 const PORT = Number(process.env.PORT || 4000);
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || '*';
 const DB_PATH = path.join(__dirname, '..', 'data', 'db.json');
 const JSON_LIMIT = 4 * 1024 * 1024;
+const UPLOAD_LIMIT = 10 * 1024 * 1024;
 
 function now() {
   return new Date().toISOString();
@@ -131,6 +133,69 @@ function parseBody(req) {
   });
 }
 
+function readRawBody(req, limit = UPLOAD_LIMIT) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    req.on('data', chunk => {
+      size += chunk.length;
+      if (size > limit) {
+        reject(new Error('File qua lon.'));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+
+function splitBuffer(buffer, separator) {
+  const parts = [];
+  let start = 0;
+  let index = buffer.indexOf(separator, start);
+  while (index !== -1) {
+    parts.push(buffer.slice(start, index));
+    start = index + separator.length;
+    index = buffer.indexOf(separator, start);
+  }
+  parts.push(buffer.slice(start));
+  return parts;
+}
+
+async function parseMultipartRequest(req) {
+  const contentType = String(req.headers['content-type'] || '');
+  const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+  if (!boundaryMatch) throw new Error('Thieu multipart boundary.');
+  const boundary = Buffer.from(`--${boundaryMatch[1] || boundaryMatch[2]}`);
+  const raw = await readRawBody(req, UPLOAD_LIMIT);
+  const files = [];
+  const fields = {};
+
+  splitBuffer(raw, boundary).forEach(part => {
+    let chunk = part;
+    if (chunk.length < 4) return;
+    if (chunk.slice(0, 2).toString() === '\r\n') chunk = chunk.slice(2);
+    if (chunk.slice(-2).toString() === '\r\n') chunk = chunk.slice(0, -2);
+    if (chunk.equals(Buffer.from('--'))) return;
+    const headerEnd = chunk.indexOf(Buffer.from('\r\n\r\n'));
+    if (headerEnd === -1) return;
+    const headers = chunk.slice(0, headerEnd).toString('utf8');
+    let data = chunk.slice(headerEnd + 4);
+    if (data.slice(-2).toString() === '\r\n') data = data.slice(0, -2);
+    const disposition = headers.match(/content-disposition:\s*form-data;([^\r\n]+)/i)?.[1] || '';
+    const name = disposition.match(/name="([^"]+)"/i)?.[1] || '';
+    const filename = disposition.match(/filename="([^"]*)"/i)?.[1] || '';
+    const mimeType = headers.match(/content-type:\s*([^\r\n]+)/i)?.[1]?.trim() || '';
+    if (!name) return;
+    if (filename) files.push({ fieldname: name, filename: path.basename(filename), mimeType, data });
+    else fields[name] = data.toString('utf8');
+  });
+
+  return { fields, files };
+}
+
 function getAuthUser(req, db) {
   const header = req.headers.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : '';
@@ -231,8 +296,8 @@ const RANKING_PERIODS = ['day', 'week', 'month', 'year', 'all'];
 const RANKING_METRICS = ['views', 'follows', 'rating', 'comments', 'revenue'];
 const DAY_MS = 24 * 60 * 60 * 1000;
 const VALID_STORY_APPROVAL_STATUSES = ['draft', 'pending', 'approved', 'rejected'];
-const VALID_CHAPTER_STATUSES = ['draft', 'pending', 'reviewing', 'approved', 'rejected', 'hidden', 'scheduled'];
-const AUTHOR_CHAPTER_STATUSES = ['draft', 'pending', 'scheduled'];
+const VALID_CHAPTER_STATUSES = ['draft', 'pending', 'reviewing', 'approved', 'published', 'rejected', 'hidden', 'scheduled'];
+const AUTHOR_CHAPTER_STATUSES = ['draft', 'approved', 'published', 'hidden', 'scheduled'];
 const PROMOTION_PACKAGES = [
   { id: 'promo-1', title: 'Day top trang chu', days: 3, price: 120, reach: '25.000 luot hien thi', features: ['Gan nhan de xuat', 'Uu tien trong muc hot'] },
   { id: 'promo-2', title: 'Goi tang truong', days: 7, price: 260, reach: '80.000 luot hien thi', features: ['Banner the loai', 'Day top tim kiem', 'Bao cao hieu qua'], featured: true },
@@ -501,6 +566,104 @@ function wordCount(value) {
   const text = String(value || '').trim();
   if (!text) return 0;
   return text.split(/\s+/).filter(Boolean).length;
+}
+
+function decodeTextBuffer(buffer) {
+  if (!buffer || !buffer.length) return '';
+  if (buffer.length >= 2 && buffer[0] === 0xff && buffer[1] === 0xfe) return buffer.slice(2).toString('utf16le');
+  if (buffer.length >= 2 && buffer[0] === 0xfe && buffer[1] === 0xff) {
+    const swapped = Buffer.alloc(buffer.length - 2);
+    for (let index = 2; index < buffer.length; index += 2) {
+      swapped[index - 2] = buffer[index + 1] || 0;
+      swapped[index - 1] = buffer[index];
+    }
+    return swapped.toString('utf16le');
+  }
+  if (buffer.length >= 3 && buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf) return buffer.slice(3).toString('utf8');
+  return buffer.toString('utf8');
+}
+
+function romanToNumber(value) {
+  const input = String(value || '').toUpperCase();
+  if (!/^[IVXLCDM]+$/.test(input)) return Number(value) || 0;
+  const map = { I: 1, V: 5, X: 10, L: 50, C: 100, D: 500, M: 1000 };
+  return input.split('').reduce((sum, char, index, chars) => {
+    const current = map[char] || 0;
+    const next = map[chars[index + 1]] || 0;
+    return sum + (current < next ? -current : current);
+  }, 0);
+}
+
+function parseChapterHeading(line) {
+  const pattern = /^\s*(?:(?:quy\u1ec3n|quyen)\s+([0-9ivxlcdm]+)\s*[-:–—]\s*)?(ch\u01b0\u01a1ng|chuong|chapter|h\u1ed3i|hoi|quy\u1ec3n|quyen|ph\u00f3\s*b\u1ea3n|pho\s*ban)\s+([0-9ivxlcdm]+)(?:\s*[:\-–—]\s*(.+))?\s*$/i;
+  const match = String(line || '').match(pattern);
+  if (!match) return null;
+  const number = romanToNumber(match[3]);
+  const suffix = String(match[4] || '').trim();
+  const heading = String(line || '').trim();
+  return {
+    number,
+    title: suffix || heading,
+    heading
+  };
+}
+
+function parseChaptersFromText(text, { startNumber = 1 } = {}) {
+  const source = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+  if (!source) return { chapters: [], warnings: ['Noi dung rong.'] };
+  const lines = source.split('\n');
+  const sections = [];
+  let current = null;
+
+  lines.forEach(line => {
+    const heading = parseChapterHeading(line);
+    if (heading) {
+      if (current) sections.push(current);
+      current = { ...heading, body: [] };
+      return;
+    }
+    if (current) current.body.push(line);
+  });
+  if (current) sections.push(current);
+
+  if (!sections.length) {
+    return {
+      chapters: [{
+        number: startNumber,
+        title: `Chuong ${startNumber}`,
+        content: source,
+        wordCount: wordCount(source),
+        warnings: ['Khong phat hien heading chuong, da tao mot chuong duy nhat.']
+      }],
+      warnings: ['Khong phat hien heading chuong, vui long kiem tra dinh dang neu muon tach nhieu chuong.']
+    };
+  }
+
+  const chapters = sections.map((section, index) => {
+    const number = section.number || startNumber + index;
+    const content = section.body.join('\n').trim();
+    const warnings = [];
+    if (!content) warnings.push('Noi dung chuong rong.');
+    if (!section.title) warnings.push('Ten chuong rong.');
+    if (wordCount(content) > 0 && wordCount(content) < 80) warnings.push('Chuong hoi ngan.');
+    return {
+      number,
+      title: section.title || `Chuong ${number}`,
+      content,
+      wordCount: wordCount(content),
+      warnings
+    };
+  });
+
+  return { chapters, warnings: [] };
+}
+
+function nextChapterNumber(db, storyId) {
+  return Math.max(0, ...db.chapters.filter(item => item.storyId === storyId).map(item => Number(item.number || 0))) + 1;
+}
+
+function chapterNumberExists(db, storyId, number, currentChapterId) {
+  return db.chapters.some(item => item.storyId === storyId && item.id !== currentChapterId && Number(item.number) === Number(number));
 }
 
 function chapterAdminSummary(db, chapter) {
@@ -879,10 +1042,10 @@ function authorStoryApprovalStatus(body, fallback = 'draft') {
 
 function normalizeAuthorChapterStatus(value, fallback = 'draft') {
   const requested = String(value || fallback || 'draft').trim();
-  if (requested === 'submit') return 'pending';
-  if (requested === 'published' || requested === 'approved') return 'pending';
+  if (requested === 'submit' || requested === 'publish' || requested === 'published') return 'approved';
+  if (requested === 'approved') return 'approved';
   if (AUTHOR_CHAPTER_STATUSES.includes(requested)) return requested;
-  return fallback === 'approved' ? 'pending' : fallback;
+  return fallback === 'approved' || fallback === 'published' ? 'approved' : fallback;
 }
 
 function refreshStoryChapterMetadata(db, story, { touch = true } = {}) {
@@ -1045,7 +1208,7 @@ function storyLink(story, chapter) {
 }
 
 function notifyChapterPublished(db, story, chapter, actorId) {
-  if (!story || !chapter || !isPublicChapter(chapter) || chapter.notifiedAt) return;
+  if (!story || !chapter || !isPublicStory(story) || !isPublicChapter(chapter) || chapter.notifiedAt) return;
   const followers = db.follows
     .filter(follow => follow.storyId === story.id)
     .map(follow => follow.userId)
@@ -1862,6 +2025,124 @@ async function handle(req, res) {
       return send(res, 200, { chapters });
     }
 
+    const authorStoryImportParams = match(pathname, '/api/author/stories/:id/chapters/import');
+    if (authorStoryImportParams && req.method === 'POST') {
+      const user = requireUser(req, res, db);
+      if (!user) return;
+      const story = db.stories.find(item => item.id === authorStoryImportParams.id);
+      if (!story) return notFound(res);
+      if (!canEditStory(user, story)) return forbidden(res);
+      const upload = await parseMultipartRequest(req);
+      const file = upload.files.find(item => item.fieldname === 'file') || upload.files[0];
+      if (!file) return badRequest(res, 'Vui long chon file can import.');
+      const ext = path.extname(file.filename).toLowerCase();
+      let text = '';
+      if (ext === '.txt') {
+        text = decodeTextBuffer(file.data);
+      } else if (ext === '.docx') {
+        const result = await mammoth.extractRawText({ buffer: file.data });
+        text = result.value || '';
+      } else if (ext === '.pdf') {
+        return badRequest(res, 'Import PDF chua duoc ho tro on dinh. Vui long dung TXT hoac DOCX.');
+      } else {
+        return badRequest(res, 'Chi ho tro file .txt va .docx.');
+      }
+      const parsed = parseChaptersFromText(text, { startNumber: nextChapterNumber(db, story.id) });
+      return send(res, 200, {
+        file: {
+          name: file.filename,
+          size: file.data.length,
+          type: ext.replace('.', '')
+        },
+        chapters: parsed.chapters,
+        warnings: parsed.warnings
+      });
+    }
+
+    const authorStoryBulkParams = match(pathname, '/api/author/stories/:id/chapters/bulk');
+    if (authorStoryBulkParams && req.method === 'POST') {
+      const user = requireUser(req, res, db);
+      if (!user) return;
+      const story = db.stories.find(item => item.id === authorStoryBulkParams.id);
+      if (!story) return notFound(res);
+      if (!canEditStory(user, story)) return forbidden(res);
+      const body = await parseBody(req);
+      const incoming = Array.isArray(body.chapters) ? body.chapters : [];
+      if (!incoming.length) return badRequest(res, 'Danh sach chuong rong.');
+      const status = normalizeAuthorChapterStatus(body.mode || body.status, 'draft');
+      if (status === 'scheduled' && !body.scheduledAt) return badRequest(res, 'Vui long chon thoi gian len lich.');
+      const access = String(body.access || 'free').trim();
+      const inheritedPremium = Boolean(story.premium || ['vip', 'mixed'].includes(story.type));
+      const isPremium = access === 'inherit' ? inheritedPremium : access === 'vip' || access === 'paid';
+      const price = isPremium ? parsePositiveNumber(body.price ?? story.chapterPrice ?? story.price, 0) : 0;
+      if (isPremium && price <= 0) return badRequest(res, 'Gia chuong VIP phai lon hon 0.');
+      const renumber = body.renumber !== false;
+      let cursor = parsePositiveNumber(body.startNumber, nextChapterNumber(db, story.id));
+      const batchId = uid('batch');
+      const createdChapters = [];
+      const errors = [];
+      let skipped = 0;
+
+      incoming.forEach((item, index) => {
+        const content = String(item.content || '').trim();
+        const number = renumber ? cursor : Number(item.number || cursor);
+        if (renumber) cursor += 1;
+        if (!Number.isFinite(number) || number <= 0) {
+          skipped += 1;
+          errors.push({ index, number: item.number || null, reason: 'So chuong khong hop le' });
+          return;
+        }
+        const title = String(item.title || `Chuong ${number}`).trim();
+        if (!title) {
+          skipped += 1;
+          errors.push({ index, number, reason: 'Ten chuong rong' });
+          return;
+        }
+        if (!content) {
+          skipped += 1;
+          errors.push({ index, number, reason: 'Noi dung chuong rong' });
+          return;
+        }
+        if (chapterNumberExists(db, story.id, number) || createdChapters.some(chapter => Number(chapter.number) === Number(number))) {
+          skipped += 1;
+          errors.push({ index, number, reason: 'Trung so chuong' });
+          return;
+        }
+        const timestamp = now();
+        const chapter = {
+          id: uid('chap'),
+          storyId: story.id,
+          number,
+          title,
+          content,
+          preview: String(item.preview || content.slice(0, 320)).trim(),
+          isPremium,
+          price,
+          status,
+          scheduledAt: status === 'scheduled' ? String(body.scheduledAt) : '',
+          password: body.password ? String(body.password) : '',
+          wordCount: wordCount(content),
+          sourceBatchId: batchId,
+          views: 0,
+          createdAt: timestamp,
+          updatedAt: timestamp
+        };
+        createdChapters.push(chapter);
+      });
+
+      db.chapters.push(...createdChapters);
+      refreshStoryChapterMetadata(db, story);
+      createdChapters.forEach(chapter => notifyChapterPublished(db, story, chapter, user.id));
+      writeDb(db);
+      return send(res, 201, {
+        created: createdChapters.length,
+        skipped,
+        errors,
+        chapters: createdChapters.map(chapter => authorChapterSummary(db, chapter)),
+        story: authorStorySummary(db, story, user.id)
+      });
+    }
+
     const authorStoryChaptersParams = match(pathname, '/api/author/stories/:id/chapters');
     if (authorStoryChaptersParams && req.method === 'POST') {
       const user = requireUser(req, res, db);
@@ -1872,28 +2153,36 @@ async function handle(req, res) {
       const body = await parseBody(req);
       const inputError = validateChapterInput(body);
       if (inputError) return badRequest(res, inputError);
-      const nextNumber = Math.max(0, ...db.chapters.filter(item => item.storyId === story.id).map(item => item.number)) + 1;
+      const nextNumber = nextChapterNumber(db, story.id);
+      const chapterNumber = Number(body.number || nextNumber);
+      if (!Number.isFinite(chapterNumber) || chapterNumber <= 0) return badRequest(res, 'So chuong khong hop le.');
+      if (chapterNumberExists(db, story.id, chapterNumber)) return badRequest(res, 'So chuong da ton tai trong truyen nay.');
       const status = normalizeAuthorChapterStatus(body.status || body.mode, 'draft');
       if (status === 'scheduled' && !body.scheduledAt) return badRequest(res, 'Vui long chon thoi gian len lich.');
+      const isPremium = Boolean(body.isPremium ?? body.access === 'vip');
+      const price = parsePositiveNumber(body.price ?? body.chapterPrice, 0);
+      if (isPremium && price <= 0) return badRequest(res, 'Gia chuong VIP phai lon hon 0.');
       const timestamp = now();
       const chapter = {
         id: uid('chap'),
         storyId: story.id,
-        number: Number(body.number || nextNumber),
+        number: chapterNumber,
         title: String(body.title || `Chuong ${nextNumber}`).trim(),
         content: String(body.content || '').trim(),
         preview: String(body.preview || String(body.content || '').slice(0, 320)).trim(),
-        isPremium: Boolean(body.isPremium ?? body.access === 'vip'),
-        price: parsePositiveNumber(body.price ?? body.chapterPrice, 0),
+        isPremium,
+        price,
         status,
         scheduledAt: status === 'scheduled' ? String(body.scheduledAt) : '',
         password: body.password ? String(body.password) : '',
+        wordCount: wordCount(body.content),
         views: 0,
         createdAt: timestamp,
         updatedAt: timestamp
       };
       db.chapters.push(chapter);
-      story.updatedAt = timestamp;
+      refreshStoryChapterMetadata(db, story);
+      notifyChapterPublished(db, story, chapter, user.id);
       writeDb(db);
       return send(res, 201, { chapter: authorChapterSummary(db, chapter), story: authorStorySummary(db, story, user.id) });
     }
@@ -1913,8 +2202,18 @@ async function handle(req, res) {
       if (!targetStory) return notFound(res);
       if (!canEditStory(user, targetStory)) return forbidden(res);
       const hasStatusInput = body.status !== undefined || body.mode !== undefined;
+      const wasPublic = isPublicChapter(chapter);
       const status = hasStatusInput ? normalizeAuthorChapterStatus(body.status || body.mode, chapterStatus(chapter)) : chapterStatus(chapter);
       if (status === 'scheduled' && !(body.scheduledAt || chapter.scheduledAt)) return badRequest(res, 'Vui long chon thoi gian len lich.');
+      if (body.number !== undefined) {
+        const nextNumber = Number(body.number);
+        if (!Number.isFinite(nextNumber) || nextNumber <= 0) return badRequest(res, 'So chuong khong hop le.');
+        if (chapterNumberExists(db, targetStory.id, nextNumber, chapter.id)) return badRequest(res, 'So chuong da ton tai trong truyen nay.');
+      }
+      const nextIsPremium = body.isPremium !== undefined ? Boolean(body.isPremium) : body.access !== undefined ? body.access === 'vip' : Boolean(chapter.isPremium);
+      if ((body.isPremium !== undefined || body.access !== undefined || body.price !== undefined) && nextIsPremium && parsePositiveNumber(body.price ?? chapter.price, 0) <= 0) {
+        return badRequest(res, 'Gia chuong VIP phai lon hon 0.');
+      }
       ['title', 'content', 'preview'].forEach(key => {
         if (body[key] !== undefined) chapter[key] = String(body[key]).trim();
       });
@@ -1926,12 +2225,14 @@ async function handle(req, res) {
       if (hasStatusInput) chapter.status = status;
       if (body.scheduledAt !== undefined) chapter.scheduledAt = String(body.scheduledAt || '');
       if (status === 'pending') chapter.rejectionReason = '';
+      if (body.content !== undefined) chapter.wordCount = wordCount(chapter.content);
       chapter.updatedAt = now();
       refreshStoryChapterMetadata(db, targetStory);
       if (oldStoryId !== chapter.storyId) {
         const oldStory = db.stories.find(item => item.id === oldStoryId);
         refreshStoryChapterMetadata(db, oldStory);
       }
+      if (!wasPublic) notifyChapterPublished(db, targetStory, chapter, user.id);
       writeDb(db);
       return send(res, 200, { chapter: authorChapterSummary(db, chapter), story: authorStorySummary(db, targetStory, user.id) });
     }
@@ -2236,11 +2537,14 @@ async function handle(req, res) {
       const story = db.stories.find(item => item.id === adminChapterParams.id);
       if (!story) return notFound(res);
       const body = await parseBody(req);
-      const nextNumber = Math.max(0, ...db.chapters.filter(item => item.storyId === story.id).map(item => item.number)) + 1;
+      const nextNumber = nextChapterNumber(db, story.id);
+      const chapterNumber = Number(body.number || nextNumber);
+      if (!Number.isFinite(chapterNumber) || chapterNumber <= 0) return badRequest(res, 'So chuong khong hop le.');
+      if (chapterNumberExists(db, story.id, chapterNumber)) return badRequest(res, 'So chuong da ton tai trong truyen nay.');
       const chapter = {
         id: uid('chap'),
         storyId: story.id,
-        number: Number(body.number || nextNumber),
+        number: chapterNumber,
         title: body.title || `Chương ${nextNumber}`,
         content: body.content || 'Nội dung chương đang được cập nhật.',
         preview: body.preview || 'Đây là đoạn xem trước của chương.',
@@ -2248,6 +2552,7 @@ async function handle(req, res) {
         price: Number(body.price || 0),
         status: VALID_CHAPTER_STATUSES.includes(body.status) ? body.status : 'approved',
         password: body.password ? String(body.password) : '',
+        wordCount: wordCount(body.content),
         views: 0,
         createdAt: now(),
         updatedAt: now()
@@ -2266,6 +2571,12 @@ async function handle(req, res) {
       const chapter = db.chapters.find(item => item.id === adminChapterUpdateParams.id);
       if (!chapter) return notFound(res);
       const body = await parseBody(req);
+      const story = db.stories.find(item => item.id === chapter.storyId);
+      if (body.number !== undefined) {
+        const nextNumber = Number(body.number);
+        if (!Number.isFinite(nextNumber) || nextNumber <= 0) return badRequest(res, 'So chuong khong hop le.');
+        if (chapterNumberExists(db, chapter.storyId, nextNumber, chapter.id)) return badRequest(res, 'So chuong da ton tai trong truyen nay.');
+      }
       ['title','content','preview'].forEach(key => {
         if (body[key] !== undefined) chapter[key] = String(body[key]);
       });
@@ -2280,7 +2591,7 @@ async function handle(req, res) {
         if (body.status === 'approved') chapter.rejectionReason = '';
       }
       if (body.password !== undefined) chapter.password = String(body.password || '');
-      const story = db.stories.find(item => item.id === chapter.storyId);
+      if (body.content !== undefined) chapter.wordCount = wordCount(chapter.content);
       chapter.updatedAt = now();
       if (story) refreshStoryChapterMetadata(db, story);
       if (!wasPublic && story) notifyChapterPublished(db, story, chapter, admin.id);
