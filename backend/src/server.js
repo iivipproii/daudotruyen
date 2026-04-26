@@ -202,7 +202,7 @@ function getAuthUser(req, db) {
   const payload = verifyToken(token);
   if (!payload) return null;
   const user = db.users.find(user => user.id === payload.id);
-  if (!user || user.status === 'deactivated') return null;
+  if (!user || user.status === 'deactivated' || user.status === 'locked') return null;
   if (Number(payload.tokenVersion || 0) !== Number(user.tokenVersion || 0)) return null;
   return user;
 }
@@ -297,6 +297,11 @@ const RANKING_METRICS = ['views', 'follows', 'rating', 'comments', 'revenue'];
 const DAY_MS = 24 * 60 * 60 * 1000;
 const VALID_STORY_APPROVAL_STATUSES = ['draft', 'pending', 'approved', 'rejected'];
 const VALID_CHAPTER_STATUSES = ['draft', 'pending', 'reviewing', 'approved', 'published', 'rejected', 'hidden', 'scheduled'];
+const VALID_ADMIN_USER_STATUSES = ['active', 'locked'];
+const VALID_ADMIN_USER_ROLES = ['reader', 'user', 'author', 'admin'];
+const VALID_REPORT_STATUSES = ['open', 'reviewing', 'resolved', 'rejected'];
+const VALID_COMMENT_STATUSES = ['visible', 'hidden', 'deleted'];
+const VALID_TRANSACTION_TYPES = ['topup', 'purchase', 'bonus', 'admin_adjustment', 'refund', 'promotion', 'withdrawal', 'author_payout'];
 const AUTHOR_CHAPTER_STATUSES = ['draft', 'approved', 'published', 'hidden', 'scheduled'];
 const PROMOTION_PACKAGES = [
   { id: 'promo-1', title: 'Day top trang chu', days: 3, price: 120, reach: '25.000 luot hien thi', features: ['Gan nhan de xuat', 'Uu tien trong muc hot'] },
@@ -349,7 +354,12 @@ function chapterStatus(chapter) {
 }
 
 function isPublicChapter(chapter) {
-  return chapterStatus(chapter) === 'approved';
+  if (!chapter) return false;
+  if (chapterStatus(chapter) === 'approved') return true;
+  if (chapter.status === 'scheduled' && chapter.scheduledAt) {
+    return new Date(chapter.scheduledAt).getTime() <= Date.now();
+  }
+  return false;
 }
 
 function defaultNotificationPreferences() {
@@ -822,10 +832,14 @@ function ensureDbShape(db) {
   db.ratings ||= [];
   db.notifications ||= [];
   db.reports ||= [];
+  db.adminLogs ||= [];
+  db.adminNotifications ||= [];
+  db.taxonomy ||= {};
   db.newsletters ||= [];
   db.viewEvents ||= [];
   db.promotions ||= [];
   db.users.forEach(user => {
+    if (!user.status) user.status = 'active';
     user.tokenVersion = Number(user.tokenVersion || 0);
     user.notificationPreferences = normalizeNotificationPreferences(user.notificationPreferences || user.preferences);
     user.preferences = normalizeAccountPreferences(user.preferences, user.notificationPreferences);
@@ -858,7 +872,17 @@ function ensureDbShape(db) {
     if (chapter.status && !VALID_CHAPTER_STATUSES.includes(chapter.status)) chapter.status = 'approved';
     if (!chapter.createdAt) chapter.createdAt = now();
     if (!chapter.updatedAt) chapter.updatedAt = chapter.createdAt;
+    chapter.wordCount = Number(chapter.wordCount ?? wordCount(chapter.content));
   });
+  db.comments.forEach(comment => {
+    if (!comment.status) comment.status = 'visible';
+    if (!VALID_COMMENT_STATUSES.includes(comment.status)) comment.status = 'visible';
+  });
+  db.transactions.forEach(transaction => {
+    transaction.status ||= 'success';
+    if (!VALID_TRANSACTION_TYPES.includes(transaction.type)) transaction.type = 'bonus';
+  });
+  ensureTaxonomy(db);
   db.promotions.forEach(promotion => {
     if (!promotion.id) promotion.id = uid('promo');
     if (!promotion.createdAt) promotion.createdAt = now();
@@ -880,6 +904,295 @@ function isPublicStory(story) {
   return !story.hidden && (story.approvalStatus || 'approved') === 'approved';
 }
 
+function cloneForLog(value) {
+  if (value === undefined || value === null) return value;
+  return JSON.parse(JSON.stringify(value));
+}
+
+function pageParams(url) {
+  const page = Math.max(1, parsePositiveNumber(url.searchParams.get('page'), 1));
+  const limit = Math.min(100, Math.max(1, parsePositiveNumber(url.searchParams.get('limit'), 50)));
+  return { page, limit };
+}
+
+function paginate(items, url) {
+  const { page, limit } = pageParams(url);
+  const total = items.length;
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  const start = (page - 1) * limit;
+  return {
+    items: items.slice(start, start + limit),
+    pagination: { page, limit, total, totalPages }
+  };
+}
+
+function matchesSearch(values, query) {
+  const text = String(query || '').trim().toLowerCase();
+  if (!text) return true;
+  return values.filter(Boolean).join(' ').toLowerCase().includes(text);
+}
+
+function normalizeStoredRole(role) {
+  const value = String(role || '').trim();
+  if (value === 'reader') return 'user';
+  return ['user', 'author', 'admin'].includes(value) ? value : null;
+}
+
+function roleForAdmin(role) {
+  return role === 'user' ? 'reader' : role || 'reader';
+}
+
+function adminUserSummary(db, user) {
+  const safe = safeUser(user);
+  const storyCount = db.stories.filter(story => getStoryOwnerId(story) === user.id).length;
+  const reportCount = db.reports.filter(report => {
+    const target = reportTarget(db, report);
+    return report.userId === user.id || target.reportedUserId === user.id;
+  }).length;
+  return {
+    ...safe,
+    role: roleForAdmin(safe.role),
+    status: safe.status || 'active',
+    coins: Number(safe.seeds || 0),
+    stories: storyCount,
+    storyCount,
+    reports: reportCount,
+    reportCount,
+    joinedAt: safe.createdAt || null,
+    lastActiveAt: safe.lastActiveAt || safe.updatedAt || safe.createdAt || null,
+    note: safe.note || ''
+  };
+}
+
+function adminStorySummary(db, story, viewerId) {
+  const owner = db.users.find(user => user.id === getStoryOwnerId(story));
+  const allChapters = db.chapters.filter(chapter => chapter.storyId === story.id);
+  return {
+    ...enrichStory(db, story, viewerId, true),
+    owner: safeUser(owner),
+    ownerName: owner?.name || '',
+    publishStatus: story.hidden ? 'hidden' : isPublicStory(story) ? 'published' : story.approvalStatus || 'pending',
+    hot: Boolean(story.hot),
+    recommended: Boolean(story.recommended),
+    banner: Boolean(story.banner),
+    comments: db.comments.filter(comment => comment.storyId === story.id).length,
+    totalChapters: allChapters.length,
+    pendingChapters: allChapters.filter(chapter => ['pending', 'reviewing'].includes(chapter.status)).length
+  };
+}
+
+function adminTransactionSummary(db, transaction) {
+  const user = db.users.find(item => item.id === transaction.userId);
+  const amount = Number(transaction.amount || 0);
+  const seedAmount = Number(transaction.seeds ?? transaction.coins ?? Math.abs(amount));
+  return {
+    ...transaction,
+    type: transaction.type || 'bonus',
+    status: transaction.status || 'success',
+    method: transaction.method || (transaction.type === 'topup' ? 'manual_topup' : transaction.type === 'purchase' ? 'wallet' : 'internal'),
+    amount,
+    seeds: seedAmount,
+    coins: seedAmount,
+    amountVnd: Number(transaction.amountVnd ?? transaction.vndAmount ?? transaction.money ?? transaction.priceVnd ?? 0),
+    userName: transaction.userName || user?.name || transaction.userId || '',
+    userEmail: user?.email || ''
+  };
+}
+
+function reportTarget(db, report) {
+  const targetType = report.targetType || report.type || (report.commentId ? 'comment' : report.chapterId ? 'chapter' : 'story');
+  const targetId = report.targetId || report.commentId || report.chapterId || report.storyId;
+  let story = report.storyId ? db.stories.find(item => item.id === report.storyId) : null;
+  let chapter = null;
+  let comment = null;
+  let title = report.targetTitle || '';
+  let reportedUserId = report.targetUserId || null;
+
+  if (targetType === 'comment') {
+    comment = db.comments.find(item => item.id === targetId);
+    if (comment) {
+      story ||= db.stories.find(item => item.id === comment.storyId);
+      chapter = comment.chapterId ? db.chapters.find(item => item.id === comment.chapterId) : null;
+      title ||= comment.body?.slice(0, 80) || 'Comment';
+      reportedUserId ||= comment.userId;
+    }
+  } else if (targetType === 'chapter') {
+    chapter = db.chapters.find(item => item.id === targetId);
+    if (chapter) {
+      story ||= db.stories.find(item => item.id === chapter.storyId);
+      title ||= `${story?.title || ''} - Chapter ${chapter.number}`;
+      reportedUserId ||= story ? getStoryOwnerId(story) : null;
+    }
+  } else {
+    story ||= db.stories.find(item => item.id === targetId);
+    if (story) {
+      title ||= story.title;
+      reportedUserId ||= getStoryOwnerId(story);
+    }
+  }
+
+  return {
+    type: targetType,
+    id: targetId,
+    story,
+    chapter,
+    comment,
+    title: title || 'Reported content',
+    storyTitle: story?.title || report.storyTitle || '',
+    reportedUserId
+  };
+}
+
+function adminReportSummary(db, report) {
+  const target = reportTarget(db, report);
+  const reporter = db.users.find(user => user.id === report.userId);
+  const reportedUser = db.users.find(user => user.id === target.reportedUserId);
+  return {
+    ...report,
+    type: target.type,
+    targetType: target.type,
+    targetId: target.id,
+    targetTitle: target.title,
+    storyTitle: target.storyTitle,
+    status: report.status || 'open',
+    severity: report.severity || 'medium',
+    detail: report.detail || report.reason || '',
+    reporter: safeUser(reporter),
+    user: safeUser(reporter),
+    userName: reporter?.name || '',
+    reportedUser: safeUser(reportedUser),
+    story: target.story ? storySummary(enrichStory(db, target.story, null, true)) : null,
+    chapter: target.chapter ? chapterAdminSummary(db, target.chapter) : null,
+    comment: target.comment ? adminCommentSummary(db, target.comment) : null
+  };
+}
+
+function adminCommentSummary(db, comment) {
+  const story = db.stories.find(item => item.id === comment.storyId);
+  const chapter = db.chapters.find(item => item.id === comment.chapterId);
+  const user = db.users.find(item => item.id === comment.userId);
+  return {
+    ...comment,
+    status: comment.status || 'visible',
+    userName: user?.name || '',
+    userEmail: user?.email || '',
+    user: safeUser(user),
+    storyTitle: story?.title || '',
+    chapterTitle: chapter?.title || '',
+    chapterNumber: chapter?.number || null,
+    reports: db.reports.filter(report => report.commentId === comment.id || (report.targetType === 'comment' && report.targetId === comment.id)).length
+  };
+}
+
+function taxonomyItem(value, type = 'category') {
+  if (value && typeof value === 'object') {
+    const name = String(value.name || value.label || '').trim();
+    return name ? {
+      id: String(value.id || `${type}_${slugify(name)}`),
+      name,
+      slug: String(value.slug || slugify(name)),
+      description: String(value.description || ''),
+      color: String(value.color || ''),
+      createdAt: value.createdAt || now(),
+      updatedAt: value.updatedAt || value.createdAt || now()
+    } : null;
+  }
+  const name = String(value || '').trim();
+  return name ? {
+    id: `${type}_${slugify(name)}`,
+    name,
+    slug: slugify(name),
+    description: '',
+    color: '',
+    createdAt: now(),
+    updatedAt: now()
+  } : null;
+}
+
+function normalizeTaxonomyList(input, fallbackNames, type) {
+  const byName = new Map();
+  [...(Array.isArray(input) ? input : []), ...fallbackNames].forEach(value => {
+    const item = taxonomyItem(value, type);
+    if (item && !byName.has(item.name.toLowerCase())) byName.set(item.name.toLowerCase(), item);
+  });
+  return Array.from(byName.values()).sort((a, b) => a.name.localeCompare(b.name, 'vi'));
+}
+
+function ensureTaxonomy(db) {
+  db.taxonomy ||= {};
+  const categoryNames = Array.from(new Set(db.stories.flatMap(story => story.categories || []))).filter(Boolean);
+  const tagNames = Array.from(new Set(db.stories.flatMap(story => story.tags || []))).filter(Boolean);
+  db.taxonomy.categories = normalizeTaxonomyList(db.taxonomy.categories, categoryNames, 'cat');
+  db.taxonomy.tags = normalizeTaxonomyList(db.taxonomy.tags, tagNames, 'tag');
+  return db.taxonomy;
+}
+
+function taxonomyResponse(db) {
+  const taxonomy = ensureTaxonomy(db);
+  const categoryUsage = new Map();
+  const tagUsage = new Map();
+  db.stories.forEach(story => {
+    (story.categories || []).forEach(name => categoryUsage.set(name.toLowerCase(), Number(categoryUsage.get(name.toLowerCase()) || 0) + 1));
+    (story.tags || []).forEach(name => tagUsage.set(name.toLowerCase(), Number(tagUsage.get(name.toLowerCase()) || 0) + 1));
+  });
+  return {
+    categories: taxonomy.categories.map(item => ({ ...item, usage: Number(categoryUsage.get(item.name.toLowerCase()) || 0) })),
+    tags: taxonomy.tags.map(item => ({ ...item, usage: Number(tagUsage.get(item.name.toLowerCase()) || 0) }))
+  };
+}
+
+function logAdminAction(db, admin, action, entityType, entityId, before, after, note = '') {
+  db.adminLogs ||= [];
+  const entry = {
+    id: uid('log'),
+    adminId: admin.id,
+    adminName: admin.name || admin.email,
+    action,
+    entityType,
+    entityId,
+    before: cloneForLog(before),
+    after: cloneForLog(after),
+    note: String(note || '').slice(0, 500),
+    createdAt: now()
+  };
+  db.adminLogs.unshift(entry);
+  return entry;
+}
+
+function adminDashboard(db) {
+  const pendingReports = db.reports.filter(item => ['open', 'reviewing'].includes(item.status || 'open')).length;
+  const pendingStories = db.stories.filter(item => (item.approvalStatus || 'approved') === 'pending').length;
+  const pendingChapters = db.chapters.filter(item => ['pending', 'reviewing'].includes(item.status || 'approved')).length;
+  const revenueSeeds = db.transactions
+    .filter(item => ['topup', 'purchase'].includes(item.type) && (item.status || 'success') === 'success')
+    .reduce((sum, item) => sum + Math.abs(Number(item.amount || 0)), 0);
+  const revenueVnd = db.transactions
+    .filter(item => (item.status || 'success') === 'success')
+    .reduce((sum, item) => sum + Number(item.amountVnd ?? item.vndAmount ?? item.money ?? 0), 0);
+  const latestActivities = db.adminLogs.slice(0, 12).map(item => ({
+    id: item.id,
+    action: item.action,
+    entityType: item.entityType,
+    entityId: item.entityId,
+    adminName: item.adminName,
+    note: item.note,
+    createdAt: item.createdAt
+  }));
+  return {
+    users: db.users.length,
+    stories: db.stories.length,
+    chapters: db.chapters.length,
+    transactions: db.transactions.length,
+    revenueSeeds,
+    revenueVnd,
+    views: db.stories.reduce((sum, story) => sum + Number(story.views || 0), 0),
+    pendingReports,
+    pendingStories,
+    pendingChapters,
+    latestActivities
+  };
+}
+
 function publicComment(db, comment) {
   const user = db.users.find(item => item.id === comment.userId);
   return {
@@ -898,6 +1211,7 @@ function publicComment(db, comment) {
 function publicCommentsForStory(db, storyId) {
   const comments = db.comments
     .filter(comment => comment.storyId === storyId)
+    .filter(comment => (comment.status || 'visible') === 'visible')
     .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
   const byId = new Map(comments.map(comment => [comment.id, { ...publicComment(db, comment), replies: [] }]));
   const roots = [];
@@ -1246,7 +1560,7 @@ async function handle(req, res) {
       const password = String(body.password || '');
       const user = db.users.find(item => item.email.toLowerCase() === email);
       if (!user) return badRequest(res, 'Email hoặc mật khẩu không đúng.');
-      if (user.status === 'deactivated') return forbidden(res);
+      if (user.status === 'deactivated' || user.status === 'locked') return forbidden(res);
       const check = hashPassword(password, user.salt);
       if (check.passwordHash !== user.passwordHash) return badRequest(res, 'Email hoặc mật khẩu không đúng.');
       return send(res, 200, { token: createToken(user), user: safeUser(user) });
@@ -1284,7 +1598,7 @@ async function handle(req, res) {
       createNotification(db, user.id, {
         type: 'system',
         title: 'Chào mừng đến Đậu Đỏ Truyện',
-        body: 'Bạn đã nhận 30 xu thưởng đăng ký để bắt đầu đọc truyện trả phí.',
+        body: 'Bạn đã nhận 30 Đậu thưởng đăng ký để bắt đầu đọc truyện trả phí.',
         link: '/wallet'
       });
       writeDb(db);
@@ -1666,7 +1980,7 @@ async function handle(req, res) {
       const premiumChapters = publicChapters.filter(chapter => chapter.isPremium);
       const price = Math.max(1, Math.max(49, (story.price || 1) * publicChapters.length));
       if (premiumChapters.length === 0) return send(res, 200, { unlocked: true, user: safeUser(user), price: 0 });
-      if (user.seeds < price) return badRequest(res, 'Số dư xu không đủ để mua combo.');
+      if (user.seeds < price) return badRequest(res, 'Số dư Đậu không đủ để mua combo.');
       user.seeds -= price;
       db.purchases.push({ id: uid('pur'), userId: user.id, storyId: story.id, chapterId: null, combo: true, price, createdAt: now() });
       db.transactions.push({ id: uid('txn'), userId: user.id, storyId: story.id, chapterId: null, price, type: 'purchase', amount: -price, note: `Mua combo ${story.title}`, createdAt: now() });
@@ -1800,11 +2114,11 @@ async function handle(req, res) {
       const seeds = packs[body.packageId];
       if (!seeds) return badRequest(res, 'Gói nạp không hợp lệ.');
       user.seeds += seeds;
-      db.transactions.push({ id: uid('txn'), userId: user.id, type: 'topup', amount: seeds, note: `Nạp ${seeds} xu`, createdAt: now() });
+      db.transactions.push({ id: uid('txn'), userId: user.id, type: 'topup', amount: seeds, note: `Nạp ${seeds} Đậu`, createdAt: now() });
       createNotification(db, user.id, {
         type: 'wallet',
         title: 'Nạp Đậu thành công',
-        body: `Tài khoản của bạn vừa được cộng ${seeds} xu.`,
+        body: `Tài khoản của bạn vừa được cộng ${seeds} Đậu.`,
         link: '/wallet'
       });
       writeDb(db);
@@ -1821,7 +2135,7 @@ async function handle(req, res) {
       if (db.purchases.some(item => item.userId === user.id && item.chapterId === chapter.id)) {
         return send(res, 200, { unlocked: true, user: safeUser(user) });
       }
-      if (user.seeds < chapter.price) return badRequest(res, 'Số dư xu không đủ. Vui lòng nạp thêm.');
+      if (user.seeds < chapter.price) return badRequest(res, 'Số dư Đậu không đủ. Vui lòng nạp thêm.');
       user.seeds -= chapter.price;
       db.purchases.push({ id: uid('pur'), userId: user.id, storyId: chapter.storyId, chapterId: chapter.id, price: chapter.price, createdAt: now() });
       db.transactions.push({ id: uid('txn'), userId: user.id, storyId: chapter.storyId, chapterId: chapter.id, price: chapter.price, type: 'purchase', amount: -chapter.price, note: `Mở khóa ${chapter.title}`, createdAt: now() });
@@ -2279,7 +2593,7 @@ async function handle(req, res) {
       if (!canEditStory(user, story)) return forbidden(res);
       const pkg = PROMOTION_PACKAGES.find(item => item.id === body.packageId);
       if (!pkg) return badRequest(res, 'Goi quang ba khong hop le.');
-      if (Number(user.seeds || 0) < pkg.price) return badRequest(res, 'So du xu khong du de mua goi quang ba.');
+      if (Number(user.seeds || 0) < pkg.price) return badRequest(res, 'So du Dau khong du de mua goi quang ba.');
       const timestamp = now();
       const startsAt = body.startsAt ? new Date(body.startsAt).toISOString() : timestamp;
       const endsAt = new Date(new Date(startsAt).getTime() + pkg.days * DAY_MS).toISOString();
@@ -2320,59 +2634,437 @@ async function handle(req, res) {
       return send(res, 201, { promotion: promotionResponse(db, promotion), balance: user.seeds, user: safeUser(user) });
     }
 
-    if (req.method === 'GET' && pathname === '/api/admin/stats') {
+    if (req.method === 'GET' && (pathname === '/api/admin/dashboard' || pathname === '/api/admin/stats')) {
       const admin = requireAdmin(req, res, db);
       if (!admin) return;
-      const revenueSeeds = db.transactions.filter(item => item.type === 'purchase').reduce((sum, item) => sum + Math.abs(item.amount), 0);
-      return send(res, 200, {
-        stats: {
-          users: db.users.length,
-          stories: db.stories.length,
-          chapters: db.chapters.length,
-          transactions: db.transactions.length,
-          revenueSeeds,
-          views: db.stories.reduce((sum, story) => sum + story.views, 0)
-        }
-      });
+      return send(res, 200, { stats: adminDashboard(db) });
     }
 
     if (req.method === 'GET' && pathname === '/api/admin/users') {
       const admin = requireAdmin(req, res, db);
       if (!admin) return;
-      return send(res, 200, { users: db.users.map(safeUser) });
+      const query = url.searchParams.get('query') || '';
+      const role = url.searchParams.get('role') || '';
+      const status = url.searchParams.get('status') || '';
+      let users = db.users.map(user => adminUserSummary(db, user));
+      users = users.filter(user => matchesSearch([user.name, user.email, user.note], query));
+      if (role && role !== 'all') users = users.filter(user => user.role === role || normalizeStoredRole(role) === user.role);
+      if (status && status !== 'all') users = users.filter(user => user.status === status);
+      users.sort((a, b) => new Date(b.joinedAt || 0) - new Date(a.joinedAt || 0));
+      const page = paginate(users, url);
+      return send(res, 200, { users: page.items, pagination: page.pagination });
+    }
+
+    const adminUserParams = match(pathname, '/api/admin/users/:id');
+    if (adminUserParams && req.method === 'PATCH') {
+      const admin = requireAdmin(req, res, db);
+      if (!admin) return;
+      const target = db.users.find(item => item.id === adminUserParams.id);
+      if (!target) return notFound(res);
+      const body = await parseBody(req);
+      const before = adminUserSummary(db, target);
+      if (body.status !== undefined) {
+        if (!VALID_ADMIN_USER_STATUSES.includes(body.status)) return badRequest(res, 'Trang thai user khong hop le.');
+        if (target.id === admin.id && body.status === 'locked') return badRequest(res, 'Admin khong the tu khoa tai khoan cua minh.');
+        if (target.status !== body.status) target.tokenVersion = Number(target.tokenVersion || 0) + 1;
+        target.status = body.status;
+      }
+      if (body.role !== undefined) {
+        if (!VALID_ADMIN_USER_ROLES.includes(body.role)) return badRequest(res, 'Vai tro user khong hop le.');
+        const nextRole = normalizeStoredRole(body.role);
+        if (!nextRole) return badRequest(res, 'Vai tro user khong hop le.');
+        target.role = nextRole;
+      }
+      if (body.note !== undefined) target.note = String(body.note || '').slice(0, 500);
+      target.updatedAt = now();
+      const after = adminUserSummary(db, target);
+      const action = before.status !== after.status
+        ? (after.status === 'locked' ? 'lock_user' : 'unlock_user')
+        : before.role !== after.role ? 'change_role' : 'update_user';
+      logAdminAction(db, admin, action, 'user', target.id, before, after, body.note || '');
+      writeDb(db);
+      return send(res, 200, { user: after });
+    }
+
+    const adminAdjustBalanceParams = match(pathname, '/api/admin/users/:id/adjust-balance');
+    if (adminAdjustBalanceParams && req.method === 'POST') {
+      const admin = requireAdmin(req, res, db);
+      if (!admin) return;
+      const target = db.users.find(item => item.id === adminAdjustBalanceParams.id);
+      if (!target) return notFound(res);
+      const body = await parseBody(req);
+      const amount = Number(body.amount);
+      if (!Number.isFinite(amount) || amount === 0) return badRequest(res, 'So Dau dieu chinh khong hop le.');
+      const before = adminUserSummary(db, target);
+      target.seeds = Math.max(0, Number(target.seeds || 0) + amount);
+      target.updatedAt = now();
+      const transaction = {
+        id: uid('txn'),
+        userId: target.id,
+        type: 'admin_adjustment',
+        amount,
+        seeds: Math.abs(amount),
+        status: 'success',
+        method: 'admin',
+        note: String(body.reason || 'Admin dieu chinh so du').slice(0, 500),
+        createdBy: admin.id,
+        createdAt: now()
+      };
+      db.transactions.unshift(transaction);
+      createNotification(db, target.id, {
+        type: 'wallet',
+        title: 'So du Dau duoc dieu chinh',
+        body: `${amount > 0 ? 'Cong' : 'Tru'} ${Math.abs(amount)} Dau. Ly do: ${transaction.note}`,
+        link: '/wallet'
+      });
+      const after = adminUserSummary(db, target);
+      logAdminAction(db, admin, 'adjust_balance', 'user', target.id, before, after, transaction.note);
+      writeDb(db);
+      return send(res, 200, { user: after, transaction: adminTransactionSummary(db, transaction) });
     }
 
     if (req.method === 'GET' && pathname === '/api/admin/transactions') {
       const admin = requireAdmin(req, res, db);
       if (!admin) return;
-      return send(res, 200, { transactions: db.transactions.slice().sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)) });
+      const query = url.searchParams.get('query') || '';
+      const type = url.searchParams.get('type') || '';
+      const status = url.searchParams.get('status') || '';
+      const method = url.searchParams.get('method') || '';
+      const from = url.searchParams.get('from') || '';
+      const to = url.searchParams.get('to') || '';
+      let transactions = db.transactions.map(item => adminTransactionSummary(db, item));
+      transactions = transactions.filter(item => matchesSearch([item.id, item.userName, item.userEmail, item.note, item.method], query));
+      if (type && type !== 'all') transactions = transactions.filter(item => item.type === type);
+      if (status && status !== 'all') transactions = transactions.filter(item => item.status === status);
+      if (method && method !== 'all') transactions = transactions.filter(item => item.method === method);
+      if (from) transactions = transactions.filter(item => new Date(item.createdAt) >= new Date(`${from}T00:00:00`));
+      if (to) transactions = transactions.filter(item => new Date(item.createdAt) <= new Date(`${to}T23:59:59`));
+      transactions.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+      const page = paginate(transactions, url);
+      return send(res, 200, { transactions: page.items, pagination: page.pagination });
     }
 
     if (req.method === 'GET' && pathname === '/api/admin/reports') {
       const admin = requireAdmin(req, res, db);
       if (!admin) return;
-      const reports = db.reports.slice().sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).map(report => ({
+      const status = url.searchParams.get('status') || '';
+      const type = url.searchParams.get('type') || '';
+      const severity = url.searchParams.get('severity') || '';
+      let reports = db.reports.map(report => adminReportSummary(db, report));
+      if (status && status !== 'all') reports = reports.filter(report => report.status === status);
+      if (type && type !== 'all') reports = reports.filter(report => report.type === type);
+      if (severity && severity !== 'all') reports = reports.filter(report => report.severity === severity);
+      reports.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+      const page = paginate(reports, url);
+      return send(res, 200, { reports: page.items, pagination: page.pagination });
+    }
+
+    const adminReportActionParams = match(pathname, '/api/admin/reports/:id/actions');
+    if (adminReportActionParams && req.method === 'POST') {
+      const admin = requireAdmin(req, res, db);
+      if (!admin) return;
+      const report = db.reports.find(item => item.id === adminReportActionParams.id);
+      if (!report) return notFound(res);
+      const body = await parseBody(req);
+      if (body.status !== undefined && !VALID_REPORT_STATUSES.includes(body.status)) return badRequest(res, 'Trang thai bao cao khong hop le.');
+      const before = adminReportSummary(db, report);
+      const target = reportTarget(db, {
         ...report,
-        story: db.stories.find(story => story.id === report.storyId) ? storySummary(enrichStory(db, db.stories.find(story => story.id === report.storyId), admin.id, true)) : null,
-        user: safeUser(db.users.find(user => user.id === report.userId))
+        targetType: body.targetType || report.targetType,
+        targetId: body.targetId || report.targetId
+      });
+      const note = String(body.adminNote ?? body.note ?? '').slice(0, 500);
+
+      if (body.hideContent) {
+        if (target.type === 'story' && target.story) {
+          const storyBefore = cloneForLog(target.story);
+          target.story.hidden = true;
+          target.story.updatedAt = now();
+          logAdminAction(db, admin, 'hide_story', 'story', target.story.id, storyBefore, target.story, note);
+        }
+        if (target.type === 'chapter' && target.chapter) {
+          const chapterBefore = cloneForLog(target.chapter);
+          target.chapter.status = 'hidden';
+          target.chapter.updatedAt = now();
+          const story = db.stories.find(item => item.id === target.chapter.storyId);
+          if (story) refreshStoryChapterMetadata(db, story);
+          logAdminAction(db, admin, 'hide_chapter', 'chapter', target.chapter.id, chapterBefore, target.chapter, note);
+        }
+        if (target.type === 'comment' && target.comment) {
+          const commentBefore = cloneForLog(target.comment);
+          target.comment.status = 'hidden';
+          target.comment.adminNote = note;
+          target.comment.updatedAt = now();
+          logAdminAction(db, admin, 'hide_comment', 'comment', target.comment.id, commentBefore, target.comment, note);
+        }
+      }
+
+      if (body.lockUser && target.reportedUserId) {
+        const lockedUser = db.users.find(item => item.id === target.reportedUserId);
+        if (lockedUser && lockedUser.id !== admin.id) {
+          const userBefore = adminUserSummary(db, lockedUser);
+          lockedUser.status = 'locked';
+          lockedUser.tokenVersion = Number(lockedUser.tokenVersion || 0) + 1;
+          lockedUser.updatedAt = now();
+          logAdminAction(db, admin, 'lock_user', 'user', lockedUser.id, userBefore, adminUserSummary(db, lockedUser), note);
+        }
+      }
+
+      report.status = body.status || report.status || 'reviewing';
+      report.adminNote = note;
+      report.resolvedBy = ['resolved', 'rejected'].includes(report.status) ? admin.id : report.resolvedBy;
+      report.resolvedAt = ['resolved', 'rejected'].includes(report.status) ? now() : report.resolvedAt;
+      report.updatedAt = now();
+      const after = adminReportSummary(db, report);
+      logAdminAction(db, admin, 'resolve_report', 'report', report.id, before, after, note);
+      writeDb(db);
+      return send(res, 200, { report: after });
+    }
+
+    const adminReportParams = match(pathname, '/api/admin/reports/:id');
+    if (adminReportParams && req.method === 'PATCH') {
+      const admin = requireAdmin(req, res, db);
+      if (!admin) return;
+      const report = db.reports.find(item => item.id === adminReportParams.id);
+      if (!report) return notFound(res);
+      const body = await parseBody(req);
+      if (!VALID_REPORT_STATUSES.includes(body.status)) return badRequest(res, 'Trang thai bao cao khong hop le.');
+      const before = adminReportSummary(db, report);
+      report.status = body.status;
+      if (body.adminNote !== undefined || body.note !== undefined) report.adminNote = String(body.adminNote ?? body.note ?? '').slice(0, 500);
+      if (['resolved', 'rejected'].includes(body.status)) {
+        report.resolvedBy = admin.id;
+        report.resolvedAt = now();
+      }
+      report.updatedAt = now();
+      const after = adminReportSummary(db, report);
+      logAdminAction(db, admin, 'update_report', 'report', report.id, before, after, report.adminNote || '');
+      writeDb(db);
+      return send(res, 200, { report: after });
+    }
+
+    if (req.method === 'GET' && pathname === '/api/admin/comments') {
+      const admin = requireAdmin(req, res, db);
+      if (!admin) return;
+      const query = url.searchParams.get('query') || '';
+      const status = url.searchParams.get('status') || '';
+      const storyId = url.searchParams.get('storyId') || '';
+      let comments = db.comments.map(comment => adminCommentSummary(db, comment));
+      comments = comments.filter(comment => matchesSearch([comment.body, comment.userName, comment.userEmail, comment.storyTitle], query));
+      if (status && status !== 'all') comments = comments.filter(comment => comment.status === status);
+      if (storyId && storyId !== 'all') comments = comments.filter(comment => comment.storyId === storyId);
+      comments.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+      const page = paginate(comments, url);
+      return send(res, 200, { comments: page.items, pagination: page.pagination });
+    }
+
+    const adminCommentParams = match(pathname, '/api/admin/comments/:id');
+    if (adminCommentParams && req.method === 'PATCH') {
+      const admin = requireAdmin(req, res, db);
+      if (!admin) return;
+      const comment = db.comments.find(item => item.id === adminCommentParams.id);
+      if (!comment) return notFound(res);
+      const body = await parseBody(req);
+      if (!VALID_COMMENT_STATUSES.includes(body.status)) return badRequest(res, 'Trang thai binh luan khong hop le.');
+      const before = adminCommentSummary(db, comment);
+      comment.status = body.status;
+      if (body.adminNote !== undefined) comment.adminNote = String(body.adminNote || '').slice(0, 500);
+      comment.updatedAt = now();
+      const after = adminCommentSummary(db, comment);
+      logAdminAction(db, admin, 'update_comment', 'comment', comment.id, before, after, comment.adminNote || '');
+      writeDb(db);
+      return send(res, 200, { comment: after });
+    }
+
+    if (adminCommentParams && req.method === 'DELETE') {
+      const admin = requireAdmin(req, res, db);
+      if (!admin) return;
+      const index = db.comments.findIndex(item => item.id === adminCommentParams.id);
+      if (index === -1) return notFound(res);
+      const [comment] = db.comments.splice(index, 1);
+      logAdminAction(db, admin, 'delete_comment', 'comment', comment.id, adminCommentSummary(db, comment), null, '');
+      writeDb(db);
+      return send(res, 200, { ok: true });
+    }
+
+    if (req.method === 'GET' && pathname === '/api/admin/taxonomy') {
+      const admin = requireAdmin(req, res, db);
+      if (!admin) return;
+      return send(res, 200, { taxonomy: taxonomyResponse(db) });
+    }
+
+    const adminTaxonomyPostParams = match(pathname, '/api/admin/taxonomy/:kind');
+    if (adminTaxonomyPostParams && req.method === 'POST' && ['categories', 'tags'].includes(adminTaxonomyPostParams.kind)) {
+      const admin = requireAdmin(req, res, db);
+      if (!admin) return;
+      const body = await parseBody(req);
+      const taxonomy = ensureTaxonomy(db);
+      const name = String(body.name || body.label || '').trim();
+      if (!name) return badRequest(res, 'Ten taxonomy la bat buoc.');
+      const list = taxonomy[adminTaxonomyPostParams.kind];
+      if (list.some(item => item.name.toLowerCase() === name.toLowerCase())) return badRequest(res, 'Ten taxonomy da ton tai.');
+      const item = taxonomyItem({ ...body, name }, adminTaxonomyPostParams.kind === 'categories' ? 'cat' : 'tag');
+      list.push(item);
+      list.sort((a, b) => a.name.localeCompare(b.name, 'vi'));
+      logAdminAction(db, admin, 'update_taxonomy', adminTaxonomyPostParams.kind.slice(0, -1), item.id, null, item, 'create');
+      writeDb(db);
+      return send(res, 201, { item, taxonomy: taxonomyResponse(db) });
+    }
+
+    const adminTaxonomyItemParams = match(pathname, '/api/admin/taxonomy/:kind/:id');
+    if (adminTaxonomyItemParams && ['categories', 'tags'].includes(adminTaxonomyItemParams.kind) && ['PATCH', 'DELETE'].includes(req.method)) {
+      const admin = requireAdmin(req, res, db);
+      if (!admin) return;
+      const taxonomy = ensureTaxonomy(db);
+      const list = taxonomy[adminTaxonomyItemParams.kind];
+      const item = list.find(row => row.id === adminTaxonomyItemParams.id || row.slug === adminTaxonomyItemParams.id);
+      if (!item) return notFound(res);
+      const type = adminTaxonomyItemParams.kind === 'categories' ? 'category' : 'tag';
+      const storyField = adminTaxonomyItemParams.kind === 'categories' ? 'categories' : 'tags';
+      const usage = db.stories.filter(story => (story[storyField] || []).some(name => name.toLowerCase() === item.name.toLowerCase())).length;
+
+      if (req.method === 'DELETE') {
+        if (usage > 0) return badRequest(res, 'Taxonomy dang duoc su dung, hay chuyen noi dung sang taxonomy khac truoc khi xoa.');
+        const before = cloneForLog(item);
+        taxonomy[adminTaxonomyItemParams.kind] = list.filter(row => row.id !== item.id);
+        logAdminAction(db, admin, 'update_taxonomy', type, item.id, before, null, 'delete');
+        writeDb(db);
+        return send(res, 200, { ok: true, taxonomy: taxonomyResponse(db) });
+      }
+
+      const body = await parseBody(req);
+      const before = cloneForLog(item);
+      if (body.name !== undefined) {
+        const nextName = String(body.name || '').trim();
+        if (!nextName) return badRequest(res, 'Ten taxonomy la bat buoc.');
+        if (list.some(row => row.id !== item.id && row.name.toLowerCase() === nextName.toLowerCase())) return badRequest(res, 'Ten taxonomy da ton tai.');
+        db.stories.forEach(story => {
+          story[storyField] = (story[storyField] || []).map(name => name.toLowerCase() === item.name.toLowerCase() ? nextName : name);
+        });
+        item.name = nextName;
+        item.slug = slugify(nextName);
+      }
+      if (body.description !== undefined) item.description = String(body.description || '').slice(0, 500);
+      if (body.color !== undefined) item.color = String(body.color || '').slice(0, 40);
+      item.updatedAt = now();
+      logAdminAction(db, admin, 'update_taxonomy', type, item.id, before, item, 'update');
+      writeDb(db);
+      return send(res, 200, { item, taxonomy: taxonomyResponse(db) });
+    }
+
+    if (req.method === 'GET' && pathname === '/api/admin/notifications') {
+      const admin = requireAdmin(req, res, db);
+      if (!admin) return;
+      const query = url.searchParams.get('query') || '';
+      let notifications = db.adminNotifications.slice();
+      notifications = notifications.filter(item => matchesSearch([item.title, item.body, item.targetRole, item.targetUserId], query));
+      notifications.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+      const page = paginate(notifications, url);
+      return send(res, 200, { notifications: page.items, pagination: page.pagination });
+    }
+
+    if (req.method === 'POST' && pathname === '/api/admin/notifications') {
+      const admin = requireAdmin(req, res, db);
+      if (!admin) return;
+      const body = await parseBody(req);
+      const title = String(body.title || '').trim();
+      const message = String(body.body || body.message || '').trim();
+      if (!title || !message) return badRequest(res, 'Tieu de va noi dung thong bao la bat buoc.');
+      const targetRole = String(body.targetRole || 'all').trim();
+      const targetUserId = String(body.targetUserId || '').trim();
+      let recipients = [];
+      if (targetUserId) {
+        const targetUser = db.users.find(user => user.id === targetUserId || user.email === targetUserId);
+        if (!targetUser) return badRequest(res, 'Khong tim thay user nhan thong bao.');
+        recipients = [targetUser];
+      } else if (targetRole && targetRole !== 'all') {
+        const storedRole = normalizeStoredRole(targetRole);
+        if (!storedRole) return badRequest(res, 'Vai tro nhan thong bao khong hop le.');
+        recipients = db.users.filter(user => user.role === storedRole);
+      } else {
+        recipients = db.users.slice();
+      }
+      const campaign = {
+        id: uid('admin_noti'),
+        title,
+        body: message,
+        type: String(body.type || 'system').trim() || 'system',
+        targetRole: targetUserId ? 'user' : targetRole || 'all',
+        targetUserId: targetUserId || '',
+        recipientCount: recipients.length,
+        status: 'sent',
+        createdBy: admin.id,
+        createdAt: now(),
+        updatedAt: now()
+      };
+      db.adminNotifications.unshift(campaign);
+      recipients.forEach(user => createNotification(db, user.id, {
+        type: campaign.type,
+        title,
+        body: message,
+        link: body.link || '/notifications',
+        actorId: admin.id
       }));
-      return send(res, 200, { reports });
+      logAdminAction(db, admin, 'send_notification', 'notification', campaign.id, null, campaign, title);
+      writeDb(db);
+      return send(res, 201, { notification: campaign });
+    }
+
+    const adminNotificationParams = match(pathname, '/api/admin/notifications/:id');
+    if (adminNotificationParams && req.method === 'PATCH') {
+      const admin = requireAdmin(req, res, db);
+      if (!admin) return;
+      const campaign = db.adminNotifications.find(item => item.id === adminNotificationParams.id);
+      if (!campaign) return notFound(res);
+      const body = await parseBody(req);
+      const before = cloneForLog(campaign);
+      ['title', 'body', 'status'].forEach(key => {
+        if (body[key] !== undefined) campaign[key] = String(body[key] || '').trim();
+      });
+      campaign.updatedAt = now();
+      logAdminAction(db, admin, 'update_notification', 'notification', campaign.id, before, campaign, campaign.title);
+      writeDb(db);
+      return send(res, 200, { notification: campaign });
+    }
+
+    if (req.method === 'GET' && pathname === '/api/admin/logs') {
+      const admin = requireAdmin(req, res, db);
+      if (!admin) return;
+      const entityType = url.searchParams.get('entityType') || '';
+      const entityId = url.searchParams.get('entityId') || '';
+      const adminId = url.searchParams.get('adminId') || '';
+      const action = url.searchParams.get('action') || '';
+      const from = url.searchParams.get('from') || '';
+      const to = url.searchParams.get('to') || '';
+      let logs = db.adminLogs.slice();
+      if (entityType && entityType !== 'all') logs = logs.filter(log => log.entityType === entityType);
+      if (entityId) logs = logs.filter(log => log.entityId === entityId);
+      if (adminId && adminId !== 'all') logs = logs.filter(log => log.adminId === adminId);
+      if (action && action !== 'all') logs = logs.filter(log => log.action === action);
+      if (from) logs = logs.filter(log => new Date(log.createdAt) >= new Date(`${from}T00:00:00`));
+      if (to) logs = logs.filter(log => new Date(log.createdAt) <= new Date(`${to}T23:59:59`));
+      logs.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+      const page = paginate(logs, url);
+      return send(res, 200, { logs: page.items, pagination: page.pagination });
     }
 
     if (req.method === 'GET' && pathname === '/api/admin/stories') {
       const admin = requireAdmin(req, res, db);
       if (!admin) return;
-      return send(res, 200, { stories: db.stories.map(story => enrichStory(db, story, admin.id, true)) });
-    }
-
-    if (req.method === 'GET' && pathname === '/api/admin/chapters') {
-      const admin = requireAdmin(req, res, db);
-      if (!admin) return;
-      const chapters = db.chapters
-        .slice()
-        .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0))
-        .map(chapter => chapterAdminSummary(db, chapter));
-      return send(res, 200, { chapters });
+      const query = url.searchParams.get('query') || '';
+      const approvalStatus = url.searchParams.get('approvalStatus') || '';
+      const hidden = url.searchParams.get('hidden') || '';
+      const status = url.searchParams.get('status') || '';
+      const category = url.searchParams.get('category') || '';
+      let stories = db.stories.map(story => adminStorySummary(db, story, admin.id));
+      stories = stories.filter(story => matchesSearch([story.title, story.author, story.description, ...(story.categories || []), ...(story.tags || [])], query));
+      if (approvalStatus && approvalStatus !== 'all') stories = stories.filter(story => story.approvalStatus === approvalStatus);
+      if (hidden === 'true' || hidden === 'false') stories = stories.filter(story => String(Boolean(story.hidden)) === hidden);
+      if (status && status !== 'all') stories = stories.filter(story => story.status === status || story.publishStatus === status);
+      if (category && category !== 'all') stories = stories.filter(story => (story.categories || []).includes(category));
+      stories.sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0));
+      const page = paginate(stories, url);
+      return send(res, 200, { stories: page.items, pagination: page.pagination });
     }
 
     if (req.method === 'POST' && pathname === '/api/admin/stories') {
@@ -2382,10 +3074,12 @@ async function handle(req, res) {
       const inputError = validateStoryInput(body);
       if (inputError) return badRequest(res, inputError);
       const slug = slugify(body.slug || body.title);
-      if (db.stories.some(story => story.slug === slug)) return badRequest(res, 'Slug đã tồn tại.');
+      if (db.stories.some(story => story.slug === slug)) return badRequest(res, 'Slug da ton tai.');
+      const approvalStatus = VALID_STORY_APPROVAL_STATUSES.includes(body.approvalStatus) ? body.approvalStatus : 'pending';
+      const timestamp = now();
       const story = {
         id: uid('story'),
-        ownerId: admin.id,
+        ownerId: body.ownerId || admin.id,
         slug,
         title: String(body.title).trim(),
         author: String(body.author).trim(),
@@ -2393,60 +3087,33 @@ async function handle(req, res) {
         cover: body.cover || '/images/cover-1.jpg',
         description: body.description || '',
         status: body.status || 'ongoing',
-        language: String(body.language || 'Tiếng Việt').trim(),
+        language: String(body.language || 'Tieng Viet').trim(),
         ageRating: String(body.ageRating || 'all').trim(),
-        hidden: Boolean(body.hidden),
-        approvalStatus: ['pending', 'approved', 'rejected'].includes(body.approvalStatus) ? body.approvalStatus : 'pending',
+        hidden: approvalStatus === 'approved' ? Boolean(body.hidden) : true,
+        approvalStatus,
+        rejectionReason: approvalStatus === 'rejected' ? String(body.rejectionReason || '').slice(0, 500) : '',
         chapterCountEstimate: parsePositiveNumber(body.chapterCountEstimate),
         premium: Boolean(body.premium),
+        type: body.type || (body.premium ? 'vip' : 'free'),
         price: parsePositiveNumber(body.price),
+        chapterPrice: parsePositiveNumber(body.chapterPrice ?? body.price),
         featured: Boolean(body.featured),
+        hot: Boolean(body.hot),
+        recommended: Boolean(body.recommended),
+        banner: Boolean(body.banner),
         views: 0,
         rating: parsePositiveNumber(body.rating, 4.5),
         follows: 0,
         categories: normalizeCategories(body.categories),
         tags: normalizeCategories(body.tags),
-        updatedAt: now(),
-        createdAt: now()
+        updatedAt: timestamp,
+        createdAt: timestamp
       };
       db.stories.unshift(story);
+      ensureTaxonomy(db);
+      logAdminAction(db, admin, 'create_story', 'story', story.id, null, story, '');
       writeDb(db);
-      return send(res, 201, { story });
-    }
-
-    const adminStoryParams = match(pathname, '/api/admin/stories/:id');
-    const adminReportParams = match(pathname, '/api/admin/reports/:id');
-    const adminChapterStatusParams = match(pathname, '/api/admin/chapters/:id/status');
-    if (adminChapterStatusParams && req.method === 'PATCH') {
-      const admin = requireAdmin(req, res, db);
-      if (!admin) return;
-      const chapter = db.chapters.find(item => item.id === adminChapterStatusParams.id);
-      if (!chapter) return notFound(res);
-      const body = await parseBody(req);
-      if (!VALID_CHAPTER_STATUSES.includes(body.status)) return badRequest(res, 'Trạng thái chương không hợp lệ.');
-      const wasPublic = isPublicChapter(chapter);
-      chapter.status = body.status;
-      if (body.status === 'rejected') chapter.rejectionReason = String(body.rejectionReason || 'Can chinh sua truoc khi duyet.').slice(0, 500);
-      if (body.status === 'approved') chapter.rejectionReason = '';
-      chapter.updatedAt = now();
-      const story = db.stories.find(item => item.id === chapter.storyId);
-      if (story) refreshStoryChapterMetadata(db, story);
-      if (!wasPublic && story) notifyChapterPublished(db, story, chapter, admin.id);
-      writeDb(db);
-      return send(res, 200, { chapter: chapterAdminSummary(db, chapter) });
-    }
-
-    if (adminReportParams && req.method === 'PATCH') {
-      const admin = requireAdmin(req, res, db);
-      if (!admin) return;
-      const report = db.reports.find(item => item.id === adminReportParams.id);
-      if (!report) return notFound(res);
-      const body = await parseBody(req);
-      if (!['open', 'reviewing', 'resolved', 'rejected'].includes(body.status)) return badRequest(res, 'Trạng thái báo cáo không hợp lệ.');
-      report.status = body.status;
-      report.updatedAt = now();
-      writeDb(db);
-      return send(res, 200, { report });
+      return send(res, 201, { story: adminStorySummary(db, story, admin.id) });
     }
 
     const adminStoryStatusParams = match(pathname, '/api/admin/stories/:id/status');
@@ -2456,8 +3123,9 @@ async function handle(req, res) {
       const story = db.stories.find(item => item.id === adminStoryStatusParams.id);
       if (!story) return notFound(res);
       const body = await parseBody(req);
+      const before = adminStorySummary(db, story, admin.id);
       if (body.approvalStatus !== undefined) {
-        if (!VALID_STORY_APPROVAL_STATUSES.includes(body.approvalStatus)) return badRequest(res, 'Trạng thái duyệt không hợp lệ.');
+        if (!VALID_STORY_APPROVAL_STATUSES.includes(body.approvalStatus)) return badRequest(res, 'Trang thai duyet khong hop le.');
         story.approvalStatus = body.approvalStatus;
         if (body.approvalStatus === 'approved') {
           if (body.hidden === undefined) story.hidden = false;
@@ -2465,28 +3133,57 @@ async function handle(req, res) {
         }
         if (body.approvalStatus === 'rejected') {
           story.hidden = true;
-          story.rejectionReason = String(body.rejectionReason || 'Truyen can chinh sua truoc khi duyet.').slice(0, 500);
+          story.rejectionReason = String(body.rejectionReason || 'Can chinh sua truoc khi duyet.').slice(0, 500);
         }
-        if (body.approvalStatus === 'pending') story.hidden = true;
+        if (body.approvalStatus === 'pending' || body.approvalStatus === 'draft') story.hidden = true;
       }
       if (body.hidden !== undefined) story.hidden = Boolean(body.hidden);
+      if (body.rejectionReason !== undefined && story.approvalStatus === 'rejected') story.rejectionReason = String(body.rejectionReason || '').slice(0, 500);
       story.updatedAt = now();
+      const after = adminStorySummary(db, story, admin.id);
+      const action = story.approvalStatus === 'rejected' ? 'reject_story' : story.hidden ? 'hide_story' : story.approvalStatus === 'approved' ? 'approve_story' : 'update_story_status';
+      logAdminAction(db, admin, action, 'story', story.id, before, after, story.rejectionReason || '');
       writeDb(db);
-      return send(res, 200, { story });
+      return send(res, 200, { story: after });
     }
 
+    const adminStoryFlagsParams = match(pathname, '/api/admin/stories/:id/flags');
+    if (adminStoryFlagsParams && req.method === 'PATCH') {
+      const admin = requireAdmin(req, res, db);
+      if (!admin) return;
+      const story = db.stories.find(item => item.id === adminStoryFlagsParams.id);
+      if (!story) return notFound(res);
+      const body = await parseBody(req);
+      const before = adminStorySummary(db, story, admin.id);
+      ['featured', 'hot', 'recommended', 'banner'].forEach(key => {
+        if (body[key] !== undefined) story[key] = Boolean(body[key]);
+      });
+      story.updatedAt = now();
+      const after = adminStorySummary(db, story, admin.id);
+      logAdminAction(db, admin, 'update_story_flags', 'story', story.id, before, after, '');
+      writeDb(db);
+      return send(res, 200, { story: after });
+    }
+
+    const adminStoryParams = match(pathname, '/api/admin/stories/:id');
     if (adminStoryParams && req.method === 'PUT') {
       const admin = requireAdmin(req, res, db);
       if (!admin) return;
       const story = db.stories.find(item => item.id === adminStoryParams.id);
       if (!story) return notFound(res);
       const body = await parseBody(req);
-      ['title','author','translator','cover','description','status','language','ageRating'].forEach(key => {
+      const before = adminStorySummary(db, story, admin.id);
+      if (body.slug) {
+        const nextSlug = slugify(body.slug);
+        if (db.stories.some(item => item.id !== story.id && item.slug === nextSlug)) return badRequest(res, 'Slug da ton tai.');
+        story.slug = nextSlug;
+      }
+      ['title','author','translator','cover','description','status','language','ageRating','type'].forEach(key => {
         if (body[key] !== undefined) story[key] = String(body[key]);
       });
       if (body.hidden !== undefined) story.hidden = Boolean(body.hidden);
       if (body.approvalStatus !== undefined) {
-        if (!VALID_STORY_APPROVAL_STATUSES.includes(body.approvalStatus)) return badRequest(res, 'Trạng thái duyệt không hợp lệ.');
+        if (!VALID_STORY_APPROVAL_STATUSES.includes(body.approvalStatus)) return badRequest(res, 'Trang thai duyet khong hop le.');
         story.approvalStatus = body.approvalStatus;
         if (body.approvalStatus === 'approved') {
           if (body.hidden === undefined) story.hidden = false;
@@ -2494,21 +3191,28 @@ async function handle(req, res) {
         }
         if (body.approvalStatus === 'rejected') {
           story.hidden = true;
-          story.rejectionReason = String(body.rejectionReason || 'Truyen can chinh sua truoc khi duyet.').slice(0, 500);
+          story.rejectionReason = String(body.rejectionReason || 'Can chinh sua truoc khi duyet.').slice(0, 500);
         }
-        if (body.approvalStatus === 'pending') story.hidden = true;
+        if (body.approvalStatus === 'pending' || body.approvalStatus === 'draft') story.hidden = true;
       }
+      if (body.rejectionReason !== undefined) story.rejectionReason = String(body.rejectionReason || '').slice(0, 500);
       if (body.chapterCountEstimate !== undefined) story.chapterCountEstimate = parsePositiveNumber(body.chapterCountEstimate, story.chapterCountEstimate);
-      if (body.slug) story.slug = slugify(body.slug);
       if (body.premium !== undefined) story.premium = Boolean(body.premium);
       if (body.featured !== undefined) story.featured = Boolean(body.featured);
+      if (body.hot !== undefined) story.hot = Boolean(body.hot);
+      if (body.recommended !== undefined) story.recommended = Boolean(body.recommended);
+      if (body.banner !== undefined) story.banner = Boolean(body.banner);
       if (body.price !== undefined) story.price = Number(body.price);
+      if (body.chapterPrice !== undefined) story.chapterPrice = Number(body.chapterPrice);
       if (body.rating !== undefined) story.rating = Number(body.rating);
       if (body.categories !== undefined) story.categories = normalizeCategories(body.categories);
       if (body.tags !== undefined) story.tags = normalizeCategories(body.tags);
       story.updatedAt = now();
+      ensureTaxonomy(db);
+      const after = adminStorySummary(db, story, admin.id);
+      logAdminAction(db, admin, 'update_story', 'story', story.id, before, after, '');
       writeDb(db);
-      return send(res, 200, { story });
+      return send(res, 200, { story: after });
     }
 
     if (adminStoryParams && req.method === 'DELETE') {
@@ -2516,7 +3220,7 @@ async function handle(req, res) {
       if (!admin) return;
       const index = db.stories.findIndex(item => item.id === adminStoryParams.id);
       if (index === -1) return notFound(res);
-      db.stories.splice(index, 1);
+      const [story] = db.stories.splice(index, 1);
       db.chapters = db.chapters.filter(item => item.storyId !== adminStoryParams.id);
       db.bookmarks = db.bookmarks.filter(item => item.storyId !== adminStoryParams.id);
       db.follows = db.follows.filter(item => item.storyId !== adminStoryParams.id);
@@ -2526,8 +3230,26 @@ async function handle(req, res) {
       db.reports = db.reports.filter(item => item.storyId !== adminStoryParams.id);
       db.purchases = db.purchases.filter(item => item.storyId !== adminStoryParams.id);
       db.promotions = db.promotions.filter(item => item.storyId !== adminStoryParams.id);
+      logAdminAction(db, admin, 'delete_story', 'story', story.id, story, null, '');
       writeDb(db);
       return send(res, 200, { ok: true });
+    }
+
+    if (req.method === 'GET' && pathname === '/api/admin/chapters') {
+      const admin = requireAdmin(req, res, db);
+      if (!admin) return;
+      const storyId = url.searchParams.get('storyId') || '';
+      const query = url.searchParams.get('query') || '';
+      const status = url.searchParams.get('status') || '';
+      const vip = url.searchParams.get('vip') || '';
+      let chapters = db.chapters.map(chapter => chapterAdminSummary(db, chapter));
+      chapters = chapters.filter(chapter => matchesSearch([chapter.title, chapter.storyTitle, chapter.author, chapter.content], query));
+      if (storyId && storyId !== 'all') chapters = chapters.filter(chapter => chapter.storyId === storyId);
+      if (status && status !== 'all') chapters = chapters.filter(chapter => chapter.status === status);
+      if (vip === 'true' || vip === 'false') chapters = chapters.filter(chapter => String(Boolean(chapter.vip)) === vip);
+      chapters.sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0));
+      const page = paginate(chapters, url);
+      return send(res, 200, { chapters: page.items, pagination: page.pagination });
     }
 
     const adminChapterParams = match(pathname, '/api/admin/stories/:id/chapters');
@@ -2541,16 +3263,19 @@ async function handle(req, res) {
       const chapterNumber = Number(body.number || nextNumber);
       if (!Number.isFinite(chapterNumber) || chapterNumber <= 0) return badRequest(res, 'So chuong khong hop le.');
       if (chapterNumberExists(db, story.id, chapterNumber)) return badRequest(res, 'So chuong da ton tai trong truyen nay.');
+      const status = VALID_CHAPTER_STATUSES.includes(body.status) ? body.status : 'approved';
       const chapter = {
         id: uid('chap'),
         storyId: story.id,
         number: chapterNumber,
-        title: body.title || `Chương ${nextNumber}`,
-        content: body.content || 'Nội dung chương đang được cập nhật.',
-        preview: body.preview || 'Đây là đoạn xem trước của chương.',
-        isPremium: Boolean(body.isPremium),
+        title: body.title || `Chuong ${nextNumber}`,
+        content: body.content || 'Noi dung chuong dang duoc cap nhat.',
+        preview: body.preview || 'Day la doan xem truoc cua chuong.',
+        isPremium: Boolean(body.isPremium ?? body.vip),
         price: Number(body.price || 0),
-        status: VALID_CHAPTER_STATUSES.includes(body.status) ? body.status : 'approved',
+        status,
+        rejectionReason: status === 'rejected' ? String(body.rejectionReason || '').slice(0, 500) : '',
+        scheduledAt: body.scheduledAt ? new Date(body.scheduledAt).toISOString() : '',
         password: body.password ? String(body.password) : '',
         wordCount: wordCount(body.content),
         views: 0,
@@ -2560,8 +3285,47 @@ async function handle(req, res) {
       db.chapters.push(chapter);
       refreshStoryChapterMetadata(db, story);
       notifyChapterPublished(db, story, chapter, admin.id);
+      logAdminAction(db, admin, 'create_chapter', 'chapter', chapter.id, null, chapterAdminSummary(db, chapter), '');
       writeDb(db);
-      return send(res, 201, { chapter });
+      return send(res, 201, { chapter: chapterAdminSummary(db, chapter) });
+    }
+
+    const adminChapterStatusParams = match(pathname, '/api/admin/chapters/:id/status');
+    if (adminChapterStatusParams && req.method === 'PATCH') {
+      const admin = requireAdmin(req, res, db);
+      if (!admin) return;
+      const chapter = db.chapters.find(item => item.id === adminChapterStatusParams.id);
+      if (!chapter) return notFound(res);
+      const body = await parseBody(req);
+      if (!VALID_CHAPTER_STATUSES.includes(body.status)) return badRequest(res, 'Trang thai chuong khong hop le.');
+      const before = chapterAdminSummary(db, chapter);
+      const wasPublic = isPublicChapter(chapter);
+      chapter.status = body.status;
+      if (body.status === 'scheduled') {
+        if (!body.scheduledAt) return badRequest(res, 'scheduledAt la bat buoc khi len lich chuong.');
+        const scheduledAt = new Date(body.scheduledAt);
+        if (Number.isNaN(scheduledAt.getTime())) return badRequest(res, 'scheduledAt khong hop le.');
+        chapter.scheduledAt = scheduledAt.toISOString();
+      }
+      if (body.scheduledAt !== undefined && body.status !== 'scheduled') {
+        const scheduledAt = body.scheduledAt ? new Date(body.scheduledAt) : null;
+        if (scheduledAt && Number.isNaN(scheduledAt.getTime())) return badRequest(res, 'scheduledAt khong hop le.');
+        chapter.scheduledAt = scheduledAt ? scheduledAt.toISOString() : '';
+      }
+      if (body.status === 'rejected') chapter.rejectionReason = String(body.rejectionReason || 'Can chinh sua truoc khi duyet.').slice(0, 500);
+      if (['approved', 'published'].includes(body.status)) {
+        chapter.rejectionReason = '';
+        chapter.scheduledAt = '';
+      }
+      chapter.updatedAt = now();
+      const story = db.stories.find(item => item.id === chapter.storyId);
+      if (story) refreshStoryChapterMetadata(db, story);
+      if (!wasPublic && story) notifyChapterPublished(db, story, chapter, admin.id);
+      const after = chapterAdminSummary(db, chapter);
+      const action = body.status === 'rejected' ? 'reject_chapter' : body.status === 'hidden' ? 'hide_chapter' : ['approved', 'published'].includes(body.status) ? 'approve_chapter' : 'update_chapter_status';
+      logAdminAction(db, admin, action, 'chapter', chapter.id, before, after, chapter.rejectionReason || '');
+      writeDb(db);
+      return send(res, 200, { chapter: after });
     }
 
     const adminChapterUpdateParams = match(pathname, '/api/admin/chapters/:id');
@@ -2572,31 +3336,39 @@ async function handle(req, res) {
       if (!chapter) return notFound(res);
       const body = await parseBody(req);
       const story = db.stories.find(item => item.id === chapter.storyId);
+      const before = chapterAdminSummary(db, chapter);
       if (body.number !== undefined) {
         const nextNumber = Number(body.number);
         if (!Number.isFinite(nextNumber) || nextNumber <= 0) return badRequest(res, 'So chuong khong hop le.');
         if (chapterNumberExists(db, chapter.storyId, nextNumber, chapter.id)) return badRequest(res, 'So chuong da ton tai trong truyen nay.');
+        chapter.number = nextNumber;
       }
       ['title','content','preview'].forEach(key => {
         if (body[key] !== undefined) chapter[key] = String(body[key]);
       });
-      if (body.number !== undefined) chapter.number = Number(body.number);
-      if (body.isPremium !== undefined) chapter.isPremium = Boolean(body.isPremium);
+      if (body.isPremium !== undefined || body.vip !== undefined) chapter.isPremium = Boolean(body.isPremium ?? body.vip);
       if (body.price !== undefined) chapter.price = Number(body.price);
       const wasPublic = isPublicChapter(chapter);
       if (body.status !== undefined) {
-        if (!VALID_CHAPTER_STATUSES.includes(body.status)) return badRequest(res, 'Trạng thái chương không hợp lệ.');
+        if (!VALID_CHAPTER_STATUSES.includes(body.status)) return badRequest(res, 'Trang thai chuong khong hop le.');
         chapter.status = body.status;
         if (body.status === 'rejected') chapter.rejectionReason = String(body.rejectionReason || 'Can chinh sua truoc khi duyet.').slice(0, 500);
-        if (body.status === 'approved') chapter.rejectionReason = '';
+        if (['approved', 'published'].includes(body.status)) chapter.rejectionReason = '';
+      }
+      if (body.scheduledAt !== undefined) {
+        const scheduledAt = body.scheduledAt ? new Date(body.scheduledAt) : null;
+        if (scheduledAt && Number.isNaN(scheduledAt.getTime())) return badRequest(res, 'scheduledAt khong hop le.');
+        chapter.scheduledAt = scheduledAt ? scheduledAt.toISOString() : '';
       }
       if (body.password !== undefined) chapter.password = String(body.password || '');
       if (body.content !== undefined) chapter.wordCount = wordCount(chapter.content);
       chapter.updatedAt = now();
       if (story) refreshStoryChapterMetadata(db, story);
       if (!wasPublic && story) notifyChapterPublished(db, story, chapter, admin.id);
+      const after = chapterAdminSummary(db, chapter);
+      logAdminAction(db, admin, 'update_chapter', 'chapter', chapter.id, before, after, '');
       writeDb(db);
-      return send(res, 200, { chapter: chapterAdminSummary(db, chapter) });
+      return send(res, 200, { chapter: after });
     }
 
     if (adminChapterUpdateParams && req.method === 'DELETE') {
@@ -2609,6 +3381,7 @@ async function handle(req, res) {
       db.history = db.history.filter(item => item.chapterId !== chapter.id);
       const story = db.stories.find(item => item.id === chapter.storyId);
       if (story) refreshStoryChapterMetadata(db, story);
+      logAdminAction(db, admin, 'delete_chapter', 'chapter', chapter.id, chapter, null, '');
       writeDb(db);
       return send(res, 200, { ok: true });
     }
@@ -2666,7 +3439,7 @@ function slugify(value) {
 }
 
 function lorem(title, tone) {
-  return `${title}\n\n${tone} Câu chuyện được biên tập theo phong cách dễ đọc, chia đoạn rõ ràng và tối ưu cho trải nghiệm đọc trên điện thoại.\n\nNhân vật chính từng bước vượt qua biến cố, mở khóa bí mật cũ và tạo nên những lựa chọn làm thay đổi cả hành trình phía trước.\n\nĐậu Đỏ Truyện lưu lịch sử đọc tự động, hỗ trợ chương trả phí bằng xu và cho phép người dùng theo dõi truyện yêu thích.`;
+  return `${title}\n\n${tone} Câu chuyện được biên tập theo phong cách dễ đọc, chia đoạn rõ ràng và tối ưu cho trải nghiệm đọc trên điện thoại.\n\nNhân vật chính từng bước vượt qua biến cố, mở khóa bí mật cũ và tạo nên những lựa chọn làm thay đổi cả hành trình phía trước.\n\nĐậu Đỏ Truyện lưu lịch sử đọc tự động, hỗ trợ chương trả phí bằng Đậu và cho phép người dùng theo dõi truyện yêu thích.`;
 }
 
 function extraSeedStoryRows() {
@@ -2746,7 +3519,7 @@ function createSeedDb() {
     history: [{ id: 'his_seed_1', userId: 'u_user', storyId: 's1', chapterId: 'c_s1_2', chapterNumber: 2, updatedAt: now() }],
     purchases: [{ id: 'pur_seed_1', userId: 'u_user', storyId: 's1', chapterId: 'c_s1_4', price: 8, createdAt: now() }],
     transactions: [
-      { id: 'txn_seed_1', userId: 'u_user', type: 'bonus', amount: 80, note: 'Xu khởi tạo', createdAt: now() },
+      { id: 'txn_seed_1', userId: 'u_user', type: 'bonus', amount: 80, note: 'Đậu khởi tạo', createdAt: now() },
       { id: 'txn_seed_2', userId: 'u_user', storyId: 's1', chapterId: 'c_s1_4', price: 8, type: 'purchase', amount: -8, note: 'Mở khóa Đấu Phá Thương Khung chương 4', createdAt: now() }
     ],
     comments: [
@@ -2757,7 +3530,7 @@ function createSeedDb() {
     ],
     viewEvents: [],
     notifications: [
-      { id: 'noti_seed_1', userId: 'u_user', type: 'system', title: 'Chào mừng đến Đậu Đỏ Truyện', body: 'Bạn đã nhận xu khởi tạo để đọc chương trả phí.', link: '/wallet', read: false, createdAt: now() }
+      { id: 'noti_seed_1', userId: 'u_user', type: 'system', title: 'Chào mừng đến Đậu Đỏ Truyện', body: 'Bạn đã nhận Đậu khởi tạo để đọc chương trả phí.', link: '/wallet', read: false, createdAt: now() }
     ],
     reports: [],
     newsletters: []

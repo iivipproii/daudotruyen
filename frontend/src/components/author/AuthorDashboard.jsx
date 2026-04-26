@@ -18,7 +18,7 @@ function formatNumber(value = 0) {
 }
 
 function formatCurrency(value = 0) {
-  return `${formatNumber(value)} xu`;
+  return `${formatNumber(value)} Đậu`;
 }
 
 function formatDate(value) {
@@ -620,7 +620,7 @@ export function AuthorStatsCards({ totals }) {
     ['Số truyện', totals.stories],
     ['Lượt đọc', totals.views],
     ['Theo dõi', totals.follows],
-    ['Doanh thu', `${formatNumber(totals.revenue)} xu`],
+    ['Doanh thu', `${formatNumber(totals.revenue)} Đậu`],
     ['Bình luận mới', totals.comments]
   ];
   return <div className="ad-stat-grid">{cards.map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}</div>;
@@ -1580,10 +1580,10 @@ export function PromotionPackages({ stories, promotions, packages, onBuy }) {
   return (
     <div className="ad-stack">
       <section className="ad-panel">
-        <div className="ad-panel-head"><div><h2>Gói quảng bá truyện</h2><p>Thanh toán bằng xu/Đậu trong ví, giao dịch được lưu backend.</p></div><select value={selectedStoryId} onChange={event => setSelectedStoryId(event.target.value)}>{stories.map(story => <option key={story.id} value={story.id}>{story.title}</option>)}</select></div>
-        <div className="ad-promo-grid">{packages.map(pkg => <article key={pkg.id} className={pkg.featured ? 'featured' : ''}><h3>{pkg.title}</h3><p>{pkg.reach} · {pkg.days} ngày</p><strong>{pkg.price} xu</strong><ul>{(pkg.features || []).map(item => <li key={item}>{item}</li>)}</ul><button type="button" onClick={() => onBuy(pkg, selectedStoryId)}>Chọn gói</button></article>)}</div>
+        <div className="ad-panel-head"><div><h2>Gói quảng bá truyện</h2><p>Thanh toán bằng Đậu trong ví, giao dịch được lưu backend.</p></div><select value={selectedStoryId} onChange={event => setSelectedStoryId(event.target.value)}>{stories.map(story => <option key={story.id} value={story.id}>{story.title}</option>)}</select></div>
+        <div className="ad-promo-grid">{packages.map(pkg => <article key={pkg.id} className={pkg.featured ? 'featured' : ''}><h3>{pkg.title}</h3><p>{pkg.reach} · {pkg.days} ngày</p><strong>{pkg.price} Đậu</strong><ul>{(pkg.features || []).map(item => <li key={item}>{item}</li>)}</ul><button type="button" onClick={() => onBuy(pkg, selectedStoryId)}>Chọn gói</button></article>)}</div>
       </section>
-      <section className="ad-panel"><h2>Lịch sử quảng bá</h2><div className="ad-activity-list">{promotions.map(item => <p key={item.id}><b>{item.packageName}</b><span>{item.storyTitle} · {item.cost} xu · {item.status} · {formatDate(item.createdAt)}</span></p>)}{!promotions.length && <EmptyState>Chưa có chiến dịch quảng bá nào.</EmptyState>}</div></section>
+      <section className="ad-panel"><h2>Lịch sử quảng bá</h2><div className="ad-activity-list">{promotions.map(item => <p key={item.id}><b>{item.packageName}</b><span>{item.storyTitle} · {item.cost} Đậu · {item.status} · {formatDate(item.createdAt)}</span></p>)}{!promotions.length && <EmptyState>Chưa có chiến dịch quảng bá nào.</EmptyState>}</div></section>
     </div>
   );
 }

@@ -337,7 +337,7 @@ export function StoryDetailPage({ apiClient, user, updateUser }) {
         return false;
       }
       updateUser?.(result.user);
-      setToast(result.price ? `Đã mua combo với ${result.price} xu.` : 'Combo đã được mở khóa.');
+      setToast(result.price ? `Đã mua combo với ${result.price} Đậu.` : 'Combo đã được mở khóa.');
       return true;
     }
     const result = await fetchSafe(apiClient, `/chapters/${target.chapter.id}/unlock`, { method: 'POST' });
@@ -424,8 +424,8 @@ export function StoryDetailHero({ story, chapters, continueProgress, firstChapte
         {story.ageRating === '18' && <div className="sd-content-warning">Cảnh báo nội dung: truyện có thể không phù hợp với độc giả nhỏ tuổi.</div>}
         <div className="sd-offer-strip">
           <span><b>{freeCount}</b> chương miễn phí</span>
-          <span><b>{story.price || 1}</b> xu/chương VIP</span>
-          <span><b>{comboPrice}</b> xu combo</span>
+                <span><b>{story.price || 1}</b> Đậu/chương VIP</span>
+                <span><b>{comboPrice}</b> Đậu combo</span>
         </div>
         <div className="sd-actions">
           <Link className="sd-primary" to={`/truyen/${story.slug}/chuong/${firstChapter}`}>Đọc ngay</Link>
@@ -494,7 +494,7 @@ export function ChapterList({ story, chapters, onPurchase, onReport }) {
           <div key={chapter.id} className={chapter.isPremium ? 'vip' : ''}>
             <Link to={`/truyen/${story.slug}/chuong/${chapter.number}`}>
               <strong>{chapter.isPremium ? '🔒 ' : ''}Chương {chapter.number}: {chapter.title.replace(/^Chương\s*\d+[:：-]?\s*/i, '')}</strong>
-              <small>{chapter.isPremium ? `${chapter.price || story.price || 1} xu` : 'Miễn phí'} · {formatNumber(chapter.views)} lượt đọc</small>
+                        <small>{chapter.isPremium ? `${chapter.price || story.price || 1} Đậu` : 'Miễn phí'} · {formatNumber(chapter.views)} lượt đọc</small>
             </Link>
             <span>
               {chapter.isPremium && <button type="button" onClick={() => onPurchase(chapter)}>Mua</button>}
@@ -647,7 +647,7 @@ export function PurchaseChapterModal({ story, chapters, target, onClose, onConfi
         <button className="sd-modal-close" type="button" onClick={onClose}>×</button>
         <h2>{isCombo ? 'Mua combo truyện' : 'Mua chương lẻ'}</h2>
         <p>{isCombo ? `Mở khóa ${premiumCount} chương VIP hiện có của ${story.title}.` : `Mở khóa chương ${target.chapter?.number}: ${target.chapter?.title}`}</p>
-        <div className="sd-purchase-price"><strong>{formatNumber(price)} xu</strong><span>{isCombo ? 'Combo trọn bộ' : 'Thanh toán một lần'}</span></div>
+        <div className="sd-purchase-price"><strong>{formatNumber(price)} Đậu</strong><span>{isCombo ? 'Combo trọn bộ' : 'Thanh toán một lần'}</span></div>
         <div className="sd-modal-actions">
           <button type="button" onClick={onClose}>Hủy</button>
           <button type="button" disabled={submitting} onClick={confirm}>{submitting ? 'Đang xử lý...' : 'Xác nhận mua'}</button>

@@ -1,42 +1,185 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
-import {
-  mockAdminNotifications,
-  mockAdminReports,
-  mockAdminStatsSeries,
-  mockAdminStories,
-  mockAdminTransactions,
-  mockAdminUsers,
-  mockChapterApprovals,
-  mockTaxonomy,
-  mockViolationComments
-} from '../../data/mockAdminData';
+
+const ADMIN_PAGE_LIMIT = 100;
+
+function queryString(params = {}) {
+  const search = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '' && value !== 'all') search.set(key, value);
+  });
+  const value = search.toString();
+  return value ? `?${value}` : '';
+}
+
+export function loadDashboard(apiClient) {
+  return apiClient('/admin/dashboard');
+}
+
+export function loadUsers(apiClient, params = {}) {
+  return apiClient(`/admin/users${queryString({ limit: ADMIN_PAGE_LIMIT, ...params })}`);
+}
+
+export function loadStories(apiClient, params = {}) {
+  return apiClient(`/admin/stories${queryString({ limit: ADMIN_PAGE_LIMIT, ...params })}`);
+}
+
+export function loadChapters(apiClient, params = {}) {
+  return apiClient(`/admin/chapters${queryString({ limit: ADMIN_PAGE_LIMIT, ...params })}`);
+}
+
+export function loadReports(apiClient, params = {}) {
+  return apiClient(`/admin/reports${queryString({ limit: ADMIN_PAGE_LIMIT, ...params })}`);
+}
+
+export function loadTransactions(apiClient, params = {}) {
+  return apiClient(`/admin/transactions${queryString({ limit: ADMIN_PAGE_LIMIT, ...params })}`);
+}
+
+export function loadComments(apiClient, params = {}) {
+  return apiClient(`/admin/comments${queryString({ limit: ADMIN_PAGE_LIMIT, ...params })}`);
+}
+
+export function loadTaxonomy(apiClient) {
+  return apiClient('/admin/taxonomy');
+}
+
+export function loadNotifications(apiClient, params = {}) {
+  return apiClient(`/admin/notifications${queryString({ limit: ADMIN_PAGE_LIMIT, ...params })}`);
+}
+
+export function loadAdminLogs(apiClient, params = {}) {
+  return apiClient(`/admin/logs${queryString({ limit: ADMIN_PAGE_LIMIT, ...params })}`);
+}
+
+function emptyAdminState() {
+  return {
+    stats: {},
+    users: [],
+    stories: [],
+    chapters: [],
+    reports: [],
+    transactions: [],
+    comments: [],
+    taxonomy: { categories: [], tags: [] },
+    notifications: [],
+    logs: []
+  };
+}
+
+function asArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function normalizeRole(role) {
+  return role === 'user' ? 'reader' : role || 'reader';
+}
+
+function normalizeUser(user = {}) {
+  return {
+    ...user,
+    role: normalizeRole(user.role),
+    status: user.status || 'active',
+    coins: Number(user.coins ?? user.seeds ?? 0),
+    joinedAt: user.joinedAt || user.createdAt || '',
+    lastActiveAt: user.lastActiveAt || user.updatedAt || user.createdAt || '',
+    stories: Number(user.stories ?? user.storyCount ?? 0),
+    reports: Number(user.reports ?? user.reportCount ?? 0)
+  };
+}
+
+function normalizeStory(story = {}) {
+  return {
+    ...story,
+    approvalStatus: story.approvalStatus || 'approved',
+    publishStatus: story.publishStatus || (story.hidden ? 'hidden' : story.status || 'published'),
+    chapterCount: Number(story.chapterCount ?? story.totalChapters ?? story.chapterCountEstimate ?? 0),
+    hidden: Boolean(story.hidden),
+    featured: Boolean(story.featured),
+    hot: Boolean(story.hot),
+    recommended: Boolean(story.recommended),
+    banner: Boolean(story.banner),
+    categories: asArray(story.categories),
+    tags: asArray(story.tags)
+  };
+}
+
+function normalizeChapter(chapter = {}) {
+  return {
+    ...chapter,
+    status: chapter.status || 'approved',
+    storyTitle: chapter.storyTitle || chapter.story?.title || 'Truyện đã xóa',
+    author: chapter.author || chapter.story?.author || '',
+    vip: Boolean(chapter.vip ?? chapter.isPremium),
+    price: Number(chapter.price || 0),
+    wordCount: Number(chapter.wordCount ?? chapter.words ?? 0),
+    reads: Number(chapter.reads ?? chapter.views ?? 0),
+    comments: Number(chapter.comments || 0),
+    preview: chapter.preview || String(chapter.content || '').slice(0, 500)
+  };
+}
+
+function normalizeReport(report = {}) {
+  return {
+    ...report,
+    type: report.type || report.targetType || 'story',
+    targetTitle: report.targetTitle || report.story?.title || 'Nội dung bị báo cáo',
+    storyTitle: report.storyTitle || report.story?.title || '',
+    userName: report.userName || report.reporter?.name || report.user?.name || '',
+    status: report.status || 'open',
+    severity: report.severity || 'medium',
+    detail: report.detail || report.reason || ''
+  };
+}
+
+function normalizeComment(comment = {}) {
+  return {
+    ...comment,
+    status: comment.status || 'visible',
+    userName: comment.userName || comment.user?.name || '',
+    storyTitle: comment.storyTitle || '',
+    reports: Number(comment.reports || 0)
+  };
+}
+
+function normalizeTransaction(transaction = {}) {
+  const amount = Number(transaction.amount || 0);
+  const seeds = Number(transaction.seeds ?? transaction.coins ?? Math.abs(amount));
+  return {
+    ...transaction,
+    type: transaction.type || 'bonus',
+    status: transaction.status || 'success',
+    method: transaction.method || 'internal',
+    amount,
+    seeds,
+    coins: seeds,
+    amountVnd: Number(transaction.amountVnd ?? transaction.vndAmount ?? transaction.money ?? 0),
+    userName: transaction.userName || transaction.user?.name || transaction.userId || '',
+    userEmail: transaction.userEmail || transaction.user?.email || ''
+  };
+}
 
 function formatNumber(value = 0) {
   return Number(value || 0).toLocaleString('vi-VN');
 }
 
-function formatCurrency(value = 0) {
-  return `${formatNumber(value)} đ`;
-}
-
 function formatDate(value) {
   if (!value) return 'Chưa cập nhật';
-  return new Date(value).toLocaleString('vi-VN', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
-  });
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Chưa cập nhật';
+  return date.toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function formatVnd(value = 0) {
+  return `${formatNumber(value)} đ`;
 }
 
 function roleLabel(role) {
   return {
-    admin: 'Admin',
-    author: 'Tác giả',
     reader: 'Độc giả',
-    user: 'Độc giả'
+    user: 'Độc giả',
+    author: 'Tác giả',
+    admin: 'Admin'
   }[role] || role || 'Độc giả';
 }
 
@@ -44,161 +187,66 @@ function statusLabel(status) {
   return {
     active: 'Hoạt động',
     locked: 'Đã khóa',
-    approved: 'Đã duyệt',
-    pending: 'Chờ duyệt',
     draft: 'Nháp',
-    rejected: 'Từ chối',
+    pending: 'Chờ duyệt',
     reviewing: 'Đang xử lý',
-    scheduled: 'Đã lên lịch',
-    resolved: 'Đã xử lý',
-    open: 'Chờ xử lý',
+    approved: 'Đã duyệt',
     published: 'Đã xuất bản',
-    paused: 'Tạm dừng',
-    completed: 'Hoàn thành',
+    rejected: 'Từ chối',
+    hidden: 'Đã ẩn',
+    scheduled: 'Đã lên lịch',
+    open: 'Chờ xử lý',
+    resolved: 'Đã xử lý',
     success: 'Thành công',
     failed: 'Thất bại',
-    hidden: 'Đã ẩn'
+    visible: 'Đang hiện',
+    deleted: 'Đã xóa',
+    completed: 'Hoàn thành',
+    ongoing: 'Đang ra',
+    paused: 'Tạm dừng'
   }[status] || status || 'Chưa rõ';
 }
 
-function paymentStatusLabel(status) {
+function typeLabel(type) {
   return {
-    pending: 'Chờ thanh toán',
-    success: 'Thành công',
-    failed: 'Thất bại'
-  }[status] || statusLabel(status);
+    topup: 'Nạp Đậu',
+    purchase: 'Mua chương',
+    bonus: 'Thưởng',
+    admin_adjustment: 'Admin chỉnh số dư',
+    refund: 'Hoàn Đậu',
+    promotion: 'Quảng bá',
+    story: 'Truyện',
+    chapter: 'Chương',
+    comment: 'Bình luận',
+    user: 'Người dùng',
+    category: 'Thể loại',
+    tag: 'Tag',
+    notification: 'Thông báo',
+    report: 'Báo cáo'
+  }[type] || type || 'Khác';
 }
 
-function getSettledValue(result) {
-  return result?.status === 'fulfilled' ? result.value : null;
+function toneForStatus(status) {
+  if (['approved', 'published', 'resolved', 'success', 'active', 'visible'].includes(status)) return 'success';
+  if (['rejected', 'failed', 'locked', 'deleted'].includes(status)) return 'danger';
+  if (['hidden'].includes(status)) return 'dark';
+  return 'warning';
 }
 
-function asArray(value) {
-  return Array.isArray(value) ? value : [];
+function includesText(values, query) {
+  const text = query.trim().toLowerCase();
+  if (!text) return true;
+  return values.filter(Boolean).join(' ').toLowerCase().includes(text);
 }
 
-function normalizeUser(user) {
-  return {
-    ...user,
-    role: user.role === 'user' ? 'reader' : user.role || 'reader',
-    status: user.status || 'active',
-    coins: user.coins ?? user.seeds ?? 0,
-    stories: user.stories ?? user.storyCount ?? 0,
-    joinedAt: user.createdAt || user.joinedAt || new Date().toISOString(),
-    lastActiveAt: user.lastActiveAt || user.updatedAt || new Date().toISOString()
-  };
-}
-
-function normalizeStory(story, index) {
-  const fallback = mockAdminStories[index % mockAdminStories.length] || {};
-  return {
-    ...fallback,
-    ...story,
-    approvalStatus: story.approvalStatus || fallback.approvalStatus || 'approved',
-    publishStatus: story.publishStatus || (story.status === 'completed' ? 'completed' : 'published'),
-    chapterCount: story.chapterCount || story.chapterCountEstimate || story.chapters || fallback.chapterCount || 0,
-    hidden: Boolean(story.hidden),
-    hot: story.hot ?? fallback.hot ?? false,
-    recommended: story.recommended ?? fallback.recommended ?? false,
-    banner: story.banner ?? fallback.banner ?? false,
-    tags: story.tags || story.categories?.slice(0, 2) || fallback.tags || []
-  };
-}
-
-function normalizeTransaction(transaction, users) {
-  const user = users.find(item => item.id === transaction.userId);
-  const seedAmount = Math.abs(Number(transaction.coins ?? transaction.seeds ?? transaction.amount ?? 0));
-  return {
-    ...transaction,
-    userName: transaction.userName || user?.name || transaction.userId || 'Người dùng',
-    amount: transaction.vndAmount ?? transaction.money ?? (transaction.type === 'purchase' ? seedAmount * 100 : seedAmount * 1000),
-    coins: transaction.coins ?? transaction.seeds ?? Math.abs(Number(transaction.amount || 0)),
-    method: transaction.method || (transaction.type === 'purchase' ? 'Ví xu' : 'Thanh toán nội bộ'),
-    status: transaction.status || 'success',
-    createdAt: transaction.createdAt || new Date().toISOString()
-  };
-}
-
-function normalizeReport(report) {
-  return {
-    ...report,
-    type: report.type || 'story',
-    targetTitle: report.targetTitle || report.story?.title || 'Nội dung được báo cáo',
-    storyTitle: report.storyTitle || report.story?.title || 'Không rõ truyện',
-    userName: report.userName || report.user?.name || 'Người dùng',
-    status: report.status || 'open',
-    severity: report.severity || 'medium',
-    detail: report.detail || report.reason || 'Báo cáo từ người dùng cần admin kiểm tra.',
-    createdAt: report.createdAt || new Date().toISOString()
-  };
-}
-
-function countWords(value) {
-  const text = String(value || '').trim();
-  if (!text) return 0;
-  return text.split(/\s+/).filter(Boolean).length;
-}
-
-function normalizeChapter(chapter, index = 0) {
-  const fallback = mockChapterApprovals[index % mockChapterApprovals.length] || {};
-  const premium = chapter.isPremium ?? chapter.vip ?? fallback.vip ?? false;
-  return {
-    ...fallback,
-    ...chapter,
-    storyTitle: chapter.storyTitle || chapter.story?.title || fallback.storyTitle || 'Truyện đã xóa',
-    storyId: chapter.storyId || chapter.story?.id || fallback.storyId,
-    author: chapter.author || chapter.story?.author || fallback.author || 'Không rõ tác giả',
-    status: chapter.status || fallback.status || 'approved',
-    vip: Boolean(premium),
-    price: Number(chapter.price ?? fallback.price ?? 0),
-    wordCount: Number(chapter.wordCount ?? countWords(chapter.content) ?? fallback.wordCount ?? 0),
-    reads: Number(chapter.reads ?? chapter.views ?? fallback.reads ?? 0),
-    comments: Number(chapter.comments ?? fallback.comments ?? 0),
-    createdAt: chapter.createdAt || fallback.createdAt || new Date().toISOString(),
-    updatedAt: chapter.updatedAt || chapter.createdAt || fallback.updatedAt || fallback.createdAt || new Date().toISOString(),
-    preview: chapter.preview || String(chapter.content || '').slice(0, 320) || fallback.preview || 'Chưa có nội dung preview.'
-  };
-}
-
-function buildAdminState() {
-  const users = mockAdminUsers.map(normalizeUser);
-  const stories = mockAdminStories.map(normalizeStory);
-  const chapters = mockChapterApprovals.map(normalizeChapter);
-  const reports = mockAdminReports.map(normalizeReport);
-  const transactions = mockAdminTransactions;
-  return {
-    users,
-    stories,
-    chapters,
-    reports,
-    transactions,
-    comments: mockViolationComments,
-    notifications: mockAdminNotifications,
-    taxonomy: mockTaxonomy,
-    stats: {
-      users: users.length,
-      stories: stories.length,
-      chapters: stories.reduce((sum, story) => sum + Number(story.chapterCount || 0), 0),
-      transactions: transactions.length,
-      revenueSeeds: transactions.filter(item => item.status === 'success').reduce((sum, item) => sum + Number(item.coins || 0), 0),
-      views: stories.reduce((sum, story) => sum + Number(story.views || 0), 0)
-    }
-  };
-}
-
-function useModalDismiss(onClose, active = true) {
+function usePaged(items, pageSize = 10) {
+  const [page, setPage] = useState(1);
+  const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
   useEffect(() => {
-    if (!active) return undefined;
-    const onKeyDown = event => {
-      if (event.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [active, onClose]);
-
-  return event => {
-    if (event.target === event.currentTarget) onClose();
-  };
+    setPage(current => Math.min(current, totalPages));
+  }, [totalPages]);
+  const pageItems = items.slice((page - 1) * pageSize, page * pageSize);
+  return { page, setPage, totalPages, pageItems };
 }
 
 function getAdminView(pathname) {
@@ -206,92 +254,82 @@ function getAdminView(pathname) {
   if (pathname.includes('/stories')) return 'stories';
   if (pathname.includes('/chapters')) return 'chapters';
   if (pathname.includes('/reports')) return 'reports';
+  if (pathname.includes('/comments')) return 'comments';
   if (pathname.includes('/transactions')) return 'transactions';
+  if (pathname.includes('/taxonomy')) return 'taxonomy';
+  if (pathname.includes('/notifications')) return 'notifications';
+  if (pathname.includes('/logs')) return 'logs';
   return 'overview';
 }
 
 const adminTabs = [
-  { to: '/admin', label: 'Tổng quan', view: 'overview' },
-  { to: '/admin/users', label: 'Người dùng', view: 'users' },
-  { to: '/admin/stories', label: 'Duyệt truyện', view: 'stories' },
-  { to: '/admin/chapters', label: 'Duyệt chương', view: 'chapters' },
-  { to: '/admin/reports', label: 'Báo cáo', view: 'reports' },
-  { to: '/admin/transactions', label: 'Giao dịch', view: 'transactions' }
+  { to: '/admin', view: 'overview', label: 'Tổng quan' },
+  { to: '/admin/users', view: 'users', label: 'Người dùng' },
+  { to: '/admin/stories', view: 'stories', label: 'Truyện' },
+  { to: '/admin/chapters', view: 'chapters', label: 'Chương' },
+  { to: '/admin/reports', view: 'reports', label: 'Báo cáo' },
+  { to: '/admin/comments', view: 'comments', label: 'Bình luận' },
+  { to: '/admin/transactions', view: 'transactions', label: 'Giao dịch' },
+  { to: '/admin/taxonomy', view: 'taxonomy', label: 'Thể loại/Tag' },
+  { to: '/admin/notifications', view: 'notifications', label: 'Thông báo' },
+  { to: '/admin/logs', view: 'logs', label: 'Lịch sử MOD' }
 ];
 
 export function AdminDashboard({ apiClient, user }) {
   const location = useLocation();
-  const [state, setState] = useState(buildAdminState);
+  const activeView = getAdminView(location.pathname);
+  const [state, setState] = useState(emptyAdminState);
   const [loading, setLoading] = useState(true);
+  const [actionBusy, setActionBusy] = useState(false);
   const [error, setError] = useState('');
   const [toast, setToast] = useState('');
-  const [reportModal, setReportModal] = useState(null);
-  const activeView = getAdminView(location.pathname);
+  const [confirm, setConfirm] = useState(null);
+  const [userDetail, setUserDetail] = useState(null);
+
+  async function loadAll({ silent = false } = {}) {
+    if (!apiClient) {
+      setError('Không có API client cho Admin CMS.');
+      setLoading(false);
+      return;
+    }
+    if (!silent) setLoading(true);
+    const tasks = await Promise.allSettled([
+      loadDashboard(apiClient),
+      loadUsers(apiClient),
+      loadStories(apiClient),
+      loadChapters(apiClient),
+      loadReports(apiClient),
+      loadTransactions(apiClient),
+      loadComments(apiClient),
+      loadTaxonomy(apiClient),
+      loadNotifications(apiClient),
+      loadAdminLogs(apiClient)
+    ]);
+    const failed = tasks.filter(item => item.status === 'rejected');
+    const value = index => tasks[index].status === 'fulfilled' ? tasks[index].value : {};
+    setState({
+      stats: value(0).stats || value(0) || {},
+      users: asArray(value(1).users).map(normalizeUser),
+      stories: asArray(value(2).stories).map(normalizeStory),
+      chapters: asArray(value(3).chapters).map(normalizeChapter),
+      reports: asArray(value(4).reports).map(normalizeReport),
+      transactions: asArray(value(5).transactions).map(normalizeTransaction),
+      comments: asArray(value(6).comments).map(normalizeComment),
+      taxonomy: value(7).taxonomy || { categories: [], tags: [] },
+      notifications: asArray(value(8).notifications),
+      logs: asArray(value(9).logs)
+    });
+    setError(failed.length ? `Không tải được ${failed.length} endpoint admin. Dữ liệu lỗi sẽ để trống, bấm Tải lại để thử lại.` : '');
+    setLoading(false);
+  }
 
   useEffect(() => {
-    let ignore = false;
-
-    async function loadAdminData() {
-      if (!apiClient) {
-        setLoading(false);
-        return;
-      }
-
-      setLoading(true);
-      const [statsRes, usersRes, storiesRes, chaptersRes, reportsRes, txRes] = await Promise.allSettled([
-        apiClient('/admin/stats'),
-        apiClient('/admin/users'),
-        apiClient('/admin/stories'),
-        apiClient('/admin/chapters'),
-        apiClient('/admin/reports'),
-        apiClient('/admin/transactions')
-      ]);
-
-      if (ignore) return;
-
-      const fallback = buildAdminState();
-      const apiUsers = asArray(getSettledValue(usersRes)?.users).map(normalizeUser);
-      const users = apiUsers.length ? apiUsers : fallback.users;
-      const apiStories = asArray(getSettledValue(storiesRes)?.stories).map(normalizeStory);
-      const stories = apiStories.length ? apiStories : fallback.stories;
-      const apiChapters = asArray(getSettledValue(chaptersRes)?.chapters).map(normalizeChapter);
-      const chapters = apiChapters.length ? apiChapters : fallback.chapters;
-      const apiReports = asArray(getSettledValue(reportsRes)?.reports).map(normalizeReport);
-      const reports = apiReports.length ? apiReports : fallback.reports;
-      const apiTransactions = asArray(getSettledValue(txRes)?.transactions).map(item => normalizeTransaction(item, users));
-      const transactions = apiTransactions.length ? apiTransactions : fallback.transactions;
-      const stats = getSettledValue(statsRes)?.stats || getSettledValue(statsRes) || fallback.stats;
-      const failed = [statsRes, usersRes, storiesRes, chaptersRes, reportsRes, txRes].some(item => item.status === 'rejected');
-
-      setState(current => ({
-        ...current,
-        users,
-        stories,
-        chapters,
-        reports,
-        transactions,
-        stats: {
-          ...fallback.stats,
-          ...stats,
-          users: stats.users ?? users.length,
-          stories: stats.stories ?? stories.length,
-          chapters: stats.chapters ?? chapters.length,
-          transactions: stats.transactions ?? transactions.length
-        }
-      }));
-      setError(failed ? 'Một số API admin chưa sẵn sàng, phần còn thiếu đang dùng dữ liệu dự phòng.' : '');
-      setLoading(false);
-    }
-
-    loadAdminData().catch(err => {
-      if (ignore) return;
-      setError(`${err.message || 'Không tải được API admin.'} Đang hiển thị dữ liệu dự phòng.`);
-      setState(buildAdminState());
-      setLoading(false);
+    let cancelled = false;
+    loadAll().then(() => {
+      if (cancelled) return;
     });
-
     return () => {
-      ignore = true;
+      cancelled = true;
     };
   }, [apiClient]);
 
@@ -301,351 +339,262 @@ export function AdminDashboard({ apiClient, user }) {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
-  const dashboardStats = useMemo(() => {
-    const pendingReports = state.reports.filter(item => ['open', 'reviewing'].includes(item.status)).length;
-    const pendingStories = state.stories.filter(item => item.approvalStatus === 'pending').length;
-    const pendingChapters = state.chapters.filter(item => ['pending', 'reviewing'].includes(item.status)).length;
-    return {
-      users: state.stats.users ?? state.users.length,
-      stories: state.stats.stories ?? state.stories.length,
-      chapters: state.stats.chapters ?? state.stories.reduce((sum, story) => sum + Number(story.chapterCount || 0), 0),
-      revenue: state.stats.revenueVnd ?? (state.stats.revenueSeeds || 0) * 100,
-      pendingReports,
-      pendingApprovals: pendingStories + pendingChapters,
-      views: state.stats.views ?? state.stories.reduce((sum, story) => sum + Number(story.views || 0), 0)
-    };
-  }, [state]);
-
-  async function updateStory(story, patch) {
-    const supportedPatch = {};
-    if (patch.approvalStatus) supportedPatch.approvalStatus = patch.approvalStatus;
-    if (Object.prototype.hasOwnProperty.call(patch, 'hidden')) supportedPatch.hidden = patch.hidden;
-    const usesApi = Object.keys(supportedPatch).length > 0;
-
-    if (usesApi && !apiClient) {
-      setError('Không có kết nối API để cập nhật trạng thái truyện.');
-      return;
+  async function runMutation(task, successMessage) {
+    setActionBusy(true);
+    try {
+      await task();
+      await loadAll({ silent: true });
+      setError('');
+      setToast(successMessage);
+    } catch (err) {
+      setError(err.message || 'Thao tác admin không thành công.');
+    } finally {
+      setActionBusy(false);
     }
-
-    const previousStories = state.stories;
-    setState(current => ({
-      ...current,
-      stories: current.stories.map(item => item.id === story.id ? { ...item, ...patch } : item)
-    }));
-
-    if (usesApi) {
-      try {
-        const result = await apiClient(`/admin/stories/${story.id}/status`, {
-          method: 'PATCH',
-          body: JSON.stringify(supportedPatch)
-        });
-        if (result?.story) {
-          setState(current => ({
-            ...current,
-            stories: current.stories.map(item => item.id === story.id ? normalizeStory(result.story, 0) : item)
-          }));
-        }
-        setError('');
-        setToast('Đã cập nhật trạng thái truyện trên backend.');
-      } catch (err) {
-        setState(current => ({ ...current, stories: previousStories }));
-        setError(err.message || 'Không cập nhật được trạng thái truyện.');
-      }
-      return;
-    }
-
-    setToast('Đã cập nhật nhãn hiển thị trong phiên hiện tại.');
   }
 
-  function updateUser(id, patch) {
-    setState(current => ({
-      ...current,
-      users: current.users.map(item => item.id === id ? { ...item, ...patch } : item)
-    }));
-    setToast('Đã cập nhật trạng thái người dùng trong phiên hiện tại.');
-  }
+  const badges = useMemo(() => ({
+    stories: state.stories.filter(item => item.approvalStatus === 'pending').length,
+    chapters: state.chapters.filter(item => ['pending', 'reviewing'].includes(item.status)).length,
+    reports: state.reports.filter(item => ['open', 'reviewing'].includes(item.status)).length,
+    comments: state.comments.filter(item => item.status === 'hidden' || item.reports > 0).length,
+    logs: state.logs.length
+  }), [state]);
 
-  async function updateChapter(id, patch) {
-    if (patch.status && !apiClient) {
-      setError('Không có kết nối API để cập nhật trạng thái chương.');
-      return;
-    }
-
-    const previousChapters = state.chapters;
-    setState(current => ({
-      ...current,
-      chapters: current.chapters.map(item => item.id === id ? { ...item, ...patch, updatedAt: new Date().toISOString() } : item)
-    }));
-
-    if (patch.status) {
-      try {
-        const result = await apiClient(`/admin/chapters/${id}/status`, {
-          method: 'PATCH',
-          body: JSON.stringify({ status: patch.status, rejectionReason: patch.rejectionReason })
-        });
-        if (!result?.chapter) throw new Error('API không trả về dữ liệu chương đã cập nhật.');
-        setState(current => ({
-          ...current,
-          chapters: current.chapters.map(item => item.id === id ? normalizeChapter(result.chapter, 0) : item)
-        }));
-        setError('');
-        setToast(`Đã cập nhật trạng thái chương: ${statusLabel(result.chapter.status)}.`);
-      } catch (err) {
-        setState(current => ({ ...current, chapters: previousChapters }));
-        setError(err.message || 'Không cập nhật được trạng thái chương.');
-      }
-      return;
-    }
-
-    setToast('Đã cập nhật chương trong phiên hiện tại.');
-  }
-
-  async function updateReport(report, patch) {
-    setState(current => ({
-      ...current,
-      reports: current.reports.map(item => item.id === report.id ? { ...item, ...patch, updatedAt: new Date().toISOString() } : item),
-      stories: patch.hideContent
-        ? current.stories.map(story => story.title === report.storyTitle ? { ...story, hidden: true } : story)
-        : current.stories
-    }));
-
-    if (apiClient && report.id && ['open', 'reviewing', 'resolved', 'rejected'].includes(patch.status)) {
-      try {
-        await apiClient(`/admin/reports/${report.id}`, {
-          method: 'PATCH',
-          body: JSON.stringify({ status: patch.status })
-        });
-      } catch {
-        setError('API báo cáo chưa đồng bộ action này, CMS đang giữ thay đổi trong phiên hiện tại.');
-      }
-    }
-    setToast('Đã xử lý báo cáo.');
-  }
-
-  function updateComment(id, patch) {
-    setState(current => ({
-      ...current,
-      comments: current.comments.map(item => item.id === id ? { ...item, ...patch } : item)
-    }));
-    setToast('Đã cập nhật bình luận vi phạm trong phiên hiện tại.');
-  }
-
-  function updateTaxonomy(nextTaxonomy) {
-    setState(current => ({ ...current, taxonomy: nextTaxonomy }));
-    setToast('Đã cập nhật thể loại/tag trong phiên hiện tại.');
-  }
+  const actions = {
+    updateUser: (id, patch) => runMutation(
+      () => apiClient(`/admin/users/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+      'Đã cập nhật người dùng.'
+    ),
+    adjustBalance: (id, payload) => runMutation(
+      () => apiClient(`/admin/users/${id}/adjust-balance`, { method: 'POST', body: JSON.stringify(payload) }),
+      'Đã điều chỉnh số dư Đậu.'
+    ),
+    saveStory: (story, payload) => runMutation(
+      () => story?.id
+        ? apiClient(`/admin/stories/${story.id}`, { method: 'PUT', body: JSON.stringify(payload) })
+        : apiClient('/admin/stories', { method: 'POST', body: JSON.stringify(payload) }),
+      story?.id ? 'Đã lưu truyện.' : 'Đã tạo truyện.'
+    ),
+    updateStoryStatus: (story, patch) => runMutation(
+      () => apiClient(`/admin/stories/${story.id}/status`, { method: 'PATCH', body: JSON.stringify(patch) }),
+      'Đã cập nhật trạng thái truyện.'
+    ),
+    updateStoryFlags: (story, patch) => runMutation(
+      () => apiClient(`/admin/stories/${story.id}/flags`, { method: 'PATCH', body: JSON.stringify(patch) }),
+      'Đã cập nhật nhãn truyện.'
+    ),
+    deleteStory: story => runMutation(
+      () => apiClient(`/admin/stories/${story.id}`, { method: 'DELETE' }),
+      'Đã xóa truyện.'
+    ),
+    saveChapter: (chapter, payload) => runMutation(
+      () => apiClient(`/admin/chapters/${chapter.id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+      'Đã lưu chương.'
+    ),
+    updateChapterStatus: (chapter, payload) => runMutation(
+      () => apiClient(`/admin/chapters/${chapter.id}/status`, { method: 'PATCH', body: JSON.stringify(payload) }),
+      'Đã cập nhật trạng thái chương.'
+    ),
+    deleteChapter: chapter => runMutation(
+      () => apiClient(`/admin/chapters/${chapter.id}`, { method: 'DELETE' }),
+      'Đã xóa chương.'
+    ),
+    resolveReport: (report, payload) => runMutation(
+      () => apiClient(`/admin/reports/${report.id}/actions`, { method: 'POST', body: JSON.stringify(payload) }),
+      'Đã xử lý báo cáo.'
+    ),
+    updateComment: (comment, payload) => runMutation(
+      () => apiClient(`/admin/comments/${comment.id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+      'Đã cập nhật bình luận.'
+    ),
+    deleteComment: comment => runMutation(
+      () => apiClient(`/admin/comments/${comment.id}`, { method: 'DELETE' }),
+      'Đã xóa bình luận.'
+    ),
+    createTaxonomy: (kind, payload) => runMutation(
+      () => apiClient(`/admin/taxonomy/${kind}`, { method: 'POST', body: JSON.stringify(payload) }),
+      'Đã tạo taxonomy.'
+    ),
+    updateTaxonomy: (kind, item, payload) => runMutation(
+      () => apiClient(`/admin/taxonomy/${kind}/${item.id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+      'Đã cập nhật taxonomy.'
+    ),
+    deleteTaxonomy: (kind, item) => runMutation(
+      () => apiClient(`/admin/taxonomy/${kind}/${item.id}`, { method: 'DELETE' }),
+      'Đã xóa taxonomy.'
+    ),
+    sendNotification: payload => runMutation(
+      () => apiClient('/admin/notifications', { method: 'POST', body: JSON.stringify(payload) }),
+      'Đã gửi thông báo hệ thống.'
+    )
+  };
 
   if (loading) {
-    return <div className="cms-state cms-loading">Đang tải dữ liệu quản trị...</div>;
+    return <SkeletonPage />;
   }
 
   return (
     <div className="cms-page">
       {toast && <div className="cms-toast">{toast}</div>}
+      {actionBusy && <div className="cms-busy">Đang lưu thay đổi...</div>}
+
       <section className="cms-hero">
         <div>
           <span>Admin CMS</span>
-          <h1>Quản trị viên</h1>
-          <p>Điều hành người dùng, kiểm duyệt truyện/chương, xử lý báo cáo, giao dịch và thông báo từ một dashboard thống nhất.</p>
+          <h1>Khu vực điều hành</h1>
+          <p>Dữ liệu lấy trực tiếp từ backend, mọi thao tác đều persist qua API và có lịch sử MOD.</p>
         </div>
         <div className="cms-admin-card">
           <img src={user?.avatar || '/images/logo.png'} alt={user?.name || 'Admin'} />
           <div>
-            <strong>{user?.name || 'Quản trị viên'}</strong>
+            <strong>{user?.name || 'Admin'}</strong>
             <small>{user?.email || 'admin@example.com'}</small>
           </div>
         </div>
       </section>
 
-      <nav className="cms-tabs">
+      <nav className="cms-tabs" aria-label="Admin CMS">
         {adminTabs.map(tab => (
           <NavLink key={tab.view} end={tab.view === 'overview'} to={tab.to}>
-            {tab.label}
+            <span>{tab.label}</span>
+            {badges[tab.view] > 0 && <b>{badges[tab.view]}</b>}
           </NavLink>
         ))}
       </nav>
 
-      {error && <div className="cms-alert">{error}</div>}
+      {error && (
+        <div className="cms-alert">
+          <span>{error}</span>
+          <button type="button" onClick={() => loadAll()}>Tải lại</button>
+        </div>
+      )}
 
-      {activeView === 'overview' && (
-        <AdminOverview stats={dashboardStats} stories={state.stories} reports={state.reports} chapters={state.chapters} users={state.users} />
+      {activeView === 'overview' && <OverviewTab state={state} />}
+      {activeView === 'users' && (
+        <UsersTab users={state.users} currentUser={user} onOpenUser={setUserDetail} onUpdate={actions.updateUser} onAdjust={actions.adjustBalance} onConfirm={setConfirm} />
       )}
-      {activeView === 'users' && <UserManagementTable users={state.users} onUpdate={updateUser} />}
       {activeView === 'stories' && (
-        <StoryModerationTable stories={state.stories} taxonomy={state.taxonomy} onUpdate={updateStory} onTaxonomyChange={updateTaxonomy} />
+        <StoriesTab stories={state.stories} taxonomy={state.taxonomy} onSave={actions.saveStory} onStatus={actions.updateStoryStatus} onFlags={actions.updateStoryFlags} onDelete={actions.deleteStory} onConfirm={setConfirm} />
       )}
-      {activeView === 'chapters' && <ChapterModerationTable chapters={state.chapters} onUpdate={updateChapter} />}
-      {activeView === 'reports' && (
-        <ReportManagement
-          reports={state.reports}
-          comments={state.comments}
-          onAction={setReportModal}
-          onCommentUpdate={updateComment}
+      {activeView === 'chapters' && (
+        <ChaptersTab chapters={state.chapters} stories={state.stories} onSave={actions.saveChapter} onStatus={actions.updateChapterStatus} onDelete={actions.deleteChapter} onConfirm={setConfirm} />
+      )}
+      {activeView === 'reports' && <ReportsTab reports={state.reports} onResolve={actions.resolveReport} />}
+      {activeView === 'comments' && <CommentsTab comments={state.comments} stories={state.stories} onUpdate={actions.updateComment} onDelete={actions.deleteComment} onConfirm={setConfirm} />}
+      {activeView === 'transactions' && <TransactionsTab transactions={state.transactions} users={state.users} onOpenUser={setUserDetail} />}
+      {activeView === 'taxonomy' && <TaxonomyTab taxonomy={state.taxonomy} onCreate={actions.createTaxonomy} onUpdate={actions.updateTaxonomy} onDelete={actions.deleteTaxonomy} onConfirm={setConfirm} />}
+      {activeView === 'notifications' && <AdminNotificationsTab notifications={state.notifications} users={state.users} onSend={actions.sendNotification} />}
+      {activeView === 'logs' && <LogsTab logs={state.logs} users={state.users} />}
+
+      {userDetail && (
+        <UserModal
+          user={userDetail}
+          currentUser={user}
+          onClose={() => setUserDetail(null)}
+          onSave={patch => actions.updateUser(userDetail.id, patch)}
+          onAdjust={payload => actions.adjustBalance(userDetail.id, payload)}
         />
       )}
-      {activeView === 'transactions' && <TransactionTable transactions={state.transactions} />}
-
-      <ReportActionModal
-        report={reportModal}
-        onClose={() => setReportModal(null)}
-        onSubmit={patch => {
-          updateReport(reportModal, patch);
-          setReportModal(null);
-        }}
-      />
+      <ConfirmModal value={confirm} onClose={() => setConfirm(null)} />
     </div>
   );
 }
 
-function AdminOverview({ stats, stories, reports, chapters, users }) {
-  const pendingStories = stories.filter(item => item.approvalStatus === 'pending').slice(0, 4);
-  const pendingChapters = chapters.filter(item => ['pending', 'reviewing'].includes(item.status)).slice(0, 4);
-  const pendingReports = reports.filter(item => ['open', 'reviewing'].includes(item.status)).slice(0, 4);
-
-  return (
-    <div className="cms-stack">
-      <AdminStatsCards stats={stats} />
-      <section className="cms-grid-two">
-        <BasicStatsChart rows={mockAdminStatsSeries} />
-        <section className="cms-panel">
-          <div className="cms-panel-head">
-            <div>
-              <span>Hoạt động mới</span>
-              <h2>Hàng chờ cần xử lý</h2>
-            </div>
-            <Link to="/notifications" className="cms-link-button">Thông báo cá nhân</Link>
-          </div>
-          <div className="cms-queue">
-            {pendingReports.map(report => (
-              <Link key={report.id} to="/admin/reports">
-                <b>Báo cáo</b>
-                <span>{report.targetTitle}</span>
-                <small>{statusLabel(report.status)} · {formatDate(report.createdAt)}</small>
-              </Link>
-            ))}
-            {pendingStories.map(story => (
-              <Link key={story.id} to="/admin/stories">
-                <b>Truyện chờ duyệt</b>
-                <span>{story.title}</span>
-                <small>{story.author} · {formatNumber(story.chapterCount)} chương</small>
-              </Link>
-            ))}
-            {pendingChapters.map(chapter => (
-              <Link key={chapter.id} to="/admin/chapters">
-                <b>Chương chờ duyệt</b>
-                <span>{chapter.storyTitle} - Chương {chapter.number}</span>
-                <small>{chapter.author} · {formatNumber(chapter.wordCount)} từ</small>
-              </Link>
-            ))}
-          </div>
-          {!pendingReports.length && !pendingStories.length && !pendingChapters.length && <EmptyState title="Không có hàng chờ" text="Các báo cáo và nội dung duyệt mới sẽ xuất hiện tại đây." />}
-        </section>
-      </section>
-
-      <section className="cms-grid-three">
-        <MiniPanel title="Top truyện cần chú ý" items={stories.slice().sort((a, b) => Number(b.views || 0) - Number(a.views || 0)).slice(0, 5).map(story => `${story.title} · ${formatNumber(story.views)} lượt đọc`)} />
-        <MiniPanel title="Người dùng mới" items={users.slice(0, 5).map(item => `${item.name} · ${roleLabel(item.role)} · ${statusLabel(item.status)}`)} />
-        <MiniPanel title="Tác vụ CMS" items={['Khóa/mở khóa người dùng trong phiên hiện tại', 'Duyệt/từ chối truyện qua API backend', 'Duyệt/từ chối/ẩn chương qua API backend', 'Quản lý hot/đề cử/banner trang chủ']} />
-      </section>
-    </div>
-  );
-}
-
-export function AdminStatsCards({ stats }) {
+function OverviewTab({ state }) {
+  const stats = state.stats || {};
+  const pendingStories = state.stories.filter(item => item.approvalStatus === 'pending').slice(0, 5);
+  const pendingChapters = state.chapters.filter(item => ['pending', 'reviewing'].includes(item.status)).slice(0, 5);
+  const pendingReports = state.reports.filter(item => ['open', 'reviewing'].includes(item.status)).slice(0, 5);
   const cards = [
-    { label: 'Tổng người dùng', value: stats.users, tone: 'pink' },
-    { label: 'Tổng truyện', value: stats.stories, tone: 'orange' },
-    { label: 'Tổng chương', value: stats.chapters, tone: 'red' },
-    { label: 'Doanh thu', value: formatCurrency(stats.revenue), tone: 'green' },
-    { label: 'Báo cáo chờ xử lý', value: stats.pendingReports, tone: 'purple' },
-    { label: 'Truyện/chương chờ duyệt', value: stats.pendingApprovals, tone: 'blue' }
+    ['Người dùng', stats.users ?? state.users.length],
+    ['Truyện', stats.stories ?? state.stories.length],
+    ['Chương', stats.chapters ?? state.chapters.length],
+    ['Doanh thu Đậu', stats.revenueSeeds ?? 0],
+    ['Báo cáo chờ', stats.pendingReports ?? pendingReports.length],
+    ['Nội dung chờ duyệt', (stats.pendingStories ?? pendingStories.length) + (stats.pendingChapters ?? pendingChapters.length)]
   ];
 
   return (
-    <section className="cms-stats-grid">
-      {cards.map(card => (
-        <article className={`cms-stat-card tone-${card.tone}`} key={card.label}>
-          <span>{card.label}</span>
-          <strong>{typeof card.value === 'number' ? formatNumber(card.value) : card.value}</strong>
-        </article>
-      ))}
-    </section>
+    <div className="cms-stack">
+      <section className="cms-stats-grid">
+        {cards.map(([label, value]) => (
+          <article className="cms-stat-card" key={label}>
+            <span>{label}</span>
+            <strong>{formatNumber(value)}</strong>
+          </article>
+        ))}
+      </section>
+      <section className="cms-grid-two">
+        <Panel title="Queue cần xử lý" eyebrow="Moderation">
+          <div className="cms-queue">
+            {pendingReports.map(report => <QueueItem key={report.id} to="/admin/reports" label="Báo cáo" title={report.targetTitle} meta={`${statusLabel(report.status)} · ${formatDate(report.createdAt)}`} />)}
+            {pendingStories.map(story => <QueueItem key={story.id} to="/admin/stories" label="Truyện chờ duyệt" title={story.title} meta={story.author} />)}
+            {pendingChapters.map(chapter => <QueueItem key={chapter.id} to="/admin/chapters" label="Chương chờ duyệt" title={`${chapter.storyTitle} - Chương ${chapter.number}`} meta={chapter.author} />)}
+            {!pendingReports.length && !pendingStories.length && !pendingChapters.length && <EmptyState title="Không có hàng chờ" text="Báo cáo và nội dung mới sẽ xuất hiện tại đây." />}
+          </div>
+        </Panel>
+        <Panel title="Hoạt động MOD mới" eyebrow="Audit">
+          <div className="cms-activity-list">
+            {asArray(stats.latestActivities).slice(0, 8).map(item => (
+              <article key={item.id}>
+                <strong>{item.adminName || 'Admin'} · {item.action}</strong>
+                <small>{typeLabel(item.entityType)} {item.entityId} · {formatDate(item.createdAt)}</small>
+              </article>
+            ))}
+            {!asArray(stats.latestActivities).length && <EmptyState title="Chưa có log" text="Các thao tác admin quan trọng sẽ được ghi lại." />}
+          </div>
+        </Panel>
+      </section>
+      <section className="cms-grid-three">
+        <MiniPanel title="Quick actions" items={[
+          ['Duyệt truyện chờ', '/admin/stories'],
+          ['Duyệt chương mới', '/admin/chapters'],
+          ['Xử lý báo cáo', '/admin/reports']
+        ]} />
+        <MiniPanel title="Top truyện nhiều lượt đọc" items={state.stories.slice().sort((a, b) => Number(b.views || 0) - Number(a.views || 0)).slice(0, 5).map(story => [story.title, `/truyen/${story.slug}`])} />
+        <MiniPanel title="Người dùng mới" items={state.users.slice(0, 5).map(item => [`${item.name} · ${roleLabel(item.role)}`, '/admin/users'])} />
+      </section>
+    </div>
   );
 }
 
-function BasicStatsChart({ rows }) {
-  const max = Math.max(...rows.map(item => item.revenue), 1);
+function QueueItem({ to, label, title, meta }) {
   return (
-    <section className="cms-panel">
-      <div className="cms-panel-head">
-        <div>
-          <span>Biểu đồ cơ bản</span>
-          <h2>Doanh thu và nội dung 7 ngày</h2>
-        </div>
-      </div>
-      <div className="cms-chart">
-        {rows.map(row => (
-          <div className="cms-chart-col" key={row.label}>
-            <div className="cms-chart-bars">
-              <i style={{ height: `${Math.max(12, row.revenue / max * 100)}%` }} />
-              <em style={{ height: `${Math.max(10, row.chapters / 130 * 100)}%` }} />
-            </div>
-            <strong>{row.label}</strong>
-            <small>{formatNumber(row.revenue)}</small>
-          </div>
-        ))}
-      </div>
-      <div className="cms-chart-legend"><span>Doanh thu</span><span>Chương mới</span></div>
-    </section>
+    <Link to={to}>
+      <b>{label}</b>
+      <span>{title}</span>
+      <small>{meta}</small>
+    </Link>
   );
 }
 
 function MiniPanel({ title, items }) {
   return (
-    <section className="cms-panel cms-mini-panel">
-      <h2>{title}</h2>
-      <div>
-        {items.map(item => <p key={item}>{item}</p>)}
+    <Panel title={title}>
+      <div className="cms-mini-list">
+        {items.map(([label, to]) => <Link key={`${label}-${to}`} to={to}>{label}</Link>)}
       </div>
-    </section>
+    </Panel>
   );
 }
 
-export function AdminTable({ columns, children, empty }) {
-  return (
-    <div className="cms-table-wrap">
-      <table className="cms-table">
-        <thead>
-          <tr>{columns.map(column => <th key={column}>{column}</th>)}</tr>
-        </thead>
-        <tbody>{children}</tbody>
-      </table>
-      {empty && <EmptyState title="Không có dữ liệu" text="Thử đổi bộ lọc hoặc reset tìm kiếm để xem thêm kết quả." />}
-    </div>
-  );
-}
-
-export function UserManagementTable({ users, onUpdate }) {
+function UsersTab({ users, currentUser, onOpenUser, onUpdate, onAdjust, onConfirm }) {
   const [query, setQuery] = useState('');
   const [role, setRole] = useState('all');
   const [status, setStatus] = useState('all');
-  const [selected, setSelected] = useState(null);
-
-  const filtered = useMemo(() => {
-    const text = query.trim().toLowerCase();
-    return users.filter(user => {
-      const matchesText = !text || `${user.name} ${user.email}`.toLowerCase().includes(text);
-      const matchesRole = role === 'all' || user.role === role;
-      const matchesStatus = status === 'all' || user.status === status;
-      return matchesText && matchesRole && matchesStatus;
-    });
-  }, [users, query, role, status]);
+  const filtered = useMemo(() => users.filter(item =>
+    includesText([item.name, item.email, item.note], query) &&
+    (role === 'all' || item.role === role) &&
+    (status === 'all' || item.status === status)
+  ), [users, query, role, status]);
+  const { page, setPage, totalPages, pageItems } = usePaged(filtered);
 
   return (
     <div className="cms-stack">
-      <PageHead eyebrow="Quản lý người dùng" title="Người dùng" text="Tìm kiếm, lọc vai trò/trạng thái, xem chi tiết và khóa/mở khóa tài khoản trong phiên hiện tại nếu backend chưa hỗ trợ." />
+      <PageHead eyebrow="Users" title="Người dùng" text="Khóa/mở khóa, đổi vai trò, ghi chú nội bộ và điều chỉnh số dư Đậu qua API." />
       <FilterBar>
-        <input value={query} onChange={event => setQuery(event.target.value)} placeholder="Tìm tên hoặc email..." />
+        <input value={query} onChange={event => setQuery(event.target.value)} placeholder="Tìm tên, email, ghi chú..." />
         <select value={role} onChange={event => setRole(event.target.value)}>
           <option value="all">Tất cả vai trò</option>
           <option value="reader">Độc giả</option>
@@ -659,606 +608,633 @@ export function UserManagementTable({ users, onUpdate }) {
         </select>
         <button type="button" onClick={() => { setQuery(''); setRole('all'); setStatus('all'); }}>Reset</button>
       </FilterBar>
-
-      <AdminTable columns={['Người dùng', 'Vai trò', 'Trạng thái', 'Số xu', 'Hoạt động cuối', 'Thao tác']} empty={!filtered.length}>
-        {filtered.map(item => (
+      <AdminTable columns={['Người dùng', 'Vai trò', 'Trạng thái', 'Số dư', 'Hoạt động cuối', 'Thao tác']} empty={!pageItems.length}>
+        {pageItems.map(item => (
           <tr key={item.id}>
-            <td>
-              <div className="cms-user-cell">
-                <img src={item.avatar || '/images/logo.png'} alt={item.name} loading="lazy" />
-                <span><strong>{item.name}</strong><small>{item.email}</small></span>
-              </div>
-            </td>
-            <td>{roleLabel(item.role)}</td>
-            <td><Badge tone={item.status === 'locked' ? 'danger' : 'success'}>{statusLabel(item.status)}</Badge></td>
-            <td>{formatNumber(item.coins)}</td>
-            <td>{formatDate(item.lastActiveAt)}</td>
-            <td>
+            <td data-label="Người dùng"><UserCell user={item} /></td>
+            <td data-label="Vai trò">{roleLabel(item.role)}</td>
+            <td data-label="Trạng thái"><Badge tone={toneForStatus(item.status)}>{statusLabel(item.status)}</Badge></td>
+            <td data-label="Số dư">{formatNumber(item.coins)} Đậu</td>
+            <td data-label="Hoạt động cuối">{formatDate(item.lastActiveAt)}</td>
+            <td data-label="Thao tác">
               <div className="cms-row-actions">
-                <button type="button" onClick={() => setSelected(item)}>Chi tiết</button>
-                <button type="button" onClick={() => onUpdate(item.id, { status: item.status === 'locked' ? 'active' : 'locked' })}>
+                <button type="button" onClick={() => onOpenUser(item)}>Chi tiết</button>
+                <button
+                  type="button"
+                  disabled={item.id === currentUser?.id && item.status !== 'locked'}
+                  onClick={() => onConfirm({
+                    title: item.status === 'locked' ? 'Mở khóa user?' : 'Khóa user?',
+                    text: item.status === 'locked' ? item.email : 'User bị khóa sẽ không đăng nhập hoặc gọi protected API được.',
+                    action: () => onUpdate(item.id, { status: item.status === 'locked' ? 'active' : 'locked' })
+                  })}
+                >
                   {item.status === 'locked' ? 'Mở khóa' : 'Khóa'}
                 </button>
+                <button type="button" onClick={() => onAdjust(item.id, { amount: 10, reason: 'Admin bonus nhanh' })}>+10 Đậu</button>
               </div>
             </td>
           </tr>
         ))}
       </AdminTable>
-
-      {selected && (
-        <section className="cms-panel cms-detail-panel">
-          <button type="button" className="cms-close" onClick={() => setSelected(null)}>Đóng</button>
-          <h2>{selected.name}</h2>
-          <div className="cms-detail-grid">
-            <p><span>Email</span><strong>{selected.email}</strong></p>
-            <p><span>Vai trò</span><strong>{roleLabel(selected.role)}</strong></p>
-            <p><span>Trạng thái</span><strong>{statusLabel(selected.status)}</strong></p>
-            <p><span>Ngày tham gia</span><strong>{formatDate(selected.joinedAt)}</strong></p>
-            <p><span>Truyện đã đăng</span><strong>{formatNumber(selected.stories)}</strong></p>
-            <p><span>Báo cáo liên quan</span><strong>{formatNumber(selected.reports)}</strong></p>
-          </div>
-        </section>
-      )}
+      <Pagination page={page} totalPages={totalPages} onPage={setPage} />
     </div>
   );
 }
 
-export function StoryModerationTable({ stories, taxonomy, onUpdate, onTaxonomyChange }) {
+function UserCell({ user }) {
+  return (
+    <div className="cms-user-cell">
+      <img src={user.avatar || '/images/logo.png'} alt={user.name || user.email} loading="lazy" />
+      <span>
+        <strong>{user.name || user.email}</strong>
+        <small>{user.email}</small>
+      </span>
+    </div>
+  );
+}
+
+function UserModal({ user, currentUser, onClose, onSave, onAdjust }) {
+  const [role, setRole] = useState(user.role);
+  const [status, setStatus] = useState(user.status);
+  const [note, setNote] = useState(user.note || '');
+  const [amount, setAmount] = useState('');
+  const [reason, setReason] = useState('');
+
+  return (
+    <Modal title={user.name || user.email} onClose={onClose}>
+      <div className="cms-detail-grid">
+        <p><span>Email</span><strong>{user.email}</strong></p>
+        <p><span>Ngày tham gia</span><strong>{formatDate(user.joinedAt)}</strong></p>
+        <p><span>Số dư</span><strong>{formatNumber(user.coins)} Đậu</strong></p>
+        <p><span>Truyện</span><strong>{formatNumber(user.stories)}</strong></p>
+        <p><span>Báo cáo liên quan</span><strong>{formatNumber(user.reports)}</strong></p>
+        <p><span>Hoạt động cuối</span><strong>{formatDate(user.lastActiveAt)}</strong></p>
+      </div>
+      <form className="cms-form" onSubmit={event => { event.preventDefault(); onSave({ role, status, note }); }}>
+        <label>Vai trò<select value={role} onChange={event => setRole(event.target.value)}><option value="reader">Độc giả</option><option value="author">Tác giả</option><option value="admin">Admin</option></select></label>
+        <label>Trạng thái<select value={status} disabled={user.id === currentUser?.id} onChange={event => setStatus(event.target.value)}><option value="active">Hoạt động</option><option value="locked">Đã khóa</option></select></label>
+        <label className="wide">Ghi chú<textarea value={note} onChange={event => setNote(event.target.value)} placeholder="Ghi chú nội bộ..." /></label>
+        <div className="cms-modal-actions"><button type="submit">Lưu user</button></div>
+      </form>
+      <form className="cms-form" onSubmit={event => { event.preventDefault(); onAdjust({ amount: Number(amount), reason }); setAmount(''); setReason(''); }}>
+        <label>Số Đậu<input type="number" value={amount} onChange={event => setAmount(event.target.value)} placeholder="VD: 50 hoặc -10" /></label>
+        <label>Lý do<input value={reason} onChange={event => setReason(event.target.value)} placeholder="Lý do điều chỉnh" /></label>
+        <div className="cms-modal-actions"><button type="submit">Điều chỉnh Đậu</button></div>
+      </form>
+    </Modal>
+  );
+}
+
+function StoriesTab({ stories, taxonomy, onSave, onStatus, onFlags, onDelete, onConfirm }) {
   const [query, setQuery] = useState('');
   const [approval, setApproval] = useState('all');
-  const [publish, setPublish] = useState('all');
-  const [genre, setGenre] = useState('all');
-  const [newGenre, setNewGenre] = useState('');
-  const [newTag, setNewTag] = useState('');
-
-  const genres = taxonomy.genres || [];
-  const filtered = useMemo(() => {
-    const text = query.trim().toLowerCase();
-    return stories.filter(story => {
-      const matchesText = !text || `${story.title} ${story.author}`.toLowerCase().includes(text);
-      const matchesApproval = approval === 'all' || story.approvalStatus === approval;
-      const matchesPublish = publish === 'all' || story.publishStatus === publish || story.status === publish;
-      const matchesGenre = genre === 'all' || story.categories?.includes(genre);
-      return matchesText && matchesApproval && matchesPublish && matchesGenre;
-    });
-  }, [stories, query, approval, publish, genre]);
-
-  function addTaxonomy(kind, value) {
-    const text = value.trim();
-    if (!text) return;
-    const key = kind === 'genre' ? 'genres' : 'tags';
-    onTaxonomyChange({ ...taxonomy, [key]: Array.from(new Set([...(taxonomy[key] || []), text])) });
-    if (kind === 'genre') setNewGenre('');
-    else setNewTag('');
-  }
+  const [hidden, setHidden] = useState('all');
+  const [category, setCategory] = useState('all');
+  const [editing, setEditing] = useState(null);
+  const [rejecting, setRejecting] = useState(null);
+  const categories = asArray(taxonomy.categories);
+  const filtered = useMemo(() => stories.filter(story =>
+    includesText([story.title, story.author, story.description, ...story.categories, ...story.tags], query) &&
+    (approval === 'all' || story.approvalStatus === approval) &&
+    (hidden === 'all' || String(story.hidden) === hidden) &&
+    (category === 'all' || story.categories.includes(category))
+  ), [stories, query, approval, hidden, category]);
+  const { page, setPage, totalPages, pageItems } = usePaged(filtered);
 
   return (
     <div className="cms-stack">
-      <PageHead eyebrow="Duyệt truyện / Quản lý truyện" title="Duyệt truyện và quản lý truyện" text="Duyệt/từ chối truyện mới, ẩn nội dung, gắn hot/đề cử/banner trang chủ và quản lý taxonomy." />
+      <PageHead eyebrow="Stories" title="Truyện" text="Duyệt, từ chối, ẩn/hiện, gắn featured/hot/recommended/banner và sửa metadata." action={<button type="button" onClick={() => setEditing({})}>Tạo truyện</button>} />
       <FilterBar>
-        <input value={query} onChange={event => setQuery(event.target.value)} placeholder="Tìm truyện hoặc tác giả..." />
-        <select value={approval} onChange={event => setApproval(event.target.value)}>
-          <option value="all">Tất cả trạng thái duyệt</option>
-          <option value="pending">Chờ duyệt</option>
-          <option value="approved">Đã duyệt</option>
-          <option value="rejected">Từ chối</option>
-        </select>
-        <select value={publish} onChange={event => setPublish(event.target.value)}>
-          <option value="all">Tất cả xuất bản</option>
-          <option value="published">Đã xuất bản</option>
-          <option value="completed">Hoàn thành</option>
-          <option value="paused">Tạm dừng</option>
-        </select>
-        <select value={genre} onChange={event => setGenre(event.target.value)}>
-          <option value="all">Tất cả thể loại</option>
-          {genres.map(item => <option key={item} value={item}>{item}</option>)}
-        </select>
-        <button type="button" onClick={() => { setQuery(''); setApproval('all'); setPublish('all'); setGenre('all'); }}>Reset</button>
+        <input value={query} onChange={event => setQuery(event.target.value)} placeholder="Tìm truyện, tác giả, tag..." />
+        <select value={approval} onChange={event => setApproval(event.target.value)}><option value="all">Tất cả duyệt</option><option value="pending">Chờ duyệt</option><option value="approved">Đã duyệt</option><option value="rejected">Từ chối</option><option value="draft">Nháp</option></select>
+        <select value={hidden} onChange={event => setHidden(event.target.value)}><option value="all">Ẩn/hiện</option><option value="false">Đang hiện</option><option value="true">Đã ẩn</option></select>
+        <select value={category} onChange={event => setCategory(event.target.value)}><option value="all">Tất cả thể loại</option>{categories.map(item => <option key={item.id || item.name} value={item.name}>{item.name}</option>)}</select>
+        <button type="button" onClick={() => { setQuery(''); setApproval('all'); setHidden('all'); setCategory('all'); }}>Reset</button>
       </FilterBar>
-
-      <AdminTable columns={['Truyện', 'Duyệt', 'Xuất bản', 'Gắn nhãn', 'Chỉ số', 'Thao tác']} empty={!filtered.length}>
-        {filtered.map(story => (
+      <AdminTable columns={['Truyện', 'Duyệt', 'Hiển thị', 'Nhãn', 'Chỉ số', 'Thao tác']} empty={!pageItems.length}>
+        {pageItems.map(story => (
           <tr key={story.id}>
-            <td>
-              <div className="cms-story-cell">
-                <img src={story.cover || '/images/cover-1.jpg'} alt={story.title} loading="lazy" />
-                <span><strong>{story.title}</strong><small>{story.author} · {story.categories?.slice(0, 2).join(', ')}</small></span>
-              </div>
-            </td>
-            <td><Badge tone={story.approvalStatus === 'approved' ? 'success' : story.approvalStatus === 'rejected' ? 'danger' : 'warning'}>{statusLabel(story.approvalStatus)}</Badge></td>
-            <td>{statusLabel(story.publishStatus || story.status)}</td>
-            <td>
-              <div className="cms-chip-row">
-                {story.hot && <Badge tone="danger">HOT</Badge>}
-                {story.recommended && <Badge tone="info">Đề cử</Badge>}
-                {story.banner && <Badge tone="warning">Banner</Badge>}
-                {story.hidden && <Badge tone="dark">Ẩn</Badge>}
-              </div>
-            </td>
-            <td>{formatNumber(story.views)} đọc · {formatNumber(story.chapterCount)} chương</td>
-            <td>
+            <td data-label="Truyện"><StoryCell story={story} /></td>
+            <td data-label="Duyệt"><Badge tone={toneForStatus(story.approvalStatus)}>{statusLabel(story.approvalStatus)}</Badge></td>
+            <td data-label="Hiển thị"><Badge tone={story.hidden ? 'dark' : 'success'}>{story.hidden ? 'Đã ẩn' : 'Public'}</Badge></td>
+            <td data-label="Nhãn"><FlagBadges item={story} /></td>
+            <td data-label="Chỉ số">{formatNumber(story.views)} đọc · {formatNumber(story.chapterCount)} chương</td>
+            <td data-label="Thao tác">
               <div className="cms-row-actions">
-                <button type="button" onClick={() => onUpdate(story, { approvalStatus: 'approved' })}>Duyệt</button>
-                <button type="button" onClick={() => onUpdate(story, { approvalStatus: 'rejected' })}>Từ chối</button>
-                <button type="button" onClick={() => onUpdate(story, { hidden: !story.hidden })}>{story.hidden ? 'Hiện' : 'Ẩn'}</button>
-                <button type="button" onClick={() => onUpdate(story, { hot: !story.hot })}>{story.hot ? 'Bỏ hot' : 'Hot'}</button>
-                <button type="button" onClick={() => onUpdate(story, { recommended: !story.recommended })}>Đề cử</button>
-                <button type="button" onClick={() => onUpdate(story, { banner: !story.banner })}>Banner</button>
+                <button type="button" onClick={() => onStatus(story, { approvalStatus: 'approved', hidden: false })}>Duyệt</button>
+                <button type="button" onClick={() => setRejecting(story)}>Từ chối</button>
+                <button type="button" onClick={() => onConfirm({ title: story.hidden ? 'Hiện truyện?' : 'Ẩn truyện?', text: story.title, action: () => onStatus(story, { hidden: !story.hidden }) })}>{story.hidden ? 'Hiện' : 'Ẩn'}</button>
+                <button type="button" onClick={() => onFlags(story, { featured: !story.featured })}>{story.featured ? 'Bỏ featured' : 'Featured'}</button>
+                <button type="button" onClick={() => onFlags(story, { hot: !story.hot })}>{story.hot ? 'Bỏ hot' : 'Hot'}</button>
+                <button type="button" onClick={() => onFlags(story, { recommended: !story.recommended })}>Đề cử</button>
+                <button type="button" onClick={() => onFlags(story, { banner: !story.banner })}>Banner</button>
+                <button type="button" onClick={() => setEditing(story)}>Sửa</button>
+                {story.slug && <Link className="cms-link-button" to={`/truyen/${story.slug}`}>Preview</Link>}
+                <button type="button" className="danger" onClick={() => onConfirm({ title: 'Xóa truyện?', text: 'Toàn bộ chương, bình luận, lịch sử liên quan sẽ bị xóa.', action: () => onDelete(story) })}>Xóa</button>
               </div>
             </td>
           </tr>
         ))}
       </AdminTable>
-
-      <section className="cms-grid-two">
-        <TaxonomyBox title="Thể loại" items={taxonomy.genres || []} value={newGenre} onChange={setNewGenre} onAdd={() => addTaxonomy('genre', newGenre)} />
-        <TaxonomyBox title="Tag" items={taxonomy.tags || []} value={newTag} onChange={setNewTag} onAdd={() => addTaxonomy('tag', newTag)} />
-      </section>
+      <Pagination page={page} totalPages={totalPages} onPage={setPage} />
+      {editing && <StoryFormModal story={editing.id ? editing : null} taxonomy={taxonomy} onClose={() => setEditing(null)} onSave={payload => { onSave(editing.id ? editing : null, payload); setEditing(null); }} />}
+      {rejecting && <ReasonModal title="Từ chối truyện" target={rejecting.title} onClose={() => setRejecting(null)} onSubmit={reason => { onStatus(rejecting, { approvalStatus: 'rejected', rejectionReason: reason }); setRejecting(null); }} />}
     </div>
   );
 }
 
-function TaxonomyBox({ title, items, value, onChange, onAdd }) {
+function StoryCell({ story }) {
   return (
-    <section className="cms-panel">
-      <div className="cms-panel-head">
-        <div>
-          <span>Taxonomy</span>
-          <h2>{title}</h2>
-        </div>
-      </div>
-      <div className="cms-chip-cloud">
-        {items.map(item => <span key={item}>{item}</span>)}
-      </div>
-      <div className="cms-inline-form">
-        <input value={value} onChange={event => onChange(event.target.value)} placeholder={`Thêm ${title.toLowerCase()}...`} />
-        <button type="button" onClick={onAdd}>Thêm</button>
-      </div>
-    </section>
+    <div className="cms-story-cell">
+      <img src={story.cover || '/images/cover-1.jpg'} alt={story.title} loading="lazy" />
+      <span>
+        <strong>{story.title}</strong>
+        <small>{story.author} · {story.categories.slice(0, 2).join(', ')}</small>
+      </span>
+    </div>
   );
 }
 
-export function ChapterModerationTable({ chapters, onUpdate }) {
+function FlagBadges({ item }) {
+  const flags = [
+    ['featured', 'Featured'],
+    ['hot', 'Hot'],
+    ['recommended', 'Đề cử'],
+    ['banner', 'Banner']
+  ].filter(([key]) => item[key]);
+  if (!flags.length) return <span className="cms-muted">Không</span>;
+  return <div className="cms-chip-row">{flags.map(([key, label]) => <Badge key={key} tone={key === 'hot' ? 'danger' : 'info'}>{label}</Badge>)}</div>;
+}
+
+function StoryFormModal({ story, taxonomy, onClose, onSave }) {
+  const [form, setForm] = useState(() => ({
+    title: story?.title || '',
+    author: story?.author || '',
+    translator: story?.translator || '',
+    cover: story?.cover || '/images/cover-1.jpg',
+    description: story?.description || '',
+    status: story?.status || 'ongoing',
+    approvalStatus: story?.approvalStatus || 'pending',
+    hidden: Boolean(story?.hidden),
+    categories: asArray(story?.categories).join(', '),
+    tags: asArray(story?.tags).join(', '),
+    premium: Boolean(story?.premium),
+    price: story?.price || 0,
+    featured: Boolean(story?.featured),
+    hot: Boolean(story?.hot),
+    recommended: Boolean(story?.recommended),
+    banner: Boolean(story?.banner)
+  }));
+  const set = (key, value) => setForm(current => ({ ...current, [key]: value }));
+  const suggestions = asArray(taxonomy.categories).map(item => item.name).join(', ');
+  return (
+    <Modal title={story ? 'Sửa truyện' : 'Tạo truyện'} onClose={onClose}>
+      <form className="cms-form" onSubmit={event => {
+        event.preventDefault();
+        onSave({
+          ...form,
+          price: Number(form.price || 0),
+          categories: form.categories.split(',').map(item => item.trim()).filter(Boolean),
+          tags: form.tags.split(',').map(item => item.trim()).filter(Boolean)
+        });
+      }}>
+        <label>Tiêu đề<input value={form.title} onChange={event => set('title', event.target.value)} required /></label>
+        <label>Tác giả<input value={form.author} onChange={event => set('author', event.target.value)} required /></label>
+        <label>Dịch giả<input value={form.translator} onChange={event => set('translator', event.target.value)} /></label>
+        <label>Cover<input value={form.cover} onChange={event => set('cover', event.target.value)} /></label>
+        <label>Trạng thái<select value={form.status} onChange={event => set('status', event.target.value)}><option value="ongoing">Đang ra</option><option value="completed">Hoàn thành</option><option value="paused">Tạm dừng</option></select></label>
+        <label>Duyệt<select value={form.approvalStatus} onChange={event => set('approvalStatus', event.target.value)}><option value="pending">Chờ duyệt</option><option value="approved">Đã duyệt</option><option value="rejected">Từ chối</option><option value="draft">Nháp</option></select></label>
+        <label>Giá Đậu<input type="number" value={form.price} onChange={event => set('price', event.target.value)} /></label>
+        <label className="wide">Mô tả<textarea value={form.description} onChange={event => set('description', event.target.value)} required /></label>
+        <label className="wide">Thể loại<input value={form.categories} onChange={event => set('categories', event.target.value)} placeholder={suggestions} /></label>
+        <label className="wide">Tag<input value={form.tags} onChange={event => set('tags', event.target.value)} /></label>
+        <label className="cms-checkbox"><input type="checkbox" checked={form.hidden} onChange={event => set('hidden', event.target.checked)} /> Ẩn truyện</label>
+        <label className="cms-checkbox"><input type="checkbox" checked={form.premium} onChange={event => set('premium', event.target.checked)} /> Truyện VIP</label>
+        <label className="cms-checkbox"><input type="checkbox" checked={form.featured} onChange={event => set('featured', event.target.checked)} /> Featured</label>
+        <label className="cms-checkbox"><input type="checkbox" checked={form.hot} onChange={event => set('hot', event.target.checked)} /> Hot</label>
+        <label className="cms-checkbox"><input type="checkbox" checked={form.recommended} onChange={event => set('recommended', event.target.checked)} /> Đề cử</label>
+        <label className="cms-checkbox"><input type="checkbox" checked={form.banner} onChange={event => set('banner', event.target.checked)} /> Banner</label>
+        <div className="cms-modal-actions"><button type="button" onClick={onClose}>Hủy</button><button type="submit">Lưu</button></div>
+      </form>
+    </Modal>
+  );
+}
+
+function ChaptersTab({ chapters, stories, onSave, onStatus, onDelete, onConfirm }) {
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState('all');
-  const [story, setStory] = useState('all');
+  const [storyId, setStoryId] = useState('all');
+  const [vip, setVip] = useState('all');
   const [preview, setPreview] = useState(null);
+  const [editing, setEditing] = useState(null);
   const [rejecting, setRejecting] = useState(null);
-  const [reason, setReason] = useState('');
-  const storyNames = Array.from(new Set(chapters.map(item => item.storyTitle)));
-
-  const filtered = useMemo(() => {
-    const text = query.trim().toLowerCase();
-    return chapters.filter(chapter => {
-      const matchesText = !text || `${chapter.title} ${chapter.storyTitle} ${chapter.author}`.toLowerCase().includes(text);
-      const matchesStatus = status === 'all' || chapter.status === status;
-      const matchesStory = story === 'all' || chapter.storyTitle === story;
-      return matchesText && matchesStatus && matchesStory;
-    });
-  }, [chapters, query, status, story]);
-
-  function submitReject() {
-    if (!rejecting) return;
-    onUpdate(rejecting.id, { status: 'rejected', rejectionReason: reason || 'Cần chỉnh sửa trước khi duyệt.' });
-    setRejecting(null);
-    setReason('');
-  }
-
-  useEffect(() => {
-    if (!rejecting) return undefined;
-    const onKeyDown = event => {
-      if (event.key === 'Escape') {
-        setRejecting(null);
-        setReason('');
-      }
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [rejecting]);
+  const [scheduling, setScheduling] = useState(null);
+  const filtered = useMemo(() => chapters.filter(chapter =>
+    includesText([chapter.title, chapter.storyTitle, chapter.author, chapter.content], query) &&
+    (status === 'all' || chapter.status === status) &&
+    (storyId === 'all' || chapter.storyId === storyId) &&
+    (vip === 'all' || String(chapter.vip) === vip)
+  ), [chapters, query, status, storyId, vip]);
+  const { page, setPage, totalPages, pageItems } = usePaged(filtered);
 
   return (
     <div className="cms-stack">
-      <PageHead eyebrow="Duyệt chương" title="Duyệt chương" text="Xem preview, chuyển trạng thái duyệt/từ chối/ẩn chương và lưu trạng thái trực tiếp vào backend." />
+      <PageHead eyebrow="Chapters" title="Chương" text="Duyệt, từ chối, ẩn, lên lịch và sửa metadata chương trên backend." />
       <FilterBar>
         <input value={query} onChange={event => setQuery(event.target.value)} placeholder="Tìm chương, truyện, tác giả..." />
-        <select value={status} onChange={event => setStatus(event.target.value)}>
-          <option value="all">Tất cả trạng thái</option>
-          <option value="draft">Nháp</option>
-          <option value="pending">Chờ duyệt</option>
-          <option value="reviewing">Đang xử lý</option>
-          <option value="approved">Đã duyệt</option>
-          <option value="rejected">Từ chối</option>
-          <option value="scheduled">Đã lên lịch</option>
-          <option value="hidden">Đã ẩn</option>
-        </select>
-        <select value={story} onChange={event => setStory(event.target.value)}>
-          <option value="all">Tất cả truyện</option>
-          {storyNames.map(item => <option key={item} value={item}>{item}</option>)}
-        </select>
-        <button type="button" onClick={() => { setQuery(''); setStatus('all'); setStory('all'); }}>Reset</button>
+        <select value={status} onChange={event => setStatus(event.target.value)}><option value="all">Tất cả trạng thái</option>{['draft','pending','reviewing','approved','published','rejected','hidden','scheduled'].map(item => <option key={item} value={item}>{statusLabel(item)}</option>)}</select>
+        <select value={storyId} onChange={event => setStoryId(event.target.value)}><option value="all">Tất cả truyện</option>{stories.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</select>
+        <select value={vip} onChange={event => setVip(event.target.value)}><option value="all">VIP/free</option><option value="true">VIP</option><option value="false">Miễn phí</option></select>
+        <button type="button" onClick={() => { setQuery(''); setStatus('all'); setStoryId('all'); setVip('all'); }}>Reset</button>
       </FilterBar>
-
-      <AdminTable columns={['Chương', 'Tác giả', 'Trạng thái', 'Loại', 'Thống kê', 'Thao tác']} empty={!filtered.length}>
-        {filtered.map(chapter => (
+      <AdminTable columns={['Chương', 'Tác giả', 'Trạng thái', 'Loại', 'Thống kê', 'Thao tác']} empty={!pageItems.length}>
+        {pageItems.map(chapter => (
           <tr key={chapter.id}>
-            <td>
-              <strong>{chapter.storyTitle}</strong>
-              <small>Chương {chapter.number}: {chapter.title}</small>
-            </td>
-            <td>{chapter.author}</td>
-            <td><Badge tone={chapter.status === 'approved' ? 'success' : chapter.status === 'rejected' ? 'danger' : chapter.status === 'hidden' ? 'dark' : 'warning'}>{statusLabel(chapter.status)}</Badge></td>
-            <td>{chapter.vip ? `VIP · ${chapter.price} xu` : 'Miễn phí'}</td>
-            <td>{formatNumber(chapter.wordCount)} từ · {formatNumber(chapter.reads)} đọc · {formatNumber(chapter.comments)} bình luận</td>
-            <td>
+            <td data-label="Chương"><strong>{chapter.storyTitle}</strong><small>Chương {chapter.number}: {chapter.title}</small></td>
+            <td data-label="Tác giả">{chapter.author}</td>
+            <td data-label="Trạng thái"><Badge tone={toneForStatus(chapter.status)}>{statusLabel(chapter.status)}</Badge></td>
+            <td data-label="Loại">{chapter.vip ? `${chapter.price} Đậu` : 'Miễn phí'}</td>
+            <td data-label="Thống kê">{formatNumber(chapter.wordCount)} từ · {formatNumber(chapter.reads)} đọc · {formatNumber(chapter.comments)} bình luận</td>
+            <td data-label="Thao tác">
               <div className="cms-row-actions">
                 <button type="button" onClick={() => setPreview(chapter)}>Preview</button>
-                <button type="button" onClick={() => onUpdate(chapter.id, { status: 'reviewing' })}>Đang xử lý</button>
-                <button type="button" onClick={() => onUpdate(chapter.id, { status: 'approved' })}>Duyệt</button>
+                <button type="button" onClick={() => setEditing(chapter)}>Sửa</button>
+                <button type="button" onClick={() => onStatus(chapter, { status: 'reviewing' })}>Reviewing</button>
+                <button type="button" onClick={() => onStatus(chapter, { status: 'approved' })}>Duyệt</button>
                 <button type="button" onClick={() => setRejecting(chapter)}>Từ chối</button>
-                <button type="button" onClick={() => onUpdate(chapter.id, { status: 'hidden' })}>Ẩn</button>
+                <button type="button" onClick={() => onConfirm({ title: chapter.status === 'hidden' ? 'Hiện chương?' : 'Ẩn chương?', text: chapter.title, action: () => onStatus(chapter, { status: chapter.status === 'hidden' ? 'approved' : 'hidden' }) })}>{chapter.status === 'hidden' ? 'Hiện' : 'Ẩn'}</button>
+                <button type="button" onClick={() => setScheduling(chapter)}>Lên lịch</button>
+                <button type="button" className="danger" onClick={() => onConfirm({ title: 'Xóa chương?', text: `${chapter.storyTitle} - Chương ${chapter.number}`, action: () => onDelete(chapter) })}>Xóa</button>
               </div>
             </td>
           </tr>
         ))}
       </AdminTable>
-
-      {preview && (
-        <section className="cms-panel cms-preview-panel">
-          <button type="button" className="cms-close" onClick={() => setPreview(null)}>Đóng</button>
-          <span>Preview chương</span>
-          <h2>{preview.storyTitle} - Chương {preview.number}: {preview.title}</h2>
-          <p>{preview.preview}</p>
-        </section>
-      )}
-
-      {rejecting && (
-        <div className="cms-modal-backdrop" onMouseDown={event => {
-          if (event.target === event.currentTarget) {
-            setRejecting(null);
-            setReason('');
-          }
-        }}>
-          <form className="cms-modal" onSubmit={event => { event.preventDefault(); submitReject(); }}>
-            <h2>Ghi lý do từ chối</h2>
-            <p>{rejecting.storyTitle} - Chương {rejecting.number}: {rejecting.title}</p>
-            <textarea value={reason} onChange={event => setReason(event.target.value)} placeholder="Lý do từ chối để tác giả chỉnh sửa..." />
-            <div className="cms-modal-actions">
-              <button type="button" onClick={() => setRejecting(null)}>Hủy</button>
-              <button type="submit">Từ chối chương</button>
-            </div>
-          </form>
-        </div>
-      )}
+      <Pagination page={page} totalPages={totalPages} onPage={setPage} />
+      {preview && <Modal title={`${preview.storyTitle} - Chương ${preview.number}`} onClose={() => setPreview(null)}><pre className="cms-preview-text">{preview.content || preview.preview || 'Chưa có nội dung.'}</pre></Modal>}
+      {editing && <ChapterFormModal chapter={editing} onClose={() => setEditing(null)} onSave={payload => { onSave(editing, payload); setEditing(null); }} />}
+      {rejecting && <ReasonModal title="Từ chối chương" target={`${rejecting.storyTitle} - Chương ${rejecting.number}`} onClose={() => setRejecting(null)} onSubmit={reason => { onStatus(rejecting, { status: 'rejected', rejectionReason: reason }); setRejecting(null); }} />}
+      {scheduling && <ScheduleModal chapter={scheduling} onClose={() => setScheduling(null)} onSubmit={scheduledAt => { onStatus(scheduling, { status: 'scheduled', scheduledAt }); setScheduling(null); }} />}
     </div>
   );
 }
 
-export function TransactionTable({ transactions }) {
-  const [query, setQuery] = useState('');
-  const [status, setStatus] = useState('all');
-  const [selected, setSelected] = useState(null);
-
-  const filtered = useMemo(() => {
-    const text = query.trim().toLowerCase();
-    return transactions.filter(item => {
-      const matchesText = !text || `${item.id} ${item.userName} ${item.method}`.toLowerCase().includes(text);
-      const matchesStatus = status === 'all' || item.status === status;
-      return matchesText && matchesStatus;
-    });
-  }, [transactions, query, status]);
-
+function ChapterFormModal({ chapter, onClose, onSave }) {
+  const [form, setForm] = useState(() => ({
+    title: chapter.title || '',
+    number: chapter.number || 1,
+    price: chapter.price || 0,
+    isPremium: Boolean(chapter.vip),
+    status: chapter.status || 'approved',
+    content: chapter.content || '',
+    preview: chapter.preview || ''
+  }));
+  const set = (key, value) => setForm(current => ({ ...current, [key]: value }));
   return (
-    <div className="cms-stack">
-      <PageHead eyebrow="Nạp xu" title="Quản lý giao dịch" text="Theo dõi giao dịch nạp xu, trạng thái thanh toán, phương thức và chi tiết xử lý." />
-      <FilterBar>
-        <input value={query} onChange={event => setQuery(event.target.value)} placeholder="Tìm mã giao dịch, người dùng..." />
-        <select value={status} onChange={event => setStatus(event.target.value)}>
-          <option value="all">Tất cả trạng thái</option>
-          <option value="pending">Chờ thanh toán</option>
-          <option value="success">Thành công</option>
-          <option value="failed">Thất bại</option>
-        </select>
-        <button type="button" onClick={() => { setQuery(''); setStatus('all'); }}>Reset</button>
-      </FilterBar>
-
-      <AdminTable columns={['Mã', 'Người dùng', 'Số tiền', 'Số xu', 'Phương thức', 'Trạng thái', 'Thời gian', '']} empty={!filtered.length}>
-        {filtered.map(item => (
-          <tr key={item.id}>
-            <td><strong>{item.id}</strong></td>
-            <td>{item.userName}</td>
-            <td>{formatCurrency(item.amount)}</td>
-            <td>{formatNumber(item.coins)}</td>
-            <td>{item.method}</td>
-            <td><Badge tone={item.status === 'success' ? 'success' : item.status === 'failed' ? 'danger' : 'warning'}>{paymentStatusLabel(item.status)}</Badge></td>
-            <td>{formatDate(item.createdAt)}</td>
-            <td><button type="button" className="cms-link-button" onClick={() => setSelected(item)}>Chi tiết</button></td>
-          </tr>
-        ))}
-      </AdminTable>
-
-      {selected && (
-        <section className="cms-panel cms-detail-panel">
-          <button type="button" className="cms-close" onClick={() => setSelected(null)}>Đóng</button>
-          <h2>Chi tiết giao dịch {selected.id}</h2>
-          <div className="cms-detail-grid">
-            <p><span>Người dùng</span><strong>{selected.userName}</strong></p>
-            <p><span>Số tiền</span><strong>{formatCurrency(selected.amount)}</strong></p>
-            <p><span>Số xu</span><strong>{formatNumber(selected.coins)}</strong></p>
-            <p><span>Phương thức</span><strong>{selected.method}</strong></p>
-            <p><span>Trạng thái</span><strong>{paymentStatusLabel(selected.status)}</strong></p>
-            <p><span>Thời gian</span><strong>{formatDate(selected.createdAt)}</strong></p>
-          </div>
-        </section>
-      )}
-    </div>
+    <Modal title="Sửa chương" onClose={onClose}>
+      <form className="cms-form" onSubmit={event => { event.preventDefault(); onSave({ ...form, number: Number(form.number), price: Number(form.price) }); }}>
+        <label>Tiêu đề<input value={form.title} onChange={event => set('title', event.target.value)} /></label>
+        <label>Số chương<input type="number" value={form.number} onChange={event => set('number', event.target.value)} /></label>
+        <label>Giá Đậu<input type="number" value={form.price} onChange={event => set('price', event.target.value)} /></label>
+        <label>Trạng thái<select value={form.status} onChange={event => set('status', event.target.value)}>{['draft','pending','reviewing','approved','rejected','hidden','scheduled'].map(item => <option key={item} value={item}>{statusLabel(item)}</option>)}</select></label>
+        <label className="cms-checkbox"><input type="checkbox" checked={form.isPremium} onChange={event => set('isPremium', event.target.checked)} /> Chương VIP</label>
+        <label className="wide">Preview<textarea value={form.preview} onChange={event => set('preview', event.target.value)} /></label>
+        <label className="wide">Nội dung<textarea value={form.content} onChange={event => set('content', event.target.value)} /></label>
+        <div className="cms-modal-actions"><button type="button" onClick={onClose}>Hủy</button><button type="submit">Lưu chương</button></div>
+      </form>
+    </Modal>
   );
 }
 
-export function ReportManagement({ reports, comments, onAction, onCommentUpdate }) {
+function ReportsTab({ reports, onResolve }) {
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState('all');
   const [type, setType] = useState('all');
-
-  const filtered = useMemo(() => {
-    const text = query.trim().toLowerCase();
-    return reports.filter(report => {
-      const matchesText = !text || `${report.targetTitle} ${report.storyTitle} ${report.userName} ${report.reason}`.toLowerCase().includes(text);
-      const matchesStatus = status === 'all' || report.status === status;
-      const matchesType = type === 'all' || report.type === type;
-      return matchesText && matchesStatus && matchesType;
-    });
-  }, [reports, query, status, type]);
-
+  const [selected, setSelected] = useState(null);
+  const filtered = useMemo(() => reports.filter(report =>
+    includesText([report.targetTitle, report.storyTitle, report.userName, report.reason, report.detail], query) &&
+    (status === 'all' || report.status === status) &&
+    (type === 'all' || report.type === type)
+  ), [reports, query, status, type]);
+  const { page, setPage, totalPages, pageItems } = usePaged(filtered);
   return (
     <div className="cms-stack">
-      <PageHead eyebrow="Kiểm duyệt & báo cáo" title="Báo cáo vi phạm" text="Xử lý báo cáo truyện/chương/bình luận, ẩn nội dung vi phạm và quản lý bình luận bị report." />
+      <PageHead eyebrow="Reports" title="Báo cáo" text="Xem chi tiết report và xử lý bằng action API: resolve/reject, ẩn nội dung, khóa user bị report." />
       <FilterBar>
-        <input value={query} onChange={event => setQuery(event.target.value)} placeholder="Tìm nội dung báo cáo..." />
-        <select value={status} onChange={event => setStatus(event.target.value)}>
-          <option value="all">Tất cả trạng thái</option>
-          <option value="open">Chờ xử lý</option>
-          <option value="reviewing">Đang xử lý</option>
-          <option value="resolved">Đã xử lý</option>
-          <option value="rejected">Từ chối</option>
-        </select>
-        <select value={type} onChange={event => setType(event.target.value)}>
-          <option value="all">Tất cả loại</option>
-          <option value="story">Truyện</option>
-          <option value="chapter">Chương</option>
-          <option value="comment">Bình luận</option>
-        </select>
+        <input value={query} onChange={event => setQuery(event.target.value)} placeholder="Tìm báo cáo..." />
+        <select value={status} onChange={event => setStatus(event.target.value)}><option value="all">Tất cả trạng thái</option><option value="open">Chờ xử lý</option><option value="reviewing">Đang xử lý</option><option value="resolved">Đã xử lý</option><option value="rejected">Từ chối</option></select>
+        <select value={type} onChange={event => setType(event.target.value)}><option value="all">Tất cả loại</option><option value="story">Truyện</option><option value="chapter">Chương</option><option value="comment">Bình luận</option></select>
         <button type="button" onClick={() => { setQuery(''); setStatus('all'); setType('all'); }}>Reset</button>
       </FilterBar>
-
-      <AdminTable columns={['Báo cáo', 'Loại', 'Lý do', 'Trạng thái', 'Thời gian', 'Thao tác']} empty={!filtered.length}>
-        {filtered.map(report => (
+      <AdminTable columns={['Báo cáo', 'Loại', 'Lý do', 'Trạng thái', 'Thời gian', 'Thao tác']} empty={!pageItems.length}>
+        {pageItems.map(report => (
           <tr key={report.id}>
-            <td>
-              <strong>{report.targetTitle}</strong>
-              <small>{report.storyTitle} · bởi {report.userName}</small>
-            </td>
-            <td>{report.type}</td>
-            <td>{report.reason}</td>
-            <td><Badge tone={report.status === 'resolved' ? 'success' : report.status === 'rejected' ? 'danger' : 'warning'}>{statusLabel(report.status)}</Badge></td>
-            <td>{formatDate(report.createdAt)}</td>
-            <td><button type="button" onClick={() => onAction(report)}>Xử lý</button></td>
+            <td data-label="Báo cáo"><strong>{report.targetTitle}</strong><small>{report.storyTitle} · bởi {report.userName || 'ẩn danh'}</small></td>
+            <td data-label="Loại">{typeLabel(report.type)}</td>
+            <td data-label="Lý do">{report.reason || report.detail}</td>
+            <td data-label="Trạng thái"><Badge tone={toneForStatus(report.status)}>{statusLabel(report.status)}</Badge></td>
+            <td data-label="Thời gian">{formatDate(report.createdAt)}</td>
+            <td data-label="Thao tác"><button type="button" onClick={() => setSelected(report)}>Xử lý</button></td>
           </tr>
         ))}
       </AdminTable>
-
-      <section className="cms-panel">
-        <div className="cms-panel-head">
-          <div>
-            <span>Bình luận vi phạm</span>
-            <h2>Quản lý bình luận bị báo cáo</h2>
-          </div>
-        </div>
-        <div className="cms-comment-list">
-          {comments.map(comment => (
-            <article key={comment.id}>
-              <div>
-                <strong>{comment.userName}</strong>
-                <small>{comment.storyTitle} · {formatDate(comment.createdAt)}</small>
-                <p>{comment.body}</p>
-              </div>
-              <div className="cms-row-actions">
-                <Badge tone={comment.status === 'hidden' ? 'dark' : 'success'}>{comment.status === 'hidden' ? 'Đã ẩn' : 'Đang hiện'}</Badge>
-                <button type="button" onClick={() => onCommentUpdate(comment.id, { status: comment.status === 'hidden' ? 'visible' : 'hidden' })}>
-                  {comment.status === 'hidden' ? 'Hiện lại' : 'Ẩn'}
-                </button>
-              </div>
-            </article>
-          ))}
-        </div>
-      </section>
+      <Pagination page={page} totalPages={totalPages} onPage={setPage} />
+      {selected && <ReportActionModal report={selected} onClose={() => setSelected(null)} onSubmit={payload => { onResolve(selected, payload); setSelected(null); }} />}
     </div>
   );
 }
 
-export function ReportActionModal({ report, onClose, onSubmit }) {
-  const [status, setStatus] = useState('reviewing');
-  const [note, setNote] = useState('');
+function ReportActionModal({ report, onClose, onSubmit }) {
+  const [status, setStatus] = useState(report.status === 'open' ? 'reviewing' : report.status);
+  const [adminNote, setAdminNote] = useState(report.adminNote || '');
   const [hideContent, setHideContent] = useState(false);
-  const closeByBackdrop = useModalDismiss(onClose, Boolean(report));
-
-  useEffect(() => {
-    if (!report) return;
-    setStatus(report.status === 'open' ? 'reviewing' : report.status);
-    setNote('');
-    setHideContent(false);
-  }, [report]);
-
-  if (!report) return null;
-
+  const [lockUser, setLockUser] = useState(false);
   return (
-    <div className="cms-modal-backdrop" onMouseDown={closeByBackdrop}>
-      <form className="cms-modal" onSubmit={event => {
-        event.preventDefault();
-        onSubmit({ status, note, hideContent });
-      }}>
-        <h2>Xử lý báo cáo</h2>
-        <p><strong>{report.targetTitle}</strong></p>
-        <p>{report.detail}</p>
-        <label>
-          Trạng thái
-          <select value={status} onChange={event => setStatus(event.target.value)}>
-            <option value="reviewing">Đang xử lý</option>
-            <option value="resolved">Đã xử lý</option>
-            <option value="rejected">Từ chối</option>
-          </select>
-        </label>
-        <label>
-          Ghi chú xử lý
-          <textarea value={note} onChange={event => setNote(event.target.value)} placeholder="Lý do xử lý, hướng khắc phục hoặc phản hồi cho đội nội dung..." />
-        </label>
-        <label className="cms-checkbox">
-          <input type="checkbox" checked={hideContent} onChange={event => setHideContent(event.target.checked)} />
-          Ẩn nội dung liên quan trong phiên hiện tại
-        </label>
-        <div className="cms-modal-actions">
-          <button type="button" onClick={onClose}>Hủy</button>
-          <button type="submit">Lưu xử lý</button>
-        </div>
+    <Modal title="Xử lý báo cáo" onClose={onClose}>
+      <div className="cms-report-detail">
+        <p><span>Reporter</span><strong>{report.reporter?.email || report.user?.email || report.userName || 'Không rõ'}</strong></p>
+        <p><span>Target</span><strong>{typeLabel(report.type)} · {report.targetTitle}</strong></p>
+        <p><span>Lý do</span><strong>{report.reason || report.detail}</strong></p>
+        {report.comment?.body && <p className="wide"><span>Bình luận liên quan</span><strong>{report.comment.body}</strong></p>}
+      </div>
+      <form className="cms-form" onSubmit={event => { event.preventDefault(); onSubmit({ status, adminNote, hideContent, lockUser, targetType: report.type, targetId: report.targetId }); }}>
+        <label>Trạng thái<select value={status} onChange={event => setStatus(event.target.value)}><option value="reviewing">Đang xử lý</option><option value="resolved">Đã xử lý</option><option value="rejected">Từ chối report</option></select></label>
+        <label className="wide">Ghi chú MOD<textarea value={adminNote} onChange={event => setAdminNote(event.target.value)} placeholder="Kết luận xử lý..." /></label>
+        <label className="cms-checkbox"><input type="checkbox" checked={hideContent} onChange={event => setHideContent(event.target.checked)} /> Ẩn nội dung bị report</label>
+        <label className="cms-checkbox"><input type="checkbox" checked={lockUser} onChange={event => setLockUser(event.target.checked)} /> Khóa user bị report</label>
+        <div className="cms-modal-actions"><button type="button" onClick={onClose}>Hủy</button><button type="submit">Lưu xử lý</button></div>
       </form>
-    </div>
+    </Modal>
   );
 }
 
-export function NotificationPage({ apiClient, user }) {
-  const navigate = useNavigate();
-  const [items, setItems] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [unreadOnly, setUnreadOnly] = useState(false);
-  const [type, setType] = useState('all');
-  const [unreadCount, setUnreadCount] = useState(0);
-
-  const dispatchChanged = () => window.dispatchEvent(new CustomEvent('daudo:notifications-changed'));
-
-  async function load() {
-    if (!apiClient) {
-      setItems([]);
-      setError('Không có API client để tải thông báo.');
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    setError('');
-    try {
-      const params = new URLSearchParams({ limit: '50' });
-      if (unreadOnly) params.set('unreadOnly', 'true');
-      if (type !== 'all') params.set('type', type);
-      const data = await apiClient(`/notifications?${params.toString()}`);
-      setItems(asArray(data.notifications));
-      setUnreadCount(Number(data.unreadCount || 0));
-    } catch (err) {
-      setItems([]);
-      setError(err.message || 'Không tải được thông báo.');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    load();
-  }, [apiClient, unreadOnly, type]);
-
-  async function markAllRead() {
-    setItems(current => current.map(item => ({ ...item, read: true })));
-    setUnreadCount(0);
-    try {
-      await apiClient('/notifications/read-all', { method: 'POST' });
-      dispatchChanged();
-    } catch (err) {
-      setError(err.message || 'Không đánh dấu được thông báo.');
-      await load();
-    }
-  }
-
-  async function markRead(item) {
-    if (item.read) return;
-    setItems(current => current.map(row => row.id === item.id ? { ...row, read: true } : row));
-    try {
-      const data = await apiClient(`/notifications/${item.id}/read`, { method: 'POST' });
-      setUnreadCount(Number(data.unreadCount || 0));
-      dispatchChanged();
-    } catch (err) {
-      setError(err.message || 'Không cập nhật được thông báo.');
-      await load();
-    }
-  }
-
-  async function deleteItem(item) {
-    setItems(current => current.filter(row => row.id !== item.id));
-    try {
-      const data = await apiClient(`/notifications/${item.id}`, { method: 'DELETE' });
-      setUnreadCount(Number(data.unreadCount || 0));
-      dispatchChanged();
-    } catch (err) {
-      setError(err.message || 'Không xóa được thông báo.');
-      await load();
-    }
-  }
-
-  async function openItem(item) {
-    await markRead(item);
-    if (item.link) navigate(item.link);
-  }
-
+function CommentsTab({ comments, stories, onUpdate, onDelete, onConfirm }) {
+  const [query, setQuery] = useState('');
+  const [status, setStatus] = useState('all');
+  const [storyId, setStoryId] = useState('all');
+  const filtered = useMemo(() => comments.filter(comment =>
+    includesText([comment.body, comment.userName, comment.userEmail, comment.storyTitle], query) &&
+    (status === 'all' || comment.status === status) &&
+    (storyId === 'all' || comment.storyId === storyId)
+  ), [comments, query, status, storyId]);
+  const { page, setPage, totalPages, pageItems } = usePaged(filtered);
   return (
-    <div className="cms-page">
-      <section className="cms-page-head cms-notification-head">
-        <div>
-          <span>Thông báo cá nhân</span>
-          <h1>Trung tâm thông báo</h1>
-          <p>Thông báo riêng của {user?.name || 'tài khoản hiện tại'}: chương mới, bình luận, theo dõi và giao dịch.</p>
-        </div>
-        <button type="button" onClick={markAllRead} disabled={!unreadCount}>Đánh dấu tất cả đã đọc</button>
-      </section>
-
-      {error && <div className="cms-alert">{error}</div>}
-
-      <div className="cms-notification-filters">
-        {[
-          ['all', 'Tất cả'],
-          ['chapter', 'Chương mới'],
-          ['comment', 'Bình luận'],
-          ['reply', 'Trả lời'],
-          ['follow', 'Theo dõi'],
-          ['wallet', 'Ví Đậu'],
-          ['purchase', 'Mua chương'],
-          ['system', 'Hệ thống'],
-          ['promo', 'Khuyến mãi']
-        ].map(([value, label]) => (
-          <button key={value} type="button" className={type === value ? 'active' : ''} onClick={() => setType(value)}>{label}</button>
-        ))}
-        <button type="button" className={unreadOnly ? 'active' : ''} onClick={() => setUnreadOnly(current => !current)}>Chưa đọc ({unreadCount})</button>
-      </div>
-
-      {loading && <div className="cms-state cms-loading">Đang tải thông báo...</div>}
-      <section className="cms-notification-list">
-        {!loading && items.map(item => (
-          <article key={item.id} className={item.read ? 'read' : 'unread'}>
-            <span className="cms-notification-dot" />
+    <div className="cms-stack">
+      <PageHead eyebrow="Comments" title="Bình luận" text="Ẩn/xóa/khôi phục bình luận bằng API thật, không dùng dữ liệu giả." />
+      <FilterBar>
+        <input value={query} onChange={event => setQuery(event.target.value)} placeholder="Tìm bình luận..." />
+        <select value={status} onChange={event => setStatus(event.target.value)}><option value="all">Tất cả trạng thái</option><option value="visible">Đang hiện</option><option value="hidden">Đã ẩn</option><option value="deleted">Đã xóa</option></select>
+        <select value={storyId} onChange={event => setStoryId(event.target.value)}><option value="all">Tất cả truyện</option>{stories.map(story => <option key={story.id} value={story.id}>{story.title}</option>)}</select>
+        <button type="button" onClick={() => { setQuery(''); setStatus('all'); setStoryId('all'); }}>Reset</button>
+      </FilterBar>
+      <div className="cms-comment-list">
+        {pageItems.map(comment => (
+          <article key={comment.id}>
             <div>
-              <strong>{item.title}</strong>
-              <p>{item.body}</p>
-              <small>{item.read ? 'Đã đọc' : 'Chưa đọc'} · {formatDate(item.createdAt)}</small>
+              <strong>{comment.userName || comment.userEmail || 'Người dùng'}</strong>
+              <small>{comment.storyTitle} · {formatDate(comment.createdAt)} · {comment.reports} report</small>
+              <p>{comment.body}</p>
             </div>
-            <div className="cms-notification-actions">
-              {!item.read && <button type="button" onClick={() => markRead(item)}>Đã đọc</button>}
-              {item.link && <button type="button" onClick={() => openItem(item)}>Mở</button>}
-              <button type="button" onClick={() => deleteItem(item)}>Xóa</button>
+            <div className="cms-row-actions">
+              <Badge tone={toneForStatus(comment.status)}>{statusLabel(comment.status)}</Badge>
+              <button type="button" onClick={() => onUpdate(comment, { status: comment.status === 'hidden' ? 'visible' : 'hidden' })}>{comment.status === 'hidden' ? 'Khôi phục' : 'Ẩn'}</button>
+              <button type="button" className="danger" onClick={() => onConfirm({ title: 'Xóa bình luận?', text: comment.body, action: () => onDelete(comment) })}>Xóa</button>
             </div>
           </article>
         ))}
-      </section>
-      {!loading && !items.length && <EmptyState title="Không có thông báo" text="Thông báo phù hợp với bộ lọc sẽ xuất hiện tại đây." />}
+        {!pageItems.length && <EmptyState title="Không có bình luận" text="Bình luận phù hợp bộ lọc sẽ hiển thị tại đây." />}
+      </div>
+      <Pagination page={page} totalPages={totalPages} onPage={setPage} />
     </div>
   );
 }
 
-function PageHead({ eyebrow, title, text }) {
+function TransactionsTab({ transactions, users, onOpenUser }) {
+  const [query, setQuery] = useState('');
+  const [type, setType] = useState('all');
+  const [status, setStatus] = useState('all');
+  const [method, setMethod] = useState('all');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const filtered = useMemo(() => transactions.filter(item => {
+    const created = item.createdAt ? new Date(item.createdAt) : null;
+    return includesText([item.id, item.userName, item.userEmail, item.note, item.method], query) &&
+      (type === 'all' || item.type === type) &&
+      (status === 'all' || item.status === status) &&
+      (method === 'all' || item.method === method) &&
+      (!from || (created && created >= new Date(`${from}T00:00:00`))) &&
+      (!to || (created && created <= new Date(`${to}T23:59:59`)));
+  }), [transactions, query, type, status, method, from, to]);
+  const { page, setPage, totalPages, pageItems } = usePaged(filtered);
+  const methods = Array.from(new Set(transactions.map(item => item.method).filter(Boolean)));
+
+  function exportCsv() {
+    const headers = ['id', 'user', 'email', 'type', 'status', 'method', 'amountDau', 'amountVnd', 'createdAt', 'note'];
+    const rows = filtered.map(item => [item.id, item.userName, item.userEmail, item.type, item.status, item.method, item.amount, item.amountVnd, item.createdAt, item.note || '']);
+    const csv = [headers, ...rows].map(row => row.map(cell => `"${String(cell ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `admin-transactions-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  return (
+    <div className="cms-stack">
+      <PageHead eyebrow="Transactions" title="Giao dịch" text="Theo dõi topup, purchase, bonus, admin_adjustment, refund bằng đơn vị Đậu." action={<button type="button" onClick={exportCsv}>Export CSV</button>} />
+      <FilterBar>
+        <input value={query} onChange={event => setQuery(event.target.value)} placeholder="Tìm mã, user, phương thức..." />
+        <select value={type} onChange={event => setType(event.target.value)}><option value="all">Tất cả type</option>{['topup','purchase','bonus','admin_adjustment','refund','promotion'].map(item => <option key={item} value={item}>{typeLabel(item)}</option>)}</select>
+        <select value={status} onChange={event => setStatus(event.target.value)}><option value="all">Tất cả trạng thái</option><option value="success">Thành công</option><option value="pending">Đang chờ</option><option value="failed">Thất bại</option></select>
+        <select value={method} onChange={event => setMethod(event.target.value)}><option value="all">Tất cả method</option>{methods.map(item => <option key={item} value={item}>{item}</option>)}</select>
+        <input type="date" value={from} onChange={event => setFrom(event.target.value)} />
+        <input type="date" value={to} onChange={event => setTo(event.target.value)} />
+      </FilterBar>
+      <AdminTable columns={['Mã', 'User', 'Type', 'Đậu', 'VND', 'Method', 'Trạng thái', 'Thời gian']} empty={!pageItems.length}>
+        {pageItems.map(item => {
+          const user = users.find(row => row.id === item.userId);
+          return (
+            <tr key={item.id}>
+              <td data-label="Mã"><strong>{item.id}</strong></td>
+              <td data-label="User"><button type="button" className="cms-inline-link" onClick={() => user && onOpenUser(user)}>{item.userName}</button><small>{item.userEmail}</small></td>
+              <td data-label="Type">{typeLabel(item.type)}</td>
+              <td data-label="Đậu">{formatNumber(item.amount)} Đậu</td>
+              <td data-label="VND">{item.amountVnd ? formatVnd(item.amountVnd) : '-'}</td>
+              <td data-label="Method">{item.method}</td>
+              <td data-label="Trạng thái"><Badge tone={toneForStatus(item.status)}>{statusLabel(item.status)}</Badge></td>
+              <td data-label="Thời gian">{formatDate(item.createdAt)}</td>
+            </tr>
+          );
+        })}
+      </AdminTable>
+      <Pagination page={page} totalPages={totalPages} onPage={setPage} />
+    </div>
+  );
+}
+
+function TaxonomyTab({ taxonomy, onCreate, onUpdate, onDelete, onConfirm }) {
+  return (
+    <div className="cms-stack">
+      <PageHead eyebrow="Taxonomy" title="Thể loại/Tag" text="CRUD taxonomy thật. Backend chặn xóa taxonomy đang được sử dụng." />
+      <section className="cms-grid-two">
+        <TaxonomyBox title="Thể loại" kind="categories" items={asArray(taxonomy.categories)} onCreate={onCreate} onUpdate={onUpdate} onDelete={onDelete} onConfirm={onConfirm} />
+        <TaxonomyBox title="Tag" kind="tags" items={asArray(taxonomy.tags)} onCreate={onCreate} onUpdate={onUpdate} onDelete={onDelete} onConfirm={onConfirm} />
+      </section>
+    </div>
+  );
+}
+
+function TaxonomyBox({ title, kind, items, onCreate, onUpdate, onDelete, onConfirm }) {
+  const [name, setName] = useState('');
+  const [editing, setEditing] = useState(null);
+  return (
+    <Panel title={title} eyebrow={kind}>
+      <form className="cms-inline-form" onSubmit={event => { event.preventDefault(); onCreate(kind, { name }); setName(''); }}>
+        <input value={name} onChange={event => setName(event.target.value)} placeholder={`Thêm ${title.toLowerCase()}...`} />
+        <button type="submit">Thêm</button>
+      </form>
+      <div className="cms-taxonomy-list">
+        {items.map(item => (
+          <article key={item.id || item.name}>
+            <div><strong>{item.name}</strong><small>{formatNumber(item.usage || 0)} truyện đang dùng</small></div>
+            <div className="cms-row-actions">
+              <button type="button" onClick={() => setEditing(item)}>Sửa</button>
+              <button type="button" className="danger" onClick={() => onConfirm({ title: `Xóa ${item.name}?`, text: item.usage ? 'Backend sẽ chặn nếu taxonomy đang được dùng.' : 'Taxonomy sẽ bị xóa.', action: () => onDelete(kind, item) })}>Xóa</button>
+            </div>
+          </article>
+        ))}
+        {!items.length && <EmptyState title="Chưa có dữ liệu" text="Tạo taxonomy để dùng trong form truyện." />}
+      </div>
+      {editing && <TaxonomyEditModal item={editing} onClose={() => setEditing(null)} onSave={payload => { onUpdate(kind, editing, payload); setEditing(null); }} />}
+    </Panel>
+  );
+}
+
+function TaxonomyEditModal({ item, onClose, onSave }) {
+  const [name, setName] = useState(item.name || '');
+  const [description, setDescription] = useState(item.description || '');
+  return (
+    <Modal title="Sửa taxonomy" onClose={onClose}>
+      <form className="cms-form" onSubmit={event => { event.preventDefault(); onSave({ name, description }); }}>
+        <label>Tên<input value={name} onChange={event => setName(event.target.value)} /></label>
+        <label className="wide">Mô tả<textarea value={description} onChange={event => setDescription(event.target.value)} /></label>
+        <div className="cms-modal-actions"><button type="button" onClick={onClose}>Hủy</button><button type="submit">Lưu</button></div>
+      </form>
+    </Modal>
+  );
+}
+
+function AdminNotificationsTab({ notifications, users, onSend }) {
+  const [form, setForm] = useState({ title: '', body: '', type: 'system', targetRole: 'all', targetUserId: '' });
+  const set = (key, value) => setForm(current => ({ ...current, [key]: value }));
+  const { page, setPage, totalPages, pageItems } = usePaged(notifications);
+  return (
+    <div className="cms-stack">
+      <PageHead eyebrow="System notifications" title="Thông báo" text="Gửi thông báo hệ thống tới toàn bộ user, theo role hoặc user cụ thể." />
+      <Panel title="Tạo thông báo">
+        <form className="cms-form" onSubmit={event => { event.preventDefault(); onSend(form); setForm({ title: '', body: '', type: 'system', targetRole: 'all', targetUserId: '' }); }}>
+          <label>Tiêu đề<input value={form.title} onChange={event => set('title', event.target.value)} required /></label>
+          <label>Type<select value={form.type} onChange={event => set('type', event.target.value)}><option value="system">System</option><option value="promo">Promo</option><option value="wallet">Wallet</option></select></label>
+          <label>Target<select value={form.targetRole} onChange={event => set('targetRole', event.target.value)}><option value="all">Tất cả</option><option value="reader">Độc giả</option><option value="author">Tác giả</option><option value="admin">Admin</option><option value="user">User cụ thể</option></select></label>
+          {form.targetRole === 'user' && <label>User<select value={form.targetUserId} onChange={event => set('targetUserId', event.target.value)}><option value="">Chọn user</option>{users.map(item => <option key={item.id} value={item.id}>{item.name} · {item.email}</option>)}</select></label>}
+          <label className="wide">Nội dung<textarea value={form.body} onChange={event => set('body', event.target.value)} required /></label>
+          <div className="cms-modal-actions"><button type="submit">Gửi thông báo</button></div>
+        </form>
+      </Panel>
+      <AdminTable columns={['Tiêu đề', 'Target', 'Người nhận', 'Trạng thái', 'Thời gian']} empty={!pageItems.length}>
+        {pageItems.map(item => (
+          <tr key={item.id}>
+            <td data-label="Tiêu đề"><strong>{item.title}</strong><small>{item.body}</small></td>
+            <td data-label="Target">{item.targetUserId || item.targetRole || 'all'}</td>
+            <td data-label="Người nhận">{formatNumber(item.recipientCount || 0)}</td>
+            <td data-label="Trạng thái"><Badge tone={toneForStatus(item.status)}>{statusLabel(item.status)}</Badge></td>
+            <td data-label="Thời gian">{formatDate(item.createdAt)}</td>
+          </tr>
+        ))}
+      </AdminTable>
+      <Pagination page={page} totalPages={totalPages} onPage={setPage} />
+    </div>
+  );
+}
+
+function LogsTab({ logs, users }) {
+  const [entityType, setEntityType] = useState('all');
+  const [adminId, setAdminId] = useState('all');
+  const [action, setAction] = useState('');
+  const filtered = useMemo(() => logs.filter(log =>
+    (entityType === 'all' || log.entityType === entityType) &&
+    (adminId === 'all' || log.adminId === adminId) &&
+    includesText([log.action], action)
+  ), [logs, entityType, adminId, action]);
+  const { page, setPage, totalPages, pageItems } = usePaged(filtered);
+  const entityTypes = Array.from(new Set(logs.map(item => item.entityType).filter(Boolean)));
+  const admins = users.filter(item => item.role === 'admin');
+  return (
+    <div className="cms-stack">
+      <PageHead eyebrow="Audit log" title="Lịch sử MOD" text="Ghi lại các thao tác quan trọng: khóa user, duyệt/từ chối, ẩn nội dung, taxonomy, thông báo." />
+      <FilterBar>
+        <input value={action} onChange={event => setAction(event.target.value)} placeholder="Tìm action..." />
+        <select value={entityType} onChange={event => setEntityType(event.target.value)}><option value="all">Tất cả entity</option>{entityTypes.map(item => <option key={item} value={item}>{typeLabel(item)}</option>)}</select>
+        <select value={adminId} onChange={event => setAdminId(event.target.value)}><option value="all">Tất cả admin</option>{admins.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
+        <button type="button" onClick={() => { setEntityType('all'); setAdminId('all'); setAction(''); }}>Reset</button>
+      </FilterBar>
+      <AdminTable columns={['Action', 'Entity', 'Admin', 'Ghi chú', 'Thời gian']} empty={!pageItems.length}>
+        {pageItems.map(log => (
+          <tr key={log.id}>
+            <td data-label="Action"><strong>{log.action}</strong></td>
+            <td data-label="Entity">{typeLabel(log.entityType)} · {log.entityId}</td>
+            <td data-label="Admin">{log.adminName || log.adminId}</td>
+            <td data-label="Ghi chú">{log.note || '-'}</td>
+            <td data-label="Thời gian">{formatDate(log.createdAt)}</td>
+          </tr>
+        ))}
+      </AdminTable>
+      <Pagination page={page} totalPages={totalPages} onPage={setPage} />
+    </div>
+  );
+}
+
+function ReasonModal({ title, target, onClose, onSubmit }) {
+  const [reason, setReason] = useState('');
+  return (
+    <Modal title={title} onClose={onClose}>
+      <form className="cms-form" onSubmit={event => { event.preventDefault(); onSubmit(reason || 'Cần chỉnh sửa trước khi duyệt.'); }}>
+        <p>{target}</p>
+        <label className="wide">Lý do<textarea value={reason} onChange={event => setReason(event.target.value)} placeholder="Nhập lý do để lưu vào backend..." /></label>
+        <div className="cms-modal-actions"><button type="button" onClick={onClose}>Hủy</button><button type="submit">Lưu lý do</button></div>
+      </form>
+    </Modal>
+  );
+}
+
+function ScheduleModal({ chapter, onClose, onSubmit }) {
+  const [scheduledAt, setScheduledAt] = useState('');
+  return (
+    <Modal title="Lên lịch chương" onClose={onClose}>
+      <form className="cms-form" onSubmit={event => { event.preventDefault(); onSubmit(new Date(scheduledAt).toISOString()); }}>
+        <p>{chapter.storyTitle} - Chương {chapter.number}</p>
+        <label>Thời gian xuất bản<input type="datetime-local" value={scheduledAt} onChange={event => setScheduledAt(event.target.value)} required /></label>
+        <div className="cms-modal-actions"><button type="button" onClick={onClose}>Hủy</button><button type="submit">Lên lịch</button></div>
+      </form>
+    </Modal>
+  );
+}
+
+function AdminTable({ columns, children, empty }) {
+  return (
+    <div className="cms-table-wrap">
+      <table className="cms-table">
+        <thead><tr>{columns.map(column => <th key={column}>{column}</th>)}</tr></thead>
+        <tbody>{children}</tbody>
+      </table>
+      {empty && <EmptyState title="Không có dữ liệu" text="Thử đổi bộ lọc hoặc bấm tải lại." />}
+    </div>
+  );
+}
+
+function PageHead({ eyebrow, title, text, action }) {
   return (
     <section className="cms-page-head">
       <div>
@@ -1266,6 +1242,21 @@ function PageHead({ eyebrow, title, text }) {
         <h1>{title}</h1>
         <p>{text}</p>
       </div>
+      {action && <div className="cms-page-action">{action}</div>}
+    </section>
+  );
+}
+
+function Panel({ eyebrow, title, children }) {
+  return (
+    <section className="cms-panel">
+      <div className="cms-panel-head">
+        <div>
+          {eyebrow && <span>{eyebrow}</span>}
+          <h2>{title}</h2>
+        </div>
+      </div>
+      {children}
     </section>
   );
 }
@@ -1283,6 +1274,169 @@ function EmptyState({ title, text }) {
     <div className="cms-empty">
       <strong>{title}</strong>
       <p>{text}</p>
+    </div>
+  );
+}
+
+function Pagination({ page, totalPages, onPage }) {
+  if (totalPages <= 1) return null;
+  return (
+    <div className="cms-pagination">
+      <button type="button" disabled={page <= 1} onClick={() => onPage(page - 1)}>Trước</button>
+      <span>Trang {page}/{totalPages}</span>
+      <button type="button" disabled={page >= totalPages} onClick={() => onPage(page + 1)}>Sau</button>
+    </div>
+  );
+}
+
+function Modal({ title, onClose, children }) {
+  useEffect(() => {
+    const onKeyDown = event => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
+  return (
+    <div className="cms-modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
+      <section className="cms-modal" role="dialog" aria-modal="true">
+        <button type="button" className="cms-close" onClick={onClose}>Đóng</button>
+        <h2>{title}</h2>
+        {children}
+      </section>
+    </div>
+  );
+}
+
+function ConfirmModal({ value, onClose }) {
+  if (!value) return null;
+  return (
+    <Modal title={value.title || 'Xác nhận'} onClose={onClose}>
+      <p>{value.text}</p>
+      <div className="cms-modal-actions">
+        <button type="button" onClick={onClose}>Hủy</button>
+        <button type="button" className="danger" onClick={() => { value.action(); onClose(); }}>Xác nhận</button>
+      </div>
+    </Modal>
+  );
+}
+
+function SkeletonPage() {
+  return (
+    <div className="cms-page">
+      <div className="cms-state cms-loading">Đang tải dữ liệu quản trị...</div>
+      <section className="cms-stats-grid">
+        {Array.from({ length: 6 }).map((_, index) => <article className="cms-stat-card skeleton" key={index} />)}
+      </section>
+    </div>
+  );
+}
+
+export function NotificationPage({ apiClient, user }) {
+  const navigate = useNavigate();
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [unreadOnly, setUnreadOnly] = useState(false);
+  const [type, setType] = useState('all');
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  async function load() {
+    setLoading(true);
+    setError('');
+    try {
+      const params = { limit: 50 };
+      if (unreadOnly) params.unreadOnly = 'true';
+      if (type !== 'all') params.type = type;
+      const data = await apiClient(`/notifications${queryString(params)}`);
+      setItems(asArray(data.notifications));
+      setUnreadCount(Number(data.unreadCount || 0));
+    } catch (err) {
+      setItems([]);
+      setError(err.message || 'Không tải được thông báo.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    load();
+  }, [apiClient, unreadOnly, type]);
+
+  async function markRead(item) {
+    if (item.read) return;
+    try {
+      const data = await apiClient(`/notifications/${item.id}/read`, { method: 'POST' });
+      setItems(current => current.map(row => row.id === item.id ? data.notification : row));
+      setUnreadCount(Number(data.unreadCount || 0));
+    } catch (err) {
+      setError(err.message || 'Không cập nhật được thông báo.');
+    }
+  }
+
+  async function markAllRead() {
+    try {
+      const data = await apiClient('/notifications/read-all', { method: 'POST' });
+      setItems(current => current.map(item => ({ ...item, read: true })));
+      setUnreadCount(Number(data.unreadCount || 0));
+    } catch (err) {
+      setError(err.message || 'Không đánh dấu được thông báo.');
+    }
+  }
+
+  async function deleteItem(item) {
+    try {
+      const data = await apiClient(`/notifications/${item.id}`, { method: 'DELETE' });
+      setItems(current => current.filter(row => row.id !== item.id));
+      setUnreadCount(Number(data.unreadCount || 0));
+    } catch (err) {
+      setError(err.message || 'Không xóa được thông báo.');
+    }
+  }
+
+  async function openItem(item) {
+    await markRead(item);
+    if (item.link) navigate(item.link);
+  }
+
+  return (
+    <div className="cms-page">
+      <section className="cms-page-head cms-notification-head">
+        <div>
+          <span>Thông báo cá nhân</span>
+          <h1>Trung tâm thông báo</h1>
+          <p>Thông báo riêng của {user?.name || 'tài khoản hiện tại'}.</p>
+        </div>
+        <button type="button" onClick={markAllRead} disabled={!unreadCount}>Đánh dấu đã đọc</button>
+      </section>
+      {error && <div className="cms-alert"><span>{error}</span><button type="button" onClick={load}>Tải lại</button></div>}
+      <div className="cms-notification-filters">
+        {['all','chapter','comment','reply','follow','wallet','purchase','system','promo'].map(item => (
+          <button key={item} type="button" className={type === item ? 'active' : ''} onClick={() => setType(item)}>{item === 'all' ? 'Tất cả' : typeLabel(item)}</button>
+        ))}
+        <button type="button" className={unreadOnly ? 'active' : ''} onClick={() => setUnreadOnly(value => !value)}>Chưa đọc ({unreadCount})</button>
+      </div>
+      {loading && <div className="cms-state cms-loading">Đang tải thông báo...</div>}
+      {!loading && (
+        <section className="cms-notification-list">
+          {items.map(item => (
+            <article key={item.id} className={item.read ? 'read' : 'unread'}>
+              <span className="cms-notification-dot" />
+              <div>
+                <strong>{item.title}</strong>
+                <p>{item.body}</p>
+                <small>{item.read ? 'Đã đọc' : 'Chưa đọc'} · {formatDate(item.createdAt)}</small>
+              </div>
+              <div className="cms-notification-actions">
+                {!item.read && <button type="button" onClick={() => markRead(item)}>Đã đọc</button>}
+                {item.link && <button type="button" onClick={() => openItem(item)}>Mở</button>}
+                <button type="button" onClick={() => deleteItem(item)}>Xóa</button>
+              </div>
+            </article>
+          ))}
+          {!items.length && <EmptyState title="Không có thông báo" text="Thông báo phù hợp bộ lọc sẽ hiển thị tại đây." />}
+        </section>
+      )}
     </div>
   );
 }

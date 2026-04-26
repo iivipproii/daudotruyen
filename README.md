@@ -86,14 +86,49 @@ npm run reset-db
 - `GET /api/wallet/transactions`
 - `POST /api/wallet/topup`
 - `POST /api/chapters/:id/unlock`
-- `GET /api/admin/stats`
-- `GET /api/admin/stories`
+
+## Admin CMS API
+
+All `/api/admin/*` routes require an authenticated admin token. The Admin CMS at `/admin` uses real API data only; failed endpoints are shown as errors instead of falling back to fake production data.
+
+- `GET /api/admin/dashboard`
+- `GET /api/admin/stats` (compat alias for dashboard stats)
+- `GET /api/admin/users?query=&role=&status=&page=&limit=`
+- `PATCH /api/admin/users/:id`
+- `POST /api/admin/users/:id/adjust-balance`
+- `GET /api/admin/stories?query=&approvalStatus=&hidden=&status=&page=&limit=`
 - `POST /api/admin/stories`
+- `PUT /api/admin/stories/:id`
+- `PATCH /api/admin/stories/:id/status`
+- `PATCH /api/admin/stories/:id/flags`
 - `DELETE /api/admin/stories/:id`
+- `GET /api/admin/chapters?storyId=&query=&status=&vip=&page=&limit=`
+- `POST /api/admin/stories/:id/chapters`
+- `PUT /api/admin/chapters/:id`
+- `PATCH /api/admin/chapters/:id/status`
+- `DELETE /api/admin/chapters/:id`
+- `GET /api/admin/reports?status=&type=&severity=&page=&limit=`
+- `PATCH /api/admin/reports/:id`
+- `POST /api/admin/reports/:id/actions`
+- `GET /api/admin/comments?query=&status=&storyId=&page=&limit=`
+- `PATCH /api/admin/comments/:id`
+- `DELETE /api/admin/comments/:id`
+- `GET /api/admin/transactions?query=&type=&status=&method=&from=&to=&page=&limit=`
+- `GET /api/admin/taxonomy`
+- `POST /api/admin/taxonomy/categories`
+- `PATCH /api/admin/taxonomy/categories/:id`
+- `DELETE /api/admin/taxonomy/categories/:id`
+- `POST /api/admin/taxonomy/tags`
+- `PATCH /api/admin/taxonomy/tags/:id`
+- `DELETE /api/admin/taxonomy/tags/:id`
+- `GET /api/admin/notifications`
+- `POST /api/admin/notifications`
+- `PATCH /api/admin/notifications/:id`
+- `GET /api/admin/logs?entityType=&entityId=&adminId=&page=&limit=`
 
 ## Production notes
 
-This repo is ready for local development. For production, replace the JSON file with a real database, use a standard session/JWT setup, keep `JWT_SECRET` in environment variables, restrict CORS to the deployed frontend origin, add stronger request validation, and connect real payment flows before exposing wallet actions.
+This repo is ready for local development and demo flows. The JSON database in `backend/data/db.json` is only for demo/prototyping; for production with real users, replace it with a real database, use a standard session/JWT setup, keep `JWT_SECRET` in environment variables, restrict CORS to the deployed frontend origin, add stronger request validation, and connect real payment flows before exposing wallet actions.
 
 ## Deploy online
 

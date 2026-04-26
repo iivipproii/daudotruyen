@@ -177,7 +177,11 @@ function App() {
               <Route path="/admin/stories" element={<Protected admin><AdminRoute /></Protected>} />
               <Route path="/admin/chapters" element={<Protected admin><AdminRoute /></Protected>} />
               <Route path="/admin/reports" element={<Protected admin><AdminRoute /></Protected>} />
+              <Route path="/admin/comments" element={<Protected admin><AdminRoute /></Protected>} />
               <Route path="/admin/transactions" element={<Protected admin><AdminRoute /></Protected>} />
+              <Route path="/admin/taxonomy" element={<Protected admin><AdminRoute /></Protected>} />
+              <Route path="/admin/notifications" element={<Protected admin><AdminRoute /></Protected>} />
+              <Route path="/admin/logs" element={<Protected admin><AdminRoute /></Protected>} />
               <Route path="/lien-he" element={<StaticPage type="contact" />} />
               <Route path="/dieu-khoan" element={<StaticPage type="terms" />} />
               <Route path="/bao-mat" element={<StaticPage type="privacy" />} />
@@ -300,7 +304,7 @@ function LoginRoute() {
   const { login } = useAuth();
   return (
     <>
-      <PageSeo title="Đăng nhập" description="Đăng nhập Đậu Đỏ Truyện để đồng bộ lịch sử đọc, bookmark chương, ví xu và tủ truyện." canonical="/login" />
+      <PageSeo title="Đăng nhập" description="Đăng nhập Đậu Đỏ Truyện để đồng bộ lịch sử đọc, bookmark chương, ví Đậu và tủ truyện." canonical="/login" />
       <LoginPage login={login} />
     </>
   );
@@ -329,7 +333,7 @@ function ReaderDashboardRoute() {
   const { user } = useAuth();
   return (
     <>
-      <PageSeo title="Tài khoản độc giả" description="Dashboard độc giả, tủ truyện, số xu, thông báo mới và tiến trình đọc trên Đậu Đỏ Truyện." canonical="/account" />
+      <PageSeo title="Tài khoản độc giả" description="Dashboard độc giả, tủ truyện, số Đậu, thông báo mới và tiến trình đọc trên Đậu Đỏ Truyện." canonical="/account" />
       <ReaderDashboard user={user} apiClient={api} />
     </>
   );
@@ -357,7 +361,7 @@ function WalletRoute() {
   const { user, updateUser } = useAuth();
   return (
     <>
-      <PageSeo title="Ví xu và nạp xu" description="Chọn gói nạp xu, phương thức thanh toán mock và xem lịch sử giao dịch trên Đậu Đỏ Truyện." canonical="/wallet" />
+      <PageSeo title="Ví Đậu và nạp Đậu" description="Chọn gói nạp Đậu, phương thức thanh toán demo và xem lịch sử giao dịch trên Đậu Đỏ Truyện." canonical="/wallet" />
       <AccountWalletPage user={user} updateUser={updateUser} apiClient={api} />
     </>
   );
@@ -518,7 +522,7 @@ function PublicHeader() {
       <div className="userbar">
         {user ? (
           <>
-            <Link to="/ho-so" className="pill">🌱 {user.seeds} xu</Link>
+            <Link to="/ho-so" className="pill">🌱 {user.seeds} Đậu</Link>
             {user.role === 'admin' && <Link to="/dang-truyen" className="pill admin-pill">Đăng truyện</Link>}
             {user.role === 'admin' && <Link to="/admin" className="pill admin-pill">Admin</Link>}
             <button onClick={logout} className="ghost">Thoát</button>
@@ -533,7 +537,7 @@ function PublicHeader() {
 
 
 function Footer() {
-  const readerLinks = ['Trang chủ', 'Danh sách truyện', 'Thể loại', 'Bảng xếp hạng', 'Truyện ngắn', 'Hoàn thành', 'Ví xu'];
+  const readerLinks = ['Trang chủ', 'Danh sách truyện', 'Thể loại', 'Bảng xếp hạng', 'Truyện ngắn', 'Hoàn thành', 'Ví Đậu'];
   const authorLinks = [
     ['Khu vực tác giả', '/author'],
     ['Đăng truyện mới', '/author/stories/new'],
@@ -862,7 +866,7 @@ function PublicHeaderEnhanced() {
                         <div>
                           <strong>{user.name || 'Độc giả'}</strong>
                           <div className="dd-profile-meta">
-                            <span>☁ {formatNumber(user.seeds || 0)} xu</span>
+                    <span>☁ {formatNumber(user.seeds || 0)} Đậu</span>
                             <span>★ Lv.{user.level || 1}</span>
                           </div>
                         </div>
@@ -1116,7 +1120,7 @@ function HomePremiumBlock({ stories }) {
   if (!stories.length) return null;
   return (
     <section className="section premium-home">
-      <div className="section-head"><div><SectionKicker>Premium</SectionKicker><h2>Truyện Trả Phí</h2><p>Mua từng chương hoặc combo trọn bộ — không cần đăng ký gói</p></div><Link to="/vi-hat" className="small-link">Nạp xu ➜</Link></div>
+      <div className="section-head"><div><SectionKicker>Premium</SectionKicker><h2>Truyện Trả Phí</h2><p>Mua từng chương hoặc combo trọn bộ — không cần đăng ký gói</p></div><Link to="/vi-hat" className="small-link">Nạp Đậu ➜</Link></div>
       <div className="premium-benefits"><span>📖 Đọc miễn phí chương đầu</span><span>🎁 Mua từng chương</span><span>📦 Combo trọn bộ</span></div>
       <div className="grid stories">{stories.map(story => <StoryCard key={story.id} story={story} />)}</div>
     </section>
@@ -1640,7 +1644,7 @@ function StoryDetail() {
     try {
       const result = await api(`/stories/${data.story.id}/unlock-combo`, { method: 'POST' });
       updateUser(result.user);
-      setNotice(result.price ? `Đã mua combo với ${result.price} xu.` : 'Combo đã được mở khóa.');
+      setNotice(result.price ? `Đã mua combo với ${result.price} Đậu.` : 'Combo đã được mở khóa.');
     } catch (err) {
       setError(err.message);
     }
@@ -1666,15 +1670,15 @@ function StoryDetail() {
           <div className="story-author">Tác giả: <Link to={`/tac-gia/${encodeURIComponent(story.author)}`}><strong>{story.author}</strong></Link></div>
           <div className="story-inline-stats"><span>★ {story.rating}/5</span><span>👁 {formatNumber(story.views)} lượt đọc</span><span>▣ {chapters.length} chương</span><span className="green">⦿ {statusLabel(story.status)}</span></div>
           <p className="story-description">{story.description}</p>
-          <div className="purchase-strip"><span>📖 Miễn phí<br /><b>{freeCount} chương đầu</b></span><span>🪙 Mua lẻ<br /><b>{story.price || 1} xu/chương</b></span><span>🎁 Combo trọn bộ<br /><b>{Math.max(49, (story.price || 1) * chapters.length)} xu</b></span></div>
-          <div className="hero-actions"><Link className="button" to={`/truyen/${story.slug}/chuong/1`}>◎ Đọc từ đầu</Link><button className="button gold" onClick={buyCombo}>🪙 Mua combo {Math.max(49, (story.price || 1) * chapters.length)} xu</button><button className="ghost light" onClick={() => toggle('follow')}>{story.followed ? '✓ Đang theo dõi' : '♡ Theo dõi'}</button><button className="ghost light" onClick={() => toggle('bookmark')}>{story.bookmarked ? '✓ Đã lưu' : '🔖 Lưu'}</button><button className="ghost light" onClick={reportStory}>⚑ Báo cáo</button></div>
+          <div className="purchase-strip"><span>📖 Miễn phí<br /><b>{freeCount} chương đầu</b></span><span>🪙 Mua lẻ<br /><b>{story.price || 1} Đậu/chương</b></span><span>🎁 Combo trọn bộ<br /><b>{Math.max(49, (story.price || 1) * chapters.length)} Đậu</b></span></div>
+          <div className="hero-actions"><Link className="button" to={`/truyen/${story.slug}/chuong/1`}>◎ Đọc từ đầu</Link><button className="button gold" onClick={buyCombo}>🪙 Mua combo {Math.max(49, (story.price || 1) * chapters.length)} Đậu</button><button className="ghost light" onClick={() => toggle('follow')}>{story.followed ? '✓ Đang theo dõi' : '♡ Theo dõi'}</button><button className="ghost light" onClick={() => toggle('bookmark')}>{story.bookmarked ? '✓ Đã lưu' : '🔖 Lưu'}</button><button className="ghost light" onClick={reportStory}>⚑ Báo cáo</button></div>
           {notice && <div className="success-box">{notice}</div>}
         </div>
       </section>
 
       <section className="story-section chapter-section-readdy">
         <div className="story-section-head"><h2>▰ Danh sách chương <small>({chapters.length} chương)</small></h2><div className="chapter-tabs"><button className="active">Tất cả</button><button>Miễn phí</button><button>Trả phí</button><button>Mới nhất</button></div></div>
-        <div className="free-note">📚 {freeCount} chương đầu miễn phí — Từ chương {freeCount + 1} trở đi cần <b>{story.price || 1} xu/chương</b></div>
+            <div className="free-note">📚 {freeCount} chương đầu miễn phí — Từ chương {freeCount + 1} trở đi cần <b>{story.price || 1} Đậu/chương</b></div>
         <div className="chapter-grid-readdy">
           {orderedChapters.map(chapter => (
             <Link key={chapter.id} to={`/truyen/${story.slug}/chuong/${chapter.number}`}>
@@ -1699,7 +1703,7 @@ function StoryDetail() {
       </section>
 
       {related.length > 0 && <HomeSection title="Truyện liên quan" subtitle="Các tác phẩm cùng thể loại" kicker="Related" to={`/the-loai/${encodeURIComponent(story.categories[0])}`}><div className="related-list-column">{related.slice(0, 6).map(item => <MiniStoryRow key={item.id} story={item} compact />)}</div></HomeSection>}
-      <div className="combo-banner">Mua combo tiết kiệm hơn! <b>Mở khóa toàn bộ {chapters.length} chương chỉ với {Math.max(49, (story.price || 1) * chapters.length)} xu</b><button onClick={buyCombo}>Mua combo ngay</button></div>
+          <div className="combo-banner">Mua combo tiết kiệm hơn! <b>Mở khóa toàn bộ {chapters.length} chương chỉ với {Math.max(49, (story.price || 1) * chapters.length)} Đậu</b><button onClick={buyCombo}>Mua combo ngay</button></div>
       {related.length > 0 && <HomeSection title="Có thể bạn thích" subtitle="Gợi ý thêm cho bạn" kicker="Suggest"><div className="grid stories">{related.map(item => <StoryCard key={item.id} story={item} />)}</div></HomeSection>}
     </div>
   );
@@ -1932,12 +1936,12 @@ function StaticPage({ type }) {
     privacy: {
       title: 'Chính sách bảo mật',
       canonical: '/bao-mat',
-      body: 'Đậu Đỏ Truyện lưu thông tin tài khoản, lịch sử đọc, newsletter và giao dịch xu để vận hành dịch vụ. Không chia sẻ dữ liệu cá nhân cho bên thứ ba ngoài các đơn vị xử lý cần thiết cho thanh toán, bảo mật và hỗ trợ người dùng.'
+    body: 'Đậu Đỏ Truyện lưu thông tin tài khoản, lịch sử đọc, newsletter và giao dịch Đậu để vận hành dịch vụ. Không chia sẻ dữ liệu cá nhân cho bên thứ ba ngoài các đơn vị xử lý cần thiết cho thanh toán, bảo mật và hỗ trợ người dùng.'
     },
     faq: {
       title: 'FAQ',
       canonical: '/faq',
-      body: 'Các câu hỏi thường gặp: cách tạo tài khoản, lưu chương yêu thích, nạp xu, mở khóa chương VIP, đăng truyện và liên hệ hỗ trợ khi gặp lỗi thanh toán hoặc lỗi hiển thị.'
+    body: 'Các câu hỏi thường gặp: cách tạo tài khoản, lưu chương yêu thích, nạp Đậu, mở khóa chương VIP, đăng truyện và liên hệ hỗ trợ khi gặp lỗi thanh toán hoặc lỗi hiển thị.'
     },
     dmca: {
       title: 'DMCA',
@@ -2026,8 +2030,8 @@ function Profile() {
   const { user } = useAuth();
   return (
     <div className="dashboard-grid">
-      <div className="panel profile-panel"><img src={user.avatar} alt="avatar" /><h1>{user.name}</h1><p>{user.email}</p><span className="pill">Vai trò: {user.role}</span><span className="pill">Số dư: {user.seeds} xu</span></div>
-      <div className="panel"><h2>Lối tắt</h2><div className="quick-links"><Link to="/bookmarks">Bookmarks</Link><Link to="/theo-doi">Theo dõi</Link><Link to="/lich-su">Lịch sử đọc</Link><Link to="/vi-hat">Ví xu</Link></div></div>
+        <div className="panel profile-panel"><img src={user.avatar} alt="avatar" /><h1>{user.name}</h1><p>{user.email}</p><span className="pill">Vai trò: {user.role}</span><span className="pill">Số dư: {user.seeds} Đậu</span></div>
+        <div className="panel"><h2>Lối tắt</h2><div className="quick-links"><Link to="/bookmarks">Bookmarks</Link><Link to="/theo-doi">Theo dõi</Link><Link to="/lich-su">Lịch sử đọc</Link><Link to="/vi-hat">Ví Đậu</Link></div></div>
     </div>
   );
 }
@@ -2103,19 +2107,19 @@ function Wallet() {
 
   return (
     <div className="wallet-page">
-      <div className="catalog-breadcrumb">Trang chủ › Ví xu</div>
-      <div className="wallet-title"><span>🪙</span><div><h1>Ví xu</h1><p>Nạp xu để mua chương truyện yêu thích</p></div></div>
+      <div className="catalog-breadcrumb">Trang chủ › Ví Đậu</div>
+      <div className="wallet-title"><span>🪙</span><div><h1>Ví Đậu</h1><p>Nạp Đậu để mua chương truyện yêu thích</p></div></div>
       <ErrorBox message={error} />
-      <section className="wallet-balance-panel"><p>Số dư hiện tại</p><h2>🪙 {user.seeds} <span>xu</span></h2><div><span>🛒 Đã dùng: 106 xu</span><span>💵 Đã nạp: 170 xu</span><span>🎁 Thưởng: 23 xu</span></div></section>
-      <div className="wallet-feature-row"><span>🪙 <b>1 xu</b><small>= 1.000đ</small></span><span>📖 <b>Mua lẻ</b><small>1-2 xu/chương</small></span><span>📦 <b>Combo</b><small>Tiết kiệm hơn 50%</small></span></div>
+      <section className="wallet-balance-panel"><p>Số dư hiện tại</p><h2>🪙 {user.seeds} <span>Đậu</span></h2><div><span>🛒 Đã dùng: 106 Đậu</span><span>💵 Đã nạp: 170 Đậu</span><span>🎁 Thưởng: 23 Đậu</span></div></section>
+      <div className="wallet-feature-row"><span>🪙 <b>1 Đậu</b><small>= 1.000đ</small></span><span>📖 <b>Mua lẻ</b><small>1-2 Đậu/chương</small></span><span>📦 <b>Combo</b><small>Tiết kiệm hơn 50%</small></span></div>
       <h2 className="wallet-section-title">◇ Chọn gói nạp</h2>
-      <div className="wallet-packages">{DEFAULT_WALLET_PACKAGES.map(pack => <button key={pack.id} type="button" className={selected === pack.id ? 'active' : ''} onClick={() => setSelected(pack.id)}>{pack.featured && <b>Phổ biến nhất</b>}<strong>{pack.seeds}<small>{pack.bonus ? ` +${pack.bonus} xu` : ' xu'}</small></strong><em>{pack.bonus ? `Tặng thêm ${pack.bonus} xu` : 'Không bonus'}</em><span>{pack.price.toLocaleString('vi-VN')}đ</span><small>{pack.label}</small></button>)}</div>
+      <div className="wallet-packages">{DEFAULT_WALLET_PACKAGES.map(pack => <button key={pack.id} type="button" className={selected === pack.id ? 'active' : ''} onClick={() => setSelected(pack.id)}>{pack.featured && <b>Phổ biến nhất</b>}<strong>{pack.seeds}<small>{pack.bonus ? ` +${pack.bonus} Đậu` : ' Đậu'}</small></strong><em>{pack.bonus ? `Tặng thêm ${pack.bonus} Đậu` : 'Không bonus'}</em><span>{pack.price.toLocaleString('vi-VN')}đ</span><small>{pack.label}</small></button>)}</div>
       <h2 className="wallet-section-title">▰ Phương thức thanh toán</h2>
       <div className="payment-methods">{['MoMo', 'VNPay', 'ZaloPay', 'Chuyển khoản'].map(item => <button key={item} className={method === item ? 'active' : ''} onClick={() => setMethod(item)}>{item}</button>)}</div>
-      <button className="button wallet-pay" onClick={() => topup(selected)}>◎ Nạp {selectedPack.price.toLocaleString('vi-VN')}đ — nhận {selectedPack.seeds + (selectedPack.bonus || 0)} xu</button>
+      <button className="button wallet-pay" onClick={() => topup(selected)}>◎ Nạp {selectedPack.price.toLocaleString('vi-VN')}đ — nhận {selectedPack.seeds + (selectedPack.bonus || 0)} Đậu</button>
       <small className="wallet-safe">🛡 Thanh toán an toàn, được mã hóa SSL</small>
       <HomeSection title="Lịch sử giao dịch" subtitle="Các giao dịch gần đây" kicker="History"><div className="wallet-txn-list">{data.transactions.map(txn => <div key={txn.id}><span>{txn.type === 'purchase' ? '🛒' : '💵'}</span><strong>{txn.note}</strong><small>{formatDateShort(txn.createdAt)}</small><b className={txn.amount > 0 ? 'plus' : 'minus'}>{txn.amount > 0 ? '+' : ''}{txn.amount}</b></div>)}</div></HomeSection>
-      <section className="wallet-faq"><h3>◉ Câu hỏi thường gặp</h3><p><b>Xu có hết hạn không?</b><br />Không, xu không có thời hạn sử dụng.</p><p><b>Có hoàn tiền không?</b><br />Xu đã nạp không được hoàn tiền.</p><p><b>Mua combo có lợi hơn không?</b><br />Có, combo tiết kiệm hơn 50% so với mua lẻ từng chương.</p></section>
+      <section className="wallet-faq"><h3>◉ Câu hỏi thường gặp</h3><p><b>Đậu có hết hạn không?</b><br />Không, Đậu không có thời hạn sử dụng.</p><p><b>Có hoàn tiền không?</b><br />Đậu đã nạp không được hoàn tiền.</p><p><b>Mua combo có lợi hơn không?</b><br />Có, combo tiết kiệm hơn 50% so với mua lẻ từng chương.</p></section>
     </div>
   );
 }
@@ -2195,7 +2199,7 @@ function Admin() {
     if (!title) return;
     const content = prompt('Nội dung chương:', chapter.content || '');
     if (content === null) return;
-    const price = prompt('Giá xu:', String(chapter.price || 0));
+    const price = prompt('Giá Đậu:', String(chapter.price || 0));
     if (price === null) return;
     const isPremium = confirm('Đặt chương này là chương trả phí? Bấm OK để trả phí, Cancel để miễn phí.');
     const result = await api(`/admin/chapters/${chapter.id}`, { method: 'PUT', body: JSON.stringify({ title, content, price, isPremium }) });
@@ -2214,12 +2218,12 @@ function Admin() {
   if (!stats) return <Loader />;
   return (
     <>
-      <div className="page-title"><h1>Admin Dashboard</h1><p>Quản trị truyện, người dùng và giao dịch xu.</p></div>
+      <div className="page-title"><h1>Admin Dashboard</h1><p>Quản trị truyện, người dùng và giao dịch Đậu.</p></div>
       <ErrorBox message={error} />
       <div className="stats-grid">{Object.entries(stats).map(([key, value]) => <div className="panel stat" key={key}><span>{key}</span><strong>{formatNumber(value)}</strong></div>)}</div>
       <div className="admin-grid">
         <form className="panel stack-form" onSubmit={createStory}><h2>Thêm truyện</h2><input placeholder="Tên truyện" value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} /><input placeholder="Tác giả" value={form.author} onChange={e => setForm({ ...form, author: e.target.value })} /><input placeholder="Thể loại, cách nhau bằng dấu phẩy" value={form.categories} onChange={e => setForm({ ...form, categories: e.target.value })} /><textarea placeholder="Mô tả" value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} /><label><input type="checkbox" checked={form.premium} onChange={e => setForm({ ...form, premium: e.target.checked })} /> Truyện trả phí</label><label><input type="checkbox" checked={form.featured} onChange={e => setForm({ ...form, featured: e.target.checked })} /> Ghim nổi bật</label><button className="button">Tạo truyện</button></form>
-        <div className="panel"><h2>Người dùng</h2><div className="list-panel compact">{users.map(user => <div key={user.id}><span>{user.name}</span><small>{user.email} · {user.role} · {user.seeds} xu</small></div>)}</div></div>
+        <div className="panel"><h2>Người dùng</h2><div className="list-panel compact">{users.map(user => <div key={user.id}><span>{user.name}</span><small>{user.email} · {user.role} · {user.seeds} Đậu</small></div>)}</div></div>
       </div>
       <Section title="Quản lý truyện" subtitle="Duyệt, ẩn/hiện, sửa tên và chọn truyện để quản lý chương."><div className="list-panel">{stories.map(story => <div key={story.id} className={selectedStory?.id === story.id ? 'active-admin-row' : ''}><span><button className="small-link" onClick={() => selectStory(story)}>{story.title}</button><small>{story.author} · {story.chapterCount} chương · {statusLabel(story.status)} · {approvalLabel(story.approvalStatus)} · {story.hidden ? 'Đang ẩn' : 'Đang hiện'}</small></span><button className="ghost" onClick={() => updateStory(story, { approvalStatus: story.approvalStatus === 'approved' ? 'pending' : 'approved' })}>{story.approvalStatus === 'approved' ? 'Đưa chờ duyệt' : 'Duyệt'}</button><button className="ghost" onClick={() => updateStory(story, { hidden: !story.hidden })}>{story.hidden ? 'Hiện' : 'Ẩn'}</button><button className="ghost" onClick={() => renameStory(story)}>Sửa</button><button className="ghost danger" onClick={() => deleteStory(story.id)}>Xóa</button></div>)}</div></Section>
       <Section title="Quản lý chương" subtitle={selectedStory ? `Đang chọn: ${selectedStory.title}` : 'Chọn một truyện ở danh sách trên để thêm/sửa/xóa chương.'}>
@@ -2230,11 +2234,11 @@ function Admin() {
               <input placeholder="Tiêu đề chương" value={chapterForm.title} onChange={e => setChapterForm({ ...chapterForm, title: e.target.value })} />
               <textarea rows="6" placeholder="Nội dung chương" value={chapterForm.content} onChange={e => setChapterForm({ ...chapterForm, content: e.target.value })} />
               <label><input type="checkbox" checked={chapterForm.isPremium} onChange={e => setChapterForm({ ...chapterForm, isPremium: e.target.checked })} /> Chương trả phí</label>
-              <input type="number" min="0" placeholder="Giá xu" value={chapterForm.price} onChange={e => setChapterForm({ ...chapterForm, price: e.target.value })} />
+              <input type="number" min="0" placeholder="Giá Đậu" value={chapterForm.price} onChange={e => setChapterForm({ ...chapterForm, price: e.target.value })} />
               <button className="button">Thêm chương</button>
             </form>
             <div className="list-panel">
-              {chapters.map(chapter => <div key={chapter.id}><span><strong>Chương {chapter.number}</strong><small>{chapter.title} · {chapter.isPremium ? `${chapter.price} xu` : 'Miễn phí'}</small></span><button className="ghost" onClick={() => updateChapter(chapter)}>Sửa tên</button><button className="ghost danger" onClick={() => deleteChapter(chapter)}>Xóa</button></div>)}
+              {chapters.map(chapter => <div key={chapter.id}><span><strong>Chương {chapter.number}</strong><small>{chapter.title} · {chapter.isPremium ? `${chapter.price} Đậu` : 'Miễn phí'}</small></span><button className="ghost" onClick={() => updateChapter(chapter)}>Sửa tên</button><button className="ghost danger" onClick={() => deleteChapter(chapter)}>Xóa</button></div>)}
             </div>
           </div>
         ) : <div className="center-card">Chưa chọn truyện.</div>}
@@ -2534,7 +2538,7 @@ Hỗ trợ: Chương N, Quyển N - Chương N, Thế giới N, Phó bản N...`
           </div>
           {isPremium && (
             <div className="bulk-price-row">
-              <label>Giá xu mỗi chương</label>
+                  <label>Giá Đậu mỗi chương</label>
               <input type="number" min="0" value={price} onChange={event => setPrice(event.target.value)} />
             </div>
           )}

@@ -568,7 +568,7 @@ export function UserDropdown({ user, logout, open, setOpen, closeAll }) {
   const menuItems = user ? [
     { label: 'Tủ truyện', to: '/bookmarks', icon: '▤' },
     { label: 'Lịch sử đọc', to: '/history', icon: '◷' },
-    { label: 'Nạp xu', to: '/wallet', icon: '◈' },
+    { label: 'Nạp Đậu', to: '/wallet', icon: '◈' },
     { label: 'Khu tác giả', to: '/author', icon: '✎' },
     { label: 'Cài đặt', to: '/settings#profile', icon: '⚙' },
     ...(user.role === 'admin' ? [{ label: 'Quản trị viên', to: '/admin', icon: '✦' }] : [])
@@ -585,7 +585,7 @@ export function UserDropdown({ user, logout, open, setOpen, closeAll }) {
           {guest ? (
             <div className="prod-user-guest">
               <strong>Đăng nhập để đồng bộ tủ truyện</strong>
-              <p>Lưu lịch sử đọc, nhận thông báo chương mới và quản lý xu.</p>
+          <p>Lưu lịch sử đọc, nhận thông báo chương mới và quản lý Đậu.</p>
               <div>
                 <button type="button" className="prod-primary-button" onClick={() => { closeAll(); navigate('/login'); }}>Đăng nhập</button>
                 <button type="button" className="prod-soft-button" onClick={() => { closeAll(); navigate('/register'); }}>Đăng ký</button>
@@ -597,7 +597,7 @@ export function UserDropdown({ user, logout, open, setOpen, closeAll }) {
                 <img src={user.avatar || '/images/logo.png'} alt={user.name} />
                 <div>
                   <strong>{user.name || 'Độc giả'}</strong>
-                  <span>{formatNumber(user.seeds || 0)} xu · {user.role === 'admin' ? 'Admin' : 'User'}</span>
+                    <span>{formatNumber(user.seeds || 0)} Đậu · {user.role === 'admin' ? 'Admin' : 'User'}</span>
                 </div>
               </div>
               <div className="prod-user-links">

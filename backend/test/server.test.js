@@ -470,6 +470,94 @@ test('admin chapters API rejects non-admin user', async () => {
   assert.equal(response.status, 403);
 });
 
+test('admin endpoints reject non-admin users', async () => {
+  const token = await loginToken('user@example.com');
+  const headers = { Authorization: `Bearer ${token}` };
+  const checks = [
+    ['/api/admin/dashboard', { headers }],
+    ['/api/admin/users', { headers }],
+    ['/api/admin/users/u_admin', { method: 'PATCH', headers, body: JSON.stringify({ note: 'nope' }) }],
+    ['/api/admin/users/u_admin/adjust-balance', { method: 'POST', headers, body: JSON.stringify({ amount: 1, reason: 'nope' }) }],
+    ['/api/admin/stories', { headers }],
+    ['/api/admin/stories', { method: 'POST', headers, body: JSON.stringify({ title: 'Nope', author: 'Nope', description: 'Nope' }) }],
+    ['/api/admin/stories/s1/status', { method: 'PATCH', headers, body: JSON.stringify({ approvalStatus: 'approved' }) }],
+    ['/api/admin/stories/s1/flags', { method: 'PATCH', headers, body: JSON.stringify({ hot: true }) }],
+    ['/api/admin/chapters', { headers }],
+    ['/api/admin/chapters/c_s1_1/status', { method: 'PATCH', headers, body: JSON.stringify({ status: 'approved' }) }],
+    ['/api/admin/reports', { headers }],
+    ['/api/admin/reports/nope', { method: 'PATCH', headers, body: JSON.stringify({ status: 'resolved' }) }],
+    ['/api/admin/reports/nope/actions', { method: 'POST', headers, body: JSON.stringify({ status: 'resolved' }) }],
+    ['/api/admin/comments', { headers }],
+    ['/api/admin/comments/nope', { method: 'PATCH', headers, body: JSON.stringify({ status: 'hidden' }) }],
+    ['/api/admin/taxonomy', { headers }],
+    ['/api/admin/taxonomy/categories', { method: 'POST', headers, body: JSON.stringify({ name: 'Nope' }) }],
+    ['/api/admin/notifications', { headers }],
+    ['/api/admin/notifications', { method: 'POST', headers, body: JSON.stringify({ title: 'Nope', body: 'Nope' }) }],
+    ['/api/admin/transactions', { headers }],
+    ['/api/admin/logs', { headers }]
+  ];
+
+  for (const [pathname, options] of checks) {
+    const { response } = await request(pathname, options);
+    assert.equal(response.status, 403, pathname);
+  }
+});
+
+test('admin can lock and unlock a user, blocking protected APIs and login while locked', async () => {
+  const adminToken = await loginToken();
+  const userToken = await loginToken('user@example.com');
+
+  const lock = await request('/api/admin/users/u_user', {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({ status: 'locked', note: 'Policy review' })
+  });
+  assert.equal(lock.response.status, 200);
+  assert.equal(lock.data.user.status, 'locked');
+
+  const protectedCall = await request('/api/me/profile', {
+    headers: { Authorization: `Bearer ${userToken}` }
+  });
+  assert.equal(protectedCall.response.status, 401);
+
+  const lockedLogin = await request('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ email: 'user@example.com', password: '123456' })
+  });
+  assert.equal(lockedLogin.response.status, 403);
+
+  const unlock = await request('/api/admin/users/u_user', {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({ status: 'active' })
+  });
+  assert.equal(unlock.response.status, 200);
+  assert.equal(unlock.data.user.status, 'active');
+
+  const loginAgain = await request('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ email: 'user@example.com', password: '123456' })
+  });
+  assert.equal(loginAgain.response.status, 200);
+});
+
+test('admin balance adjustment persists user balance, transaction, and audit log', async () => {
+  const adminToken = await loginToken();
+  const before = readTestDb().users.find(user => user.id === 'u_user').seeds;
+  const adjust = await request('/api/admin/users/u_user/adjust-balance', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({ amount: 17, reason: 'Test admin adjustment' })
+  });
+  assert.equal(adjust.response.status, 200);
+  assert.equal(adjust.data.user.coins, before + 17);
+  assert.equal(adjust.data.transaction.type, 'admin_adjustment');
+
+  const db = readTestDb();
+  assert.ok(db.transactions.some(item => item.userId === 'u_user' && item.type === 'admin_adjustment' && item.amount === 17));
+  assert.ok(db.adminLogs.some(item => item.action === 'adjust_balance' && item.entityId === 'u_user'));
+});
+
 test('admin can list chapters and approve chapter status', async () => {
   const token = await loginToken();
   const list = await request('/api/admin/chapters', {
@@ -587,6 +675,38 @@ test('hidden and rejected chapters stay out of public story and reader endpoints
   assert.equal(rejectedRead.response.status, 404);
   assert.equal(hiddenRead.response.status, 404);
   assert.equal(approvedRead.response.status, 200);
+});
+
+test('scheduled chapters stay private until scheduled time', async () => {
+  const token = await loginToken();
+  const story = await request('/api/admin/stories', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({
+      title: 'Scheduled Chapter Visibility Story',
+      author: 'Scheduler',
+      description: 'Story used to verify scheduled chapter visibility',
+      categories: ['Moderation'],
+      approvalStatus: 'approved',
+      hidden: false
+    })
+  });
+  assert.equal(story.response.status, 201);
+
+  const future = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  const scheduled = await request(`/api/admin/stories/${story.data.story.id}/chapters`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ number: 1, title: 'Future scheduled', content: 'Future content should not be public yet.', status: 'scheduled', scheduledAt: future })
+  });
+  assert.equal(scheduled.response.status, 201);
+
+  const detail = await request(`/api/stories/${story.data.story.slug}`);
+  assert.equal(detail.response.status, 200);
+  assert.ok(!detail.data.chapters.some(item => item.id === scheduled.data.chapter.id));
+
+  const reader = await request(`/api/stories/${story.data.story.slug}/chapters/1`);
+  assert.equal(reader.response.status, 404);
 });
 
 test('admin can update and delete chapters', async () => {
@@ -823,6 +943,55 @@ test('admin can review reports', async () => {
   });
   assert.equal(update.response.status, 200);
   assert.equal(update.data.report.status, 'resolved');
+});
+
+test('admin report action hides content and creates audit log', async () => {
+  const adminToken = await loginToken();
+  const userToken = await loginToken('user@example.com');
+  const create = await request('/api/admin/stories', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({
+      title: 'Report Hide Action Story',
+      author: 'Reporter Target',
+      description: 'Story used to verify report actions hide content',
+      categories: ['Moderation'],
+      approvalStatus: 'approved',
+      hidden: false
+    })
+  });
+  assert.equal(create.response.status, 201);
+
+  const report = await request(`/api/stories/${create.data.story.id}/report`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${userToken}` },
+    body: JSON.stringify({ reason: 'Hide this story through admin action' })
+  });
+  assert.equal(report.response.status, 201);
+
+  const action = await request(`/api/admin/reports/${report.data.report.id}/actions`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({
+      status: 'resolved',
+      adminNote: 'Hidden after moderation',
+      hideContent: true,
+      targetType: 'story',
+      targetId: create.data.story.id
+    })
+  });
+  assert.equal(action.response.status, 200);
+  assert.equal(action.data.report.status, 'resolved');
+
+  const publicList = await request(`/api/stories?q=${encodeURIComponent('Report Hide Action Story')}`);
+  assert.equal(publicList.response.status, 200);
+  assert.equal(publicList.data.stories.length, 0);
+
+  const logs = await request('/api/admin/logs?entityType=report', {
+    headers: { Authorization: `Bearer ${adminToken}` }
+  });
+  assert.equal(logs.response.status, 200);
+  assert.ok(logs.data.logs.some(item => item.action === 'resolve_report' && item.entityId === report.data.report.id));
 });
 
 test('pending stories stay out of public listing', async () => {

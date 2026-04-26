@@ -170,7 +170,7 @@ export function LoginPage({ login }) {
   return (
     <AuthShell mode="login">
       <div className="acct-auth-card">
-        <AuthHeader title="Đăng nhập" subtitle="Tiếp tục đọc truyện, đồng bộ lịch sử và quản lý xu của bạn." />
+      <AuthHeader title="Đăng nhập" subtitle="Tiếp tục đọc truyện, đồng bộ lịch sử và quản lý Đậu của bạn." />
         <form className="acct-auth-form" onSubmit={submit}>
           <label>Email<input value={form.email} onChange={event => setForm({ ...form, email: event.target.value })} placeholder="you@example.com" /></label>
           <label>Mật khẩu<span><Link to="/forgot-password">Quên mật khẩu?</Link></span><input type="password" value={form.password} onChange={event => setForm({ ...form, password: event.target.value })} placeholder="Nhập mật khẩu" /></label>
@@ -239,7 +239,7 @@ export function RegisterPage({ register }) {
             </>
           ) : (
             <div className="acct-role-grid">
-              <button type="button" className={form.role === 'reader' ? 'active' : ''} onClick={() => setForm({ ...form, role: 'reader' })}><b>Độc giả</b><span>Đọc, lưu truyện, bình luận và nạp xu.</span></button>
+            <button type="button" className={form.role === 'reader' ? 'active' : ''} onClick={() => setForm({ ...form, role: 'reader' })}><b>Độc giả</b><span>Đọc, lưu truyện, bình luận và nạp Đậu.</span></button>
               <button type="button" className={form.role === 'author' ? 'active' : ''} onClick={() => setForm({ ...form, role: 'author' })}><b>Tác giả</b><span>Chuẩn bị hồ sơ tác giả. Quyền xuất bản thật cần admin duyệt.</span></button>
             </div>
           )}
@@ -301,7 +301,7 @@ function AuthShell({ children, mode }) {
         <aside className="acct-auth-art">
           <span>Reader platform</span>
           <h1>Đọc truyện mượt hơn với tài khoản cá nhân</h1>
-          <p>Lưu chương, theo dõi lịch sử, nạp xu an toàn và nhận thông báo chương mới.</p>
+          <p>Lưu chương, theo dõi lịch sử, nạp Đậu an toàn và nhận thông báo chương mới.</p>
         </aside>
         {children}
       </div>
@@ -340,7 +340,7 @@ export function ReaderDashboard({ user, apiClient }) {
     ['Đang đọc', library.history.length],
     ['Yêu thích', library.bookmarks.length],
     ['Đã hoàn thành', completed],
-    ['Xu hiện có', user?.seeds || 0],
+    ['Đậu hiện có', user?.seeds || 0],
     ['Thông báo mới', notifications.filter(item => !item.read).length]
   ];
 
@@ -354,7 +354,7 @@ export function ReaderDashboard({ user, apiClient }) {
           <h1>Chào, {user?.name || 'độc giả'}</h1>
           <p>{user?.email} · Vai trò {user?.role === 'admin' ? 'admin' : localStorage.getItem('daudo_role_choice') === 'author' ? 'tác giả' : 'độc giả'}</p>
         </div>
-        <Link to="/wallet">Nạp xu nhanh</Link>
+              <Link to="/wallet">Nạp Đậu nhanh</Link>
       </section>
       <div className="acct-stat-grid">{stats.map(([label, value]) => <div key={label}><span>{label}</span><strong>{formatNumber(value)}</strong></div>)}</div>
       <LibraryTabs library={library} />
@@ -551,7 +551,7 @@ export function WalletPage({ user, updateUser, apiClient }) {
     if (result?.user) {
       updateUser?.(result.user);
       setBalance(result.user.seeds);
-      setNotice('Nạp xu thành công. Số dư đã được cập nhật.');
+      setNotice('Nạp Đậu thành công. Số dư đã được cập nhật.');
       await load();
     } else {
       setNotice('Yêu cầu thanh toán đã được tạo ở trạng thái chờ thanh toán.');
@@ -562,7 +562,7 @@ export function WalletPage({ user, updateUser, apiClient }) {
         amount: selectedPack.seeds + selectedPack.bonus,
         money: selectedPack.price - discount,
         status: 'pending',
-        note: `Nạp ${selectedPack.seeds + selectedPack.bonus} xu qua ${method}`,
+        note: `Nạp ${selectedPack.seeds + selectedPack.bonus} Đậu qua ${method}`,
         createdAt: new Date().toISOString()
       }, ...current]);
     }
@@ -572,14 +572,14 @@ export function WalletPage({ user, updateUser, apiClient }) {
   return (
     <div className="acct-page">
       {notice && <div className="acct-success">{notice}</div>}
-      <PageHead title="Ví xu của tôi" subtitle="Nạp xu để mở khóa chương VIP và mua combo truyện." action={<strong className="acct-balance">{formatNumber(balance)} xu</strong>} />
+      <PageHead title="Ví Đậu của tôi" subtitle="Nạp Đậu để mở khóa chương VIP và mua combo truyện." action={<strong className="acct-balance">{formatNumber(balance)} Đậu</strong>} />
       <div className="acct-coin-grid">{coinPackages.map(pack => <CoinPackageCard key={pack.id} pack={pack} active={selected === pack.id} onSelect={() => setSelected(pack.id)} />)}</div>
       <section className="acct-panel acct-payment-panel">
         <h2>Thanh toán an toàn</h2>
         <div className="acct-methods">{[['momo', 'MoMo'], ['vnpay', 'VNPay'], ['zalopay', 'ZaloPay'], ['bank', 'Chuyển khoản']].map(([value, label]) => <button key={value} type="button" className={method === value ? 'active' : ''} onClick={() => setMethod(value)}>{label}</button>)}</div>
         <label>Mã giảm giá<input value={voucher} onChange={event => setVoucher(event.target.value)} placeholder="Thử DAUDO10" /></label>
-        <div className="acct-payment-summary"><span>Gói nạp</span><b>{selectedPack.seeds + selectedPack.bonus} xu</b><span>Giảm giá</span><b>{formatCurrency(discount)}</b><span>Cần thanh toán</span><strong>{formatCurrency(selectedPack.price - discount)}</strong></div>
-        <button type="button" disabled={loading} onClick={topup}>{loading ? 'Đang xử lý...' : 'Nạp xu ngay'}</button>
+        <div className="acct-payment-summary"><span>Gói nạp</span><b>{selectedPack.seeds + selectedPack.bonus} Đậu</b><span>Giảm giá</span><b>{formatCurrency(discount)}</b><span>Cần thanh toán</span><strong>{formatCurrency(selectedPack.price - discount)}</strong></div>
+        <button type="button" disabled={loading} onClick={topup}>{loading ? 'Đang xử lý...' : 'Nạp Đậu ngay'}</button>
         <p>Khi backend thanh toán sẵn sàng, thao tác này sẽ đồng bộ qua endpoint `/wallet/topup`.</p>
       </section>
       <PaymentHistory transactions={transactions} />
@@ -591,8 +591,8 @@ export function CoinPackageCard({ pack, active, onSelect }) {
   return (
     <button type="button" className={active ? 'acct-coin-card active' : 'acct-coin-card'} onClick={onSelect}>
       {pack.featured && <em>Phổ biến</em>}
-      <strong>{pack.seeds + pack.bonus}<span>xu</span></strong>
-      <p>{pack.bonus ? `Bao gồm ${pack.bonus} xu bonus` : 'Không bonus'}</p>
+              <strong>{pack.seeds + pack.bonus}<span>Đậu</span></strong>
+              <p>{pack.bonus ? `Bao gồm ${pack.bonus} Đậu bonus` : 'Không bonus'}</p>
       <b>{formatCurrency(pack.price)}</b>
       <small>{pack.label}</small>
     </button>
@@ -604,7 +604,7 @@ export function PaymentHistory({ transactions }) {
     <section className="acct-panel">
       <h2>Lịch sử giao dịch</h2>
       <div className="acct-payment-history">
-        <div className="header"><span>Mã</span><span>Thời gian</span><span>Số tiền</span><span>Xu</span><span>Trạng thái</span></div>
+            <div className="header"><span>Mã</span><span>Thời gian</span><span>Số tiền</span><span>Đậu</span><span>Trạng thái</span></div>
         {transactions.map(txn => {
           const code = txn.code || txn.id || `TXN-${Date.now()}`;
           const status = txn.status || (txn.amount > 0 ? 'success' : 'success');
@@ -613,7 +613,7 @@ export function PaymentHistory({ transactions }) {
               <span>{code}</span>
               <span>{formatDate(txn.createdAt)}</span>
               <span>{txn.money ? formatCurrency(txn.money) : txn.amount < 0 ? '-' : formatCurrency(Math.abs(txn.amount || 0) * 1000)}</span>
-              <span>{txn.amount > 0 ? '+' : ''}{formatNumber(txn.amount)} xu</span>
+                <span>{txn.amount > 0 ? '+' : ''}{formatNumber(txn.amount)} Đậu</span>
               <b className={status}>{status === 'pending' ? 'Chờ thanh toán' : status === 'failed' ? 'Thất bại' : 'Thành công'}</b>
             </div>
           );

@@ -461,7 +461,7 @@ export function ReaderPage({ apiClient, user, updateUser }) {
             <div className="rp-paywall">
               <h2>Chương VIP</h2>
               <p>Bạn đang xem bản preview. Mở khóa chương để đọc đầy đủ nội dung.</p>
-              <button type="button" onClick={unlockChapter}>Mở khóa {chapter.price || story.price || 1} xu</button>
+              <button type="button" onClick={unlockChapter}>Mở khóa {chapter.price || story.price || 1} Đậu</button>
             </div>
           )}
 
