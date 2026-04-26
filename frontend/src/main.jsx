@@ -3,6 +3,30 @@ import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import './styles.css';
 import './publish.css';
+import './home-experience.css';
+import './search-ranking.css';
+import './story-reader.css';
+import './account.css';
+import './author.css';
+import './admin-cms.css';
+import { ProductionFooter, ProductionHeader, ProductionHome } from './components/home/HomeExperience.jsx';
+import { SearchPage } from './components/search/SearchPage.jsx';
+import { RankingPage as RankingExperiencePage } from './components/ranking/RankingPage.jsx';
+import { StoryDetailPage as StoryDetailExperiencePage } from './components/story/StoryDetailPage.jsx';
+import { ReaderPage as ReaderExperiencePage } from './components/reader/ReaderPage.jsx';
+import {
+  AccountSettings,
+  BookmarksPage as AccountBookmarksPage,
+  ForgotPasswordPage,
+  LoginPage,
+  ReaderDashboard,
+  ReadingHistoryPage,
+  RegisterPage,
+  WalletPage as AccountWalletPage
+} from './components/account/AccountPages.jsx';
+import { AuthorDashboard } from './components/author/AuthorDashboard.jsx';
+import { AdminDashboard as AdminCMSDashboard, NotificationPage as CMSNotificationPage } from './components/admin/AdminCMS.jsx';
+import { PageSeo } from './components/shared/Seo.jsx';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:4000/api';
 const AuthContext = createContext(null);
@@ -62,7 +86,7 @@ function useTheme() {
 }
 
 function ThemeProvider({ children }) {
-  const [theme, setTheme] = useState(() => localStorage.getItem('daudo_theme') || 'dark');
+  const [theme, setTheme] = useState(() => localStorage.getItem('daudo_theme') || 'light');
 
   useEffect(() => {
     document.body.dataset.theme = theme;
@@ -129,27 +153,50 @@ function App() {
         <AuthProvider>
           <Shell>
             <Routes>
-              <Route path="/" element={<Home />} />
-              <Route path="/danh-sach" element={<CatalogEnhanced />} />
-              <Route path="/the-loai/:category" element={<CatalogEnhanced />} />
+              <Route path="/" element={<HomeRoute />} />
+              <Route path="/danh-sach" element={<SearchRoute />} />
+              <Route path="/the-loai/:category" element={<SearchRoute />} />
               <Route path="/truyen-ngan" element={<ShortStoriesPage />} />
-              <Route path="/xep-hang" element={<RankingPage />} />
-              <Route path="/truyen-moi" element={<CatalogEnhanced />} />
+              <Route path="/xep-hang" element={<RankingRoute />} />
+              <Route path="/truyen-moi" element={<SearchRoute presetFilters={{ sort: 'created' }} />} />
               <Route path="/tac-gia/:name" element={<AuthorPage />} />
-              <Route path="/truyen/:slug" element={<StoryDetail />} />
-              <Route path="/truyen/:slug/chuong/:number" element={<Reader />} />
-              <Route path="/dang-nhap" element={<Login />} />
-              <Route path="/dang-ky" element={<Register />} />
-              <Route path="/ho-so" element={<Protected><Profile /></Protected>} />
-              <Route path="/bookmarks" element={<Protected><Library type="bookmarks" /></Protected>} />
+              <Route path="/truyen/:slug" element={<StoryDetailRoute />} />
+              <Route path="/truyen/:slug/chuong/:number" element={<ReaderRoute />} />
+              <Route path="/login" element={<LoginRoute />} />
+              <Route path="/register" element={<RegisterRoute />} />
+              <Route path="/forgot-password" element={<ForgotPasswordRoute />} />
+              <Route path="/dang-nhap" element={<LoginRoute />} />
+              <Route path="/dang-ky" element={<RegisterRoute />} />
+              <Route path="/account" element={<Protected><ReaderDashboardRoute /></Protected>} />
+              <Route path="/profile" element={<Protected><ReaderDashboardRoute /></Protected>} />
+              <Route path="/ho-so" element={<Protected><ReaderDashboardRoute /></Protected>} />
+              <Route path="/settings" element={<Protected><AccountSettingsRoute /></Protected>} />
+              <Route path="/bookmarks" element={<Protected><BookmarksRoute /></Protected>} />
               <Route path="/theo-doi" element={<Protected><Library type="follows" /></Protected>} />
-              <Route path="/lich-su" element={<Protected><Library type="history" /></Protected>} />
-              <Route path="/vi-hat" element={<Protected><Wallet /></Protected>} />
-              <Route path="/thong-bao" element={<Protected><Notifications /></Protected>} />
+              <Route path="/history" element={<Protected><HistoryRoute /></Protected>} />
+              <Route path="/lich-su" element={<Protected><HistoryRoute /></Protected>} />
+              <Route path="/wallet" element={<Protected><WalletRoute /></Protected>} />
+              <Route path="/nap-xu" element={<Protected><WalletRoute /></Protected>} />
+              <Route path="/vi-hat" element={<Protected><WalletRoute /></Protected>} />
+              <Route path="/notifications" element={<Protected><NotificationsRoute /></Protected>} />
+              <Route path="/thong-bao" element={<Protected><NotificationsRoute /></Protected>} />
               <Route path="/ai-tools" element={<AiTools />} />
-              <Route path="/dang-truyen" element={<Protected admin><StoryPublish /></Protected>} />
+              <Route path="/author" element={<Protected><AuthorRoute /></Protected>} />
+              <Route path="/author/stories" element={<Protected><AuthorRoute /></Protected>} />
+              <Route path="/author/stories/new" element={<Protected><AuthorRoute /></Protected>} />
+              <Route path="/author/stories/:id/edit" element={<Protected><AuthorRoute /></Protected>} />
+              <Route path="/author/chapters" element={<Protected><AuthorRoute /></Protected>} />
+              <Route path="/author/revenue" element={<Protected><AuthorRoute /></Protected>} />
+              <Route path="/author/promotions" element={<Protected><AuthorRoute /></Protected>} />
+              <Route path="/dang-truyen" element={<Protected><Navigate to="/author/stories/new" replace /></Protected>} />
               <Route path="/dang-truyen/them-nhieu-chuong" element={<Protected admin><BulkChapterPublish /></Protected>} />
-              <Route path="/admin" element={<Protected admin><Admin /></Protected>} />
+              <Route path="/admin" element={<Protected admin><AdminRoute /></Protected>} />
+              <Route path="/quan-tri-vien" element={<Protected admin><AdminRoute /></Protected>} />
+              <Route path="/admin/users" element={<Protected admin><AdminRoute /></Protected>} />
+              <Route path="/admin/stories" element={<Protected admin><AdminRoute /></Protected>} />
+              <Route path="/admin/chapters" element={<Protected admin><AdminRoute /></Protected>} />
+              <Route path="/admin/reports" element={<Protected admin><AdminRoute /></Protected>} />
+              <Route path="/admin/transactions" element={<Protected admin><AdminRoute /></Protected>} />
               <Route path="/lien-he" element={<StaticPage type="contact" />} />
               <Route path="/dieu-khoan" element={<StaticPage type="terms" />} />
               <Route path="/bao-mat" element={<StaticPage type="privacy" />} />
@@ -179,7 +226,7 @@ function RouteScrollReset() {
 
 function Shell({ children }) {
   const location = useLocation();
-  const publishing = location.pathname.startsWith('/dang-truyen');
+  const publishing = location.pathname.startsWith('/dang-truyen/them-nhieu-chuong');
 
   if (publishing) {
     return <PublishShell>{children}</PublishShell>;
@@ -188,10 +235,190 @@ function Shell({ children }) {
   return (
     <div className="app-shell public-shell">
       <RouteScrollReset />
-      <PublicHeaderEnhanced />
+      <HeaderRoute />
       <main className="container">{children}</main>
-      <Footer />
+      <ProductionFooter />
     </div>
+  );
+}
+
+function HeaderRoute() {
+  const { user, logout } = useAuth();
+  const { theme, toggleTheme } = useTheme();
+  return <ProductionHeader user={user} logout={logout} theme={theme} toggleTheme={toggleTheme} apiClient={api} />;
+}
+
+function HomeRoute() {
+  const { user } = useAuth();
+  return (
+    <>
+      <PageSeo
+        title="Đậu Đỏ Truyện - Đọc truyện online"
+        description="Khám phá truyện hot, truyện hoàn thành, bảng xếp hạng, tủ truyện và các đề xuất đọc cá nhân trên Đậu Đỏ Truyện."
+        canonical="/"
+        schema={{
+          '@context': 'https://schema.org',
+          '@type': 'WebSite',
+          name: 'Đậu Đỏ Truyện',
+          potentialAction: {
+            '@type': 'SearchAction',
+            target: '/danh-sach?q={search_term_string}',
+            'query-input': 'required name=search_term_string'
+          }
+        }}
+      />
+      <ProductionHome apiClient={api} currentUser={user} />
+    </>
+  );
+}
+
+function SearchRoute({ presetFilters = {} }) {
+  const { category } = useParams();
+  const [searchParams] = useSearchParams();
+  const keyword = searchParams.get('q') || '';
+  const title = category ? `Thể loại ${decodeURIComponent(category)}` : keyword ? `Tìm kiếm ${keyword}` : 'Tìm kiếm truyện';
+  return (
+    <>
+      <PageSeo
+        title={title}
+        description="Tìm truyện theo tên, tác giả, thể loại, tag, trạng thái, số chương, đánh giá, lượt xem và truyện VIP hoặc miễn phí."
+        canonical={category ? `/the-loai/${category}` : `/danh-sach${searchParams.toString() ? `?${searchParams.toString()}` : ''}`}
+      />
+      <SearchPage apiClient={api} presetFilters={presetFilters} />
+    </>
+  );
+}
+
+function RankingRoute() {
+  const [searchParams] = useSearchParams();
+  return (
+    <>
+      <PageSeo
+        title="Bảng xếp hạng truyện"
+        description="Theo dõi top truyện theo ngày, tuần, tháng, năm và toàn thời gian với lượt xem, yêu thích, đánh giá, bình luận và doanh thu mock."
+        canonical={`/xep-hang${searchParams.toString() ? `?${searchParams.toString()}` : ''}`}
+      />
+      <RankingExperiencePage apiClient={api} />
+    </>
+  );
+}
+
+function StoryDetailRoute() {
+  const { user, updateUser } = useAuth();
+  return <StoryDetailExperiencePage apiClient={api} user={user} updateUser={updateUser} />;
+}
+
+function ReaderRoute() {
+  const { user, updateUser } = useAuth();
+  return <ReaderExperiencePage apiClient={api} user={user} updateUser={updateUser} />;
+}
+
+function LoginRoute() {
+  const { login } = useAuth();
+  return (
+    <>
+      <PageSeo title="Đăng nhập" description="Đăng nhập Đậu Đỏ Truyện để đồng bộ lịch sử đọc, bookmark chương, ví xu và tủ truyện." canonical="/login" />
+      <LoginPage login={login} />
+    </>
+  );
+}
+
+function RegisterRoute() {
+  const { register } = useAuth();
+  return (
+    <>
+      <PageSeo title="Đăng ký" description="Tạo tài khoản độc giả hoặc tác giả trên Đậu Đỏ Truyện để đọc, theo dõi và đăng truyện." canonical="/register" />
+      <RegisterPage register={register} />
+    </>
+  );
+}
+
+function ForgotPasswordRoute() {
+  return (
+    <>
+      <PageSeo title="Quên mật khẩu" description="Nhận hướng dẫn đặt lại mật khẩu tài khoản Đậu Đỏ Truyện qua email." canonical="/forgot-password" />
+      <ForgotPasswordPage />
+    </>
+  );
+}
+
+function ReaderDashboardRoute() {
+  const { user } = useAuth();
+  return (
+    <>
+      <PageSeo title="Tài khoản độc giả" description="Dashboard độc giả, tủ truyện, số xu, thông báo mới và tiến trình đọc trên Đậu Đỏ Truyện." canonical="/account" />
+      <ReaderDashboard user={user} apiClient={api} />
+    </>
+  );
+}
+
+function BookmarksRoute() {
+  return (
+    <>
+      <PageSeo title="Bookmarks chương" description="Danh sách chương đã lưu, vị trí đọc và nút đọc tiếp nhanh trên Đậu Đỏ Truyện." canonical="/bookmarks" />
+      <AccountBookmarksPage apiClient={api} />
+    </>
+  );
+}
+
+function HistoryRoute() {
+  return (
+    <>
+      <PageSeo title="Lịch sử đọc" description="Xem lịch sử đọc, tiến trình từng truyện và thống kê thời gian đọc gần đây." canonical="/history" />
+      <ReadingHistoryPage apiClient={api} />
+    </>
+  );
+}
+
+function WalletRoute() {
+  const { user, updateUser } = useAuth();
+  return (
+    <>
+      <PageSeo title="Ví xu và nạp xu" description="Chọn gói nạp xu, phương thức thanh toán mock và xem lịch sử giao dịch trên Đậu Đỏ Truyện." canonical="/wallet" />
+      <AccountWalletPage user={user} updateUser={updateUser} apiClient={api} />
+    </>
+  );
+}
+
+function AccountSettingsRoute() {
+  const { user, updateUser } = useAuth();
+  const { theme, toggleTheme } = useTheme();
+  return (
+    <>
+      <PageSeo title="Cài đặt tài khoản" description="Cập nhật hồ sơ, mật khẩu, thông báo, giao diện, ngôn ngữ và quyền riêng tư." canonical="/settings" />
+      <AccountSettings user={user} updateUser={updateUser} theme={theme} toggleTheme={toggleTheme} />
+    </>
+  );
+}
+
+function AuthorRoute() {
+  const { user } = useAuth();
+  return (
+    <>
+      <PageSeo title="Dashboard tác giả" description="Quản lý truyện, chương, doanh thu, thống kê và gói quảng bá dành cho tác giả." canonical="/author" />
+      <AuthorDashboard user={user} />
+    </>
+  );
+}
+
+function AdminRoute() {
+  const { user } = useAuth();
+  const location = useLocation();
+  return (
+    <>
+      <PageSeo title="Admin CMS" description="Quản trị người dùng, truyện, chương, báo cáo, giao dịch và hệ thống thông báo." canonical={location.pathname} />
+      <AdminCMSDashboard user={user} apiClient={api} />
+    </>
+  );
+}
+
+function NotificationsRoute() {
+  const { user } = useAuth();
+  return (
+    <>
+      <PageSeo title="Thông báo" description="Trung tâm thông báo chương mới, bình luận trả lời, giao dịch và kiểm duyệt truyện/chương." canonical="/notifications" />
+      <CMSNotificationPage user={user} apiClient={api} />
+    </>
   );
 }
 
@@ -696,7 +923,7 @@ function PublishShell({ children }) {
 function Protected({ children, admin = false }) {
   const { user, loading } = useAuth();
   if (loading) return <Loader />;
-  if (!user) return <Navigate to="/dang-nhap" replace />;
+  if (!user) return <Navigate to="/login" replace />;
   if (admin && user.role !== 'admin') return <Navigate to="/" replace />;
   return children;
 }
@@ -788,7 +1015,7 @@ function MiniStoryRow({ story, index, compact = false }) {
   return (
     <Link to={`/truyen/${story.slug}`} className={compact ? 'mini-story-row compact-mini' : 'mini-story-row'}>
       {index !== undefined && <span className="mini-index">{index + 1}</span>}
-      <img src={story.cover} alt={story.title} />
+      <img src={story.cover} alt={story.title} loading="lazy" />
       <span className="mini-copy"><strong>{story.title}</strong><small>{story.author} · {story.categories?.slice(0, 2).join(', ')}</small></span>
       <span className="mini-score">★ {story.rating}</span>
     </Link>
@@ -801,7 +1028,7 @@ function StoryCard({ story }) {
   return (
     <Link to={`/truyen/${story.slug}`} className="story-card readdy-card">
       <div className="cover-wrap">
-        <img src={story.cover} alt={story.title} />
+        <img src={story.cover} alt={story.title} loading="lazy" />
         <span className={`badge status ${getStoryCardStatusClass(story.status)}`}>{getStoryCardStatusLabel(story.status)}</span>
         <span className="badge rating">★ {story.rating}</span>
         <span className="badge chapter">{chapterCount || '??'}ch</span>
@@ -1181,14 +1408,17 @@ function ShortStoriesPage() {
   const highlighted = visible.slice(0, 3);
 
   return (
-    <div className="short-page">
-      <section className="catalog-hero-readdy short-hero"><span className="catalog-hero-pill purple">Truyện ngắn</span><h1>Truyện Ngắn</h1><p>Những câu chuyện gọn, súc tích — đọc xong trong một buổi, cảm xúc đọng lại mãi.</p></section>
-      <HomeSection title="Nổi Bật Tuần Này" subtitle="Các truyện ngắn được đọc nhiều" kicker="Short">
-        <div className="short-featured-row">{highlighted.map(story => <MiniStoryRow key={story.id} story={story} />)}</div>
-      </HomeSection>
-      <div className="catalog-chip-row short-filter-row"><button className={active === 'Tất cả' ? 'active' : ''} onClick={() => setActive('Tất cả')}>Tất cả</button>{categories.slice(0, 7).map(item => <button key={item} className={active === item ? 'active' : ''} onClick={() => setActive(item)}>{item}</button>)}</div>
-      <div className="grid stories catalog-grid-readdy">{visible.slice(0, 18).map(story => <StoryCard key={story.id} story={story} />)}</div>
-    </div>
+    <>
+      <PageSeo title="Truyện ngắn" description="Tuyển tập truyện ngắn dễ đọc, gọn nhịp và phù hợp để đọc nhanh trong một buổi." canonical="/truyen-ngan" />
+      <div className="short-page">
+        <section className="catalog-hero-readdy short-hero"><span className="catalog-hero-pill purple">Truyện ngắn</span><h1>Truyện Ngắn</h1><p>Những câu chuyện gọn, súc tích — đọc xong trong một buổi, cảm xúc đọng lại mãi.</p></section>
+        <HomeSection title="Nổi Bật Tuần Này" subtitle="Các truyện ngắn được đọc nhiều" kicker="Short">
+          <div className="short-featured-row">{highlighted.map(story => <MiniStoryRow key={story.id} story={story} />)}</div>
+        </HomeSection>
+        <div className="catalog-chip-row short-filter-row"><button className={active === 'Tất cả' ? 'active' : ''} onClick={() => setActive('Tất cả')}>Tất cả</button>{categories.slice(0, 7).map(item => <button key={item} className={active === item ? 'active' : ''} onClick={() => setActive(item)}>{item}</button>)}</div>
+        <div className="grid stories catalog-grid-readdy">{visible.slice(0, 18).map(story => <StoryCard key={story.id} story={story} />)}</div>
+      </div>
+    </>
   );
 }
 
@@ -1661,17 +1891,20 @@ function AuthorPage() {
       .catch(err => setError(err.message));
   }, [authorName]);
   return (
-    <div className="catalog-page catalog-readdy">
-      <section className="catalog-hero-readdy">
-        <div className="catalog-breadcrumb">Trang chủ › Tác giả</div>
-        <span className="catalog-hero-pill">Tác giả</span>
-        <h1>{authorName}</h1>
-        <p>Các truyện đang có trên Đậu Đỏ Truyện của tác giả/người đăng này.</p>
-      </section>
-      <ErrorBox message={error} />
-      <div className="grid stories catalog-grid-readdy">{stories.map(story => <StoryCard key={story.id} story={story} />)}</div>
-      {!error && stories.length === 0 && <div className="center-card">Chưa có truyện công khai của tác giả này.</div>}
-    </div>
+    <>
+      <PageSeo title={`Tác giả ${authorName}`} description={`Danh sách truyện của ${authorName || 'tác giả'} trên Đậu Đỏ Truyện.`} canonical={`/tac-gia/${encodeURIComponent(authorName)}`} />
+      <div className="catalog-page catalog-readdy">
+        <section className="catalog-hero-readdy">
+          <div className="catalog-breadcrumb">Trang chủ › Tác giả</div>
+          <span className="catalog-hero-pill">Tác giả</span>
+          <h1>{authorName}</h1>
+          <p>Các truyện đang có trên Đậu Đỏ Truyện của tác giả/người đăng này.</p>
+        </section>
+        <ErrorBox message={error} />
+        <div className="grid stories catalog-grid-readdy">{stories.map(story => <StoryCard key={story.id} story={story} />)}</div>
+        {!error && stories.length === 0 && <div className="center-card">Chưa có truyện công khai của tác giả này.</div>}
+      </div>
+    </>
   );
 }
 
@@ -1703,11 +1936,14 @@ function StaticPage({ type }) {
   };
   const [title, body] = pages[type] || pages.contact;
   return (
-    <div className="auth-card wide static-page">
-      <h1>{title}</h1>
-      <p className="muted">{body}</p>
-      <Link className="button" to="/">Về trang chủ</Link>
-    </div>
+    <>
+      <PageSeo title={title} description={body} canonical={type === 'terms' ? '/dieu-khoan' : type === 'privacy' ? '/bao-mat' : '/lien-he'} />
+      <div className="auth-card wide static-page">
+        <h1>{title}</h1>
+        <p className="muted">{body}</p>
+        <Link className="button" to="/">Về trang chủ</Link>
+      </div>
+    </>
   );
 }
 
@@ -2634,7 +2870,12 @@ function StoryPublish() {
 }
 
 function NotFound() {
-  return <div className="center-card"><h1>404</h1><p>Trang không tồn tại.</p><Link className="button" to="/">Về trang chủ</Link></div>;
+  return (
+    <>
+      <PageSeo title="404 - Trang không tồn tại" description="Trang bạn đang tìm không tồn tại hoặc đã được chuyển sang địa chỉ khác." canonical="/404" />
+      <div className="center-card"><h1>404</h1><p>Trang không tồn tại.</p><Link className="button" to="/">Về trang chủ</Link></div>
+    </>
+  );
 }
 
 function formatNumber(value = 0) {

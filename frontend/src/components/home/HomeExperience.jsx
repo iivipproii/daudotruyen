@@ -1,0 +1,994 @@
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
+import {
+  mockCategories,
+  mockContinueReading,
+  mockNotifications,
+  mockPopularSearches,
+  mockSearchHistory,
+  mockStories
+} from '../../data/mockStories';
+
+const coverFallback = '/images/cover-1.jpg';
+
+const cp1252Map = {
+  '€': 0x80,
+  '‚': 0x82,
+  'ƒ': 0x83,
+  '„': 0x84,
+  '…': 0x85,
+  '†': 0x86,
+  '‡': 0x87,
+  'ˆ': 0x88,
+  '‰': 0x89,
+  'Š': 0x8a,
+  '‹': 0x8b,
+  'Œ': 0x8c,
+  'Ž': 0x8e,
+  '‘': 0x91,
+  '’': 0x92,
+  '“': 0x93,
+  '”': 0x94,
+  '•': 0x95,
+  '–': 0x96,
+  '—': 0x97,
+  '˜': 0x98,
+  '™': 0x99,
+  'š': 0x9a,
+  '›': 0x9b,
+  'œ': 0x9c,
+  'ž': 0x9e,
+  'Ÿ': 0x9f
+};
+
+function repairText(value) {
+  if (typeof value !== 'string') return value;
+  if (!/(Ã|Ä|Â|Æ|áº|á»|â)/.test(value)) return value;
+  try {
+    const bytes = Array.from(value, char => {
+      const code = char.charCodeAt(0);
+      if (code <= 255) return code;
+      return cp1252Map[char] || code;
+    });
+    return new TextDecoder('utf-8', { fatal: false }).decode(new Uint8Array(bytes));
+  } catch {
+    return value;
+  }
+}
+
+function normalizeStory(story = {}) {
+  return {
+    ...story,
+    title: repairText(story.title),
+    author: repairText(story.author),
+    translator: repairText(story.translator),
+    description: repairText(story.description),
+    categories: Array.isArray(story.categories) ? story.categories.map(repairText) : [],
+    tags: Array.isArray(story.tags) ? story.tags.map(repairText) : []
+  };
+}
+
+function normalizeStories(stories = []) {
+  return stories.filter(Boolean).map(normalizeStory);
+}
+
+function uniqueCategoriesFrom(stories = []) {
+  const values = stories.flatMap(story => story.categories || []).filter(Boolean).map(repairText);
+  return Array.from(new Set(values)).sort((a, b) => a.localeCompare(b, 'vi'));
+}
+
+function toNumber(value) {
+  return Number(value || 0);
+}
+
+function formatNumber(value = 0) {
+  return toNumber(value).toLocaleString('vi-VN');
+}
+
+function getChapterCount(story = {}) {
+  return story.chapterCount || story.chapterCountEstimate || story.latestChapter?.number || 0;
+}
+
+function normalizeForSearch(value = '') {
+  return String(value)
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+
+function chunkIntoColumns(items = [], columnCount = 4) {
+  const columns = Array.from({ length: columnCount }, () => []);
+  items.forEach((item, index) => {
+    columns[index % columnCount].push(item);
+  });
+  return columns;
+}
+
+function sortByNumber(key) {
+  return (a, b) => toNumber(b[key]) - toNumber(a[key]);
+}
+
+function sortByDate(key) {
+  return (a, b) => new Date(b[key] || 0).getTime() - new Date(a[key] || 0).getTime();
+}
+
+function buildHomeSlices(sourceStories = mockStories) {
+  const stories = normalizeStories(sourceStories.length ? sourceStories : mockStories);
+  const byViews = stories.slice().sort(sortByNumber('views'));
+  const byRating = stories.slice().sort(sortByNumber('rating'));
+  const byUpdated = stories.slice().sort(sortByDate('updatedAt'));
+  const completed = stories.filter(story => story.status === 'completed');
+  const featured = stories.filter(story => story.featured).concat(byRating).filter((story, index, list) => list.findIndex(item => item.id === story.id) === index);
+
+  return {
+    all: stories,
+    hero: featured.slice(0, 5),
+    hot: byViews.slice(0, 8),
+    trending: byRating.slice(0, 8),
+    updated: byUpdated.slice(0, 8),
+    completed: (completed.length ? completed : byRating).slice(0, 8),
+    newLaunch: stories.slice().sort(sortByDate('createdAt')).slice(0, 8),
+    editorPicks: featured.slice(0, 8),
+    personalized: byRating.filter(story => story.categories?.some(category => ['Ngôn tình', 'Đô thị', 'Chữa lành', 'Trinh thám'].includes(category))).slice(0, 8),
+    ranking: byViews.slice(0, 10),
+    categories: uniqueCategoriesFrom(stories)
+  };
+}
+
+function mapHistoryItem(item = {}) {
+  const story = normalizeStory(item.story || item);
+  return {
+    id: item.id || `history-${story.id || story.slug}`,
+    story,
+    chapterNumber: item.chapter?.number || item.chapterNumber || item.latestChapter?.number || 1,
+    progress: item.progress || Math.min(92, Math.max(12, Math.round((toNumber(item.chapterNumber || 1) / Math.max(getChapterCount(story), 1)) * 100))),
+    updatedAt: item.updatedAt || story.updatedAt
+  };
+}
+
+async function fetchSafe(apiClient, path) {
+  if (!apiClient) return null;
+  try {
+    return await apiClient(path);
+  } catch {
+    return null;
+  }
+}
+
+export function ProductionHeader({ user, logout, theme = 'light', toggleTheme, apiClient }) {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [genreOpen, setGenreOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [userOpen, setUserOpen] = useState(false);
+  const [notificationOpen, setNotificationOpen] = useState(false);
+  const [categories, setCategories] = useState(mockCategories);
+  const [stories, setStories] = useState(mockStories);
+  const headerRef = useRef(null);
+
+  useEffect(() => {
+    let alive = true;
+    Promise.all([fetchSafe(apiClient, '/categories'), fetchSafe(apiClient, '/stories?sort=views')]).then(([categoryData, storyData]) => {
+      if (!alive) return;
+      const nextStories = normalizeStories(storyData?.stories || []);
+      const nextCategories = (categoryData?.categories || []).map(repairText);
+      setStories(nextStories.length ? nextStories : mockStories);
+      setCategories(nextCategories.length ? nextCategories : uniqueCategoriesFrom(nextStories.length ? nextStories : mockStories));
+    });
+    return () => {
+      alive = false;
+    };
+  }, [apiClient]);
+
+  useEffect(() => {
+    const closeByOutside = event => {
+      if (!headerRef.current?.contains(event.target)) {
+        setGenreOpen(false);
+        setSearchOpen(false);
+        setUserOpen(false);
+        setNotificationOpen(false);
+      }
+    };
+    const closeByEscape = event => {
+      if (event.key === 'Escape') {
+        setGenreOpen(false);
+        setSearchOpen(false);
+        setUserOpen(false);
+        setNotificationOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', closeByOutside);
+    window.addEventListener('keydown', closeByEscape);
+    return () => {
+      document.removeEventListener('mousedown', closeByOutside);
+      window.removeEventListener('keydown', closeByEscape);
+    };
+  }, []);
+
+  const closeAll = () => {
+    setMobileOpen(false);
+    setGenreOpen(false);
+    setSearchOpen(false);
+    setUserOpen(false);
+    setNotificationOpen(false);
+  };
+
+  const openSearch = () => {
+    setSearchOpen(true);
+    setGenreOpen(false);
+    setUserOpen(false);
+    setNotificationOpen(false);
+  };
+
+  const goCategory = category => {
+    closeAll();
+    navigate(`/the-loai/${encodeURIComponent(category)}`);
+  };
+
+  return (
+    <header className="prod-header" ref={headerRef}>
+      <div className="prod-header-inner">
+        <Link className="prod-brand" to="/" onClick={closeAll}>
+          <img src="/images/logo.png" alt="Đậu Đỏ Truyện" />
+          <span>
+            <strong>Đậu Đỏ</strong>
+            <small>Truyện online</small>
+          </span>
+        </Link>
+
+        <button className="prod-icon-button prod-mobile-toggle" type="button" onClick={() => setMobileOpen(open => !open)} aria-label="Mở menu">
+          <span aria-hidden="true">☰</span>
+        </button>
+
+        <nav className={mobileOpen ? 'prod-nav open' : 'prod-nav'} aria-label="Menu chính">
+          <NavLink end to="/" onClick={closeAll}>Trang chủ</NavLink>
+          <NavLink to="/danh-sach?status=completed" className={location.search.includes('status=completed') ? 'active' : ''} onClick={closeAll}>Hoàn thành</NavLink>
+          <NavLink to="/truyen-ngan" onClick={closeAll}>Truyện ngắn</NavLink>
+          <NavLink to="/xep-hang" onClick={closeAll}>Xếp hạng</NavLink>
+          <div className="prod-menu-wrap">
+            <button
+              className={genreOpen || location.pathname.startsWith('/the-loai') ? 'prod-nav-button active' : 'prod-nav-button'}
+              type="button"
+              onClick={() => {
+                setGenreOpen(open => !open);
+                setSearchOpen(false);
+              }}
+            >
+              Thể loại <span aria-hidden="true">⌄</span>
+            </button>
+            {genreOpen && <MegaMenu categories={categories} onSelect={goCategory} />}
+          </div>
+        </nav>
+
+        <div className="prod-header-actions">
+          <SearchCommand
+            open={searchOpen}
+            setOpen={setSearchOpen}
+            onFocus={openSearch}
+            stories={stories}
+            categories={categories}
+            navigate={navigate}
+            closeAll={closeAll}
+          />
+          <NotificationDropdown
+            open={notificationOpen}
+            setOpen={next => {
+              setNotificationOpen(next);
+              setSearchOpen(false);
+              setGenreOpen(false);
+              setUserOpen(false);
+            }}
+          />
+          <ThemeToggle theme={theme} toggleTheme={toggleTheme} />
+          <UserDropdown
+            user={user}
+            logout={logout}
+            open={userOpen}
+            setOpen={next => {
+              setUserOpen(next);
+              setSearchOpen(false);
+              setGenreOpen(false);
+              setNotificationOpen(false);
+            }}
+            closeAll={closeAll}
+          />
+        </div>
+      </div>
+    </header>
+  );
+}
+
+export function MegaMenu({ categories, onSelect }) {
+  const columns = chunkIntoColumns(categories.slice(0, 32), 4);
+  return (
+    <div className="prod-mega-menu">
+      <div className="prod-mega-head">
+        <strong>Khám phá thể loại</strong>
+        <span>{categories.length} chủ đề đang có truyện</span>
+      </div>
+      <div className="prod-mega-grid">
+        {columns.map((column, columnIndex) => (
+          <div className="prod-mega-col" key={`genre-column-${columnIndex}`}>
+            {column.map(category => (
+              <button type="button" key={category} onClick={() => onSelect(category)}>
+                {category}
+              </button>
+            ))}
+          </div>
+        ))}
+      </div>
+      <Link className="prod-mega-all" to="/danh-sach">Xem tất cả truyện</Link>
+    </div>
+  );
+}
+
+export function SearchCommand({ open, setOpen, onFocus, stories, categories, navigate, closeAll }) {
+  const [keyword, setKeyword] = useState('');
+  const [history, setHistory] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('daudo_search_history') || '[]');
+      return saved.length ? saved : mockSearchHistory;
+    } catch {
+      return mockSearchHistory;
+    }
+  });
+
+  const searchText = normalizeForSearch(keyword.trim());
+  const quickStories = useMemo(() => {
+    const source = searchText
+      ? stories.filter(story => normalizeForSearch([story.title, story.author, story.description, ...(story.categories || [])].join(' ')).includes(searchText))
+      : stories;
+    return source.slice(0, 5);
+  }, [stories, searchText]);
+  const quickCategories = useMemo(() => {
+    const source = searchText ? categories.filter(category => normalizeForSearch(category).includes(searchText)) : categories;
+    return source.slice(0, 8);
+  }, [categories, searchText]);
+
+  const saveHistory = value => {
+    const text = value.trim();
+    if (!text) return;
+    const next = [text, ...history.filter(item => item !== text)].slice(0, 6);
+    setHistory(next);
+    localStorage.setItem('daudo_search_history', JSON.stringify(next));
+  };
+
+  const goSearch = value => {
+    const text = String(value || keyword).trim();
+    if (!text) return;
+    saveHistory(text);
+    setOpen(false);
+    closeAll();
+    navigate(`/danh-sach?q=${encodeURIComponent(text)}`);
+  };
+
+  const goStory = story => {
+    if (!story?.slug) return;
+    saveHistory(story.title);
+    setOpen(false);
+    closeAll();
+    navigate(`/truyen/${story.slug}`);
+  };
+
+  const goCategory = category => {
+    saveHistory(category);
+    setOpen(false);
+    closeAll();
+    navigate(`/the-loai/${encodeURIComponent(category)}`);
+  };
+
+  return (
+    <div className="prod-search">
+      <label className="prod-search-box">
+        <span aria-hidden="true">⌕</span>
+        <input
+          value={keyword}
+          onChange={event => setKeyword(event.target.value)}
+          onFocus={onFocus}
+          onKeyDown={event => {
+            if (event.key === 'Enter') goSearch(keyword);
+          }}
+          placeholder="Tìm truyện, tác giả..."
+        />
+      </label>
+      {open && (
+        <div className="prod-search-panel">
+          <div className="prod-command-head">
+            <strong>Tìm kiếm nhanh</strong>
+            <button type="button" onClick={() => setOpen(false)}>ESC</button>
+          </div>
+          <SearchBlock title="Gợi ý phổ biến" items={mockPopularSearches} onSelect={goSearch} />
+          {history.length > 0 && <SearchBlock title="Lịch sử tìm kiếm" items={history} onSelect={goSearch} muted />}
+          <div className="prod-search-results">
+            <p>Kết quả nhanh</p>
+            {quickStories.map(story => (
+              <button type="button" key={story.id} onClick={() => goStory(story)}>
+                <img src={story.cover || coverFallback} alt={story.title} loading="lazy" onError={handleImageError} />
+                <span>
+                  <strong>{story.title}</strong>
+                  <small>{story.author} · ★ {story.rating || 4.5}</small>
+                </span>
+              </button>
+            ))}
+            {quickStories.length === 0 && <div className="prod-empty-mini">Không có truyện phù hợp.</div>}
+          </div>
+          <div className="prod-search-chips">
+            {quickCategories.map(category => (
+              <button type="button" key={category} onClick={() => goCategory(category)}>{category}</button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SearchBlock({ title, items, onSelect, muted = false }) {
+  return (
+    <div className={muted ? 'prod-search-block muted' : 'prod-search-block'}>
+      <p>{title}</p>
+      <div>
+        {items.map(item => (
+          <button type="button" key={item} onClick={() => onSelect(item)}>{item}</button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function NotificationDropdown({ open, setOpen }) {
+  const [notifications, setNotifications] = useState(mockNotifications);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setNotifications(current => {
+        if (current.some(item => item.id === 'mock-live')) return current;
+        return [
+          {
+            id: 'mock-live',
+            title: 'Thông báo realtime mẫu',
+            body: 'Một truyện trong tủ sách của bạn vừa có cập nhật mới.',
+            read: false,
+            createdAt: new Date().toISOString()
+          },
+          ...current
+        ].slice(0, 6);
+      });
+    }, 18000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const unread = notifications.filter(item => !item.read).length;
+  const markAllRead = () => {
+    setNotifications(current => current.map(item => ({ ...item, read: true })));
+  };
+
+  return (
+    <div className="prod-dropdown-wrap">
+      <button className="prod-icon-button" type="button" aria-label="Thông báo" onClick={() => setOpen(!open)}>
+        <span aria-hidden="true">🔔</span>
+        {unread > 0 && <b>{unread}</b>}
+      </button>
+      {open && (
+        <div className="prod-notification-menu">
+          <div className="prod-dropdown-head">
+            <strong>Thông báo</strong>
+            <button type="button" onClick={markAllRead}>Đánh dấu đã đọc</button>
+          </div>
+          <div className="prod-notification-list">
+            {notifications.map(item => (
+              <div key={item.id} className={item.read ? 'read' : 'unread'}>
+                <span />
+                <div>
+                  <strong>{item.title}</strong>
+                  <p>{item.body}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+          <Link className="prod-notification-footer" to="/notifications" onClick={() => setOpen(false)}>
+            Xem tất cả thông báo
+          </Link>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function ThemeToggle({ theme, toggleTheme }) {
+  return (
+    <button className="prod-icon-button" type="button" onClick={toggleTheme} aria-label="Đổi giao diện">
+      <span aria-hidden="true">{theme === 'dark' ? '☀' : '☾'}</span>
+    </button>
+  );
+}
+
+export function UserDropdown({ user, logout, open, setOpen, closeAll }) {
+  const navigate = useNavigate();
+  const guest = !user;
+  const menuItems = user ? [
+    { label: 'Tủ truyện', to: '/bookmarks', icon: '▤' },
+    { label: 'Lịch sử đọc', to: '/history', icon: '◷' },
+    { label: 'Nạp xu', to: '/wallet', icon: '◈' },
+    { label: 'Khu tác giả', to: '/author', icon: '✎' },
+    { label: 'Cài đặt', to: '/settings', icon: '⚙' },
+    ...(user.role === 'admin' ? [{ label: 'Quản trị viên', to: '/admin', icon: '✦' }] : [])
+  ] : [];
+
+  return (
+    <div className="prod-dropdown-wrap prod-user-wrap">
+      <button className={open ? 'prod-user-button active' : 'prod-user-button'} type="button" onClick={() => setOpen(!open)} aria-label="Tài khoản">
+        <img src={user?.avatar || '/images/logo.png'} alt={user?.name || 'Tài khoản'} />
+        <span>{user?.name || 'Đăng nhập'}</span>
+      </button>
+      {open && (
+        <div className="prod-user-menu">
+          {guest ? (
+            <div className="prod-user-guest">
+              <strong>Đăng nhập để đồng bộ tủ truyện</strong>
+              <p>Lưu lịch sử đọc, nhận thông báo chương mới và quản lý xu.</p>
+              <div>
+                <button type="button" className="prod-primary-button" onClick={() => { closeAll(); navigate('/login'); }}>Đăng nhập</button>
+                <button type="button" className="prod-soft-button" onClick={() => { closeAll(); navigate('/register'); }}>Đăng ký</button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="prod-user-card">
+                <img src={user.avatar || '/images/logo.png'} alt={user.name} />
+                <div>
+                  <strong>{user.name || 'Độc giả'}</strong>
+                  <span>{formatNumber(user.seeds || 0)} xu · {user.role === 'admin' ? 'Admin' : 'User'}</span>
+                </div>
+              </div>
+              <div className="prod-user-links">
+                {menuItems.map(item => (
+                  <Link key={item.label} to={item.to} onClick={closeAll}>
+                    <span>{item.icon}</span>
+                    {item.label}
+                  </Link>
+                ))}
+                <button type="button" onClick={() => { logout?.(); closeAll(); }}>
+                  <span>↩</span>
+                  Đăng xuất
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function ProductionHome({ apiClient, currentUser }) {
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [homeData, setHomeData] = useState(() => buildHomeSlices(mockStories));
+  const [continueItems, setContinueItems] = useState([]);
+
+  useEffect(() => {
+    let alive = true;
+
+    async function loadHome() {
+      setLoading(true);
+      const [updated, featured, views, completed, categories] = await Promise.all([
+        fetchSafe(apiClient, '/stories?sort=updated'),
+        fetchSafe(apiClient, '/stories?featured=true&sort=rating'),
+        fetchSafe(apiClient, '/stories?sort=views'),
+        fetchSafe(apiClient, '/stories?status=completed&sort=updated'),
+        fetchSafe(apiClient, '/categories')
+      ]);
+
+      if (!alive) return;
+
+      const merged = normalizeStories([
+        ...(featured?.stories || []),
+        ...(views?.stories || []),
+        ...(updated?.stories || []),
+        ...(completed?.stories || [])
+      ]);
+      const unique = Array.from(new Map(merged.map(story => [story.id || story.slug, story])).values());
+      const fallbackUsed = unique.length === 0;
+      const nextData = buildHomeSlices(fallbackUsed ? mockStories : unique);
+      const apiCategories = (categories?.categories || []).map(repairText);
+      setHomeData({ ...nextData, categories: apiCategories.length ? apiCategories : nextData.categories });
+      setError(fallbackUsed ? 'Không kết nối được API, đang hiển thị dữ liệu mẫu cho trang chủ.' : '');
+      setLoading(false);
+    }
+
+    loadHome();
+    return () => {
+      alive = false;
+    };
+  }, [apiClient]);
+
+  useEffect(() => {
+    let alive = true;
+    async function loadLibrary() {
+      if (!currentUser) {
+        setContinueItems([]);
+        return;
+      }
+      const library = await fetchSafe(apiClient, '/me/library');
+      if (!alive) return;
+      const history = (library?.history || []).map(mapHistoryItem);
+      setContinueItems(history.length ? history : mockContinueReading);
+    }
+    loadLibrary();
+    return () => {
+      alive = false;
+    };
+  }, [apiClient, currentUser]);
+
+  if (loading) {
+    return (
+      <div className="home-production">
+        <HomeLoading />
+      </div>
+    );
+  }
+
+  return (
+    <div className="home-production">
+      {error && <div className="prod-error-state">{error}</div>}
+      <HeroSlider stories={homeData.hero} />
+      <ContinueReadingSection user={currentUser} items={continueItems} />
+      <StorySection kicker="Hot" title="Truyện hot" subtitle="Những bộ truyện có lượng đọc và theo dõi nổi bật trong cộng đồng." to="/danh-sach?sort=views">
+        <StoryGrid stories={homeData.hot} />
+      </StorySection>
+      <StorySection kicker="Trending" title="Đang thịnh hành" subtitle="Các tác phẩm tăng nhiệt nhanh nhờ đánh giá tốt và tương tác cao." to="/xep-hang">
+        <StoryGrid stories={homeData.trending} />
+      </StorySection>
+      <StorySection kicker="Update" title="Mới cập nhật" subtitle="Theo dõi nhanh những chương mới nhất vừa được đăng." to="/danh-sach?sort=updated">
+        <StoryGrid stories={homeData.updated} compact />
+      </StorySection>
+      <StorySection kicker="Full" title="Truyện hoàn thành" subtitle="Đọc liền mạch từ chương đầu đến chương cuối." to="/danh-sach?status=completed">
+        <StoryGrid stories={homeData.completed} />
+      </StorySection>
+      <div className="prod-home-split">
+        <StorySection kicker="New" title="Mới ra mắt" subtitle="Các bộ truyện vừa được lên kệ trong thời gian gần đây." to="/truyen-moi">
+          <StoryGrid stories={homeData.newLaunch.slice(0, 4)} compact />
+        </StorySection>
+        <StorySection kicker="Editor" title="Editor đề xuất" subtitle="Lựa chọn nổi bật để thử ngay hôm nay." to="/danh-sach?featured=true">
+          <StoryGrid stories={homeData.editorPicks.slice(0, 4)} compact />
+        </StorySection>
+      </div>
+      {currentUser && (
+        <StorySection kicker="For you" title="Đề cử cá nhân hóa" subtitle="Gợi ý dựa trên các thể loại bạn thường đọc." to="/danh-sach?sort=rating">
+          <StoryGrid stories={homeData.personalized.length ? homeData.personalized : homeData.trending} />
+        </StorySection>
+      )}
+      <div className="prod-home-bottom">
+        <RankingMini stories={homeData.ranking} />
+        <div className="prod-bottom-stack">
+          <GenreChips categories={homeData.categories} />
+          <AuthorCTA />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function HomeLoading() {
+  return (
+    <>
+      <div className="prod-hero-skeleton" />
+      <div className="prod-section-skeleton">
+        {Array.from({ length: 8 }).map((_, index) => <span key={index} />)}
+      </div>
+    </>
+  );
+}
+
+export function HeroSlider({ stories }) {
+  const [active, setActive] = useState(0);
+  const slides = stories?.length ? stories : mockStories.slice(0, 4);
+  const current = slides[active % slides.length];
+
+  useEffect(() => {
+    if (slides.length <= 1) return undefined;
+    const timer = window.setInterval(() => {
+      setActive(index => (index + 1) % slides.length);
+    }, 4000);
+    return () => window.clearInterval(timer);
+  }, [slides.length]);
+
+  const goPrev = () => setActive(index => (index - 1 + slides.length) % slides.length);
+  const goNext = () => setActive(index => (index + 1) % slides.length);
+
+  return (
+    <section className="prod-hero-slider" style={{ '--hero-image': `url("${current.banner || current.cover || '/images/hero.jpg'}")` }}>
+      <div className="prod-hero-overlay" />
+      <button className="prod-hero-arrow prev" type="button" onClick={goPrev} aria-label="Truyện nổi bật trước">‹</button>
+      <div className="prod-hero-content">
+        <div className="prod-hero-tags">
+          {current.categories?.slice(0, 3).map(category => <span key={category}>{category}</span>)}
+        </div>
+        <h1>{current.title}</h1>
+        <p>{current.description}</p>
+        <div className="prod-hero-meta">
+          <span>★ {current.rating || 4.5}</span>
+          <span>{formatNumber(getChapterCount(current))} chương</span>
+          <span>{formatNumber(current.views)} lượt đọc</span>
+          <span>{current.author}</span>
+        </div>
+        <div className="prod-hero-actions">
+          <Link className="prod-primary-button" to={`/truyen/${current.slug}`}>Đọc ngay</Link>
+          <Link className="prod-glass-button" to={`/truyen/${current.slug}`}>Chi tiết</Link>
+        </div>
+      </div>
+      <button className="prod-hero-arrow next" type="button" onClick={goNext} aria-label="Truyện nổi bật tiếp theo">›</button>
+      <div className="prod-hero-thumbs">
+        {slides.map((story, index) => (
+          <button
+            key={story.id || story.slug}
+            className={index === active % slides.length ? 'active' : ''}
+            type="button"
+            onClick={() => setActive(index)}
+            aria-label={`Chọn ${story.title}`}
+          >
+            <img src={story.cover || coverFallback} alt={story.title} loading="lazy" onError={handleImageError} />
+            <span>{story.title}</span>
+          </button>
+        ))}
+      </div>
+      <div className="prod-hero-dots">
+        {slides.map((story, index) => (
+          <button key={`dot-${story.id || story.slug}`} type="button" className={index === active % slides.length ? 'active' : ''} onClick={() => setActive(index)} aria-label={`Slide ${index + 1}`} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+export function StoryCard({ story }) {
+  const [favorite, setFavorite] = useState(Boolean(story.bookmarked || story.followed));
+  const chapterCount = getChapterCount(story);
+  const isFull = story.status === 'completed';
+  const isHot = toNumber(story.views) > 400000 || story.featured;
+  const isVip = Boolean(story.premium);
+
+  return (
+    <article className="prod-story-card">
+      <Link to={`/truyen/${story.slug}`} className="prod-card-cover" aria-label={story.title}>
+        <img src={story.cover || coverFallback} alt={story.title} loading="lazy" onError={handleImageError} />
+        <span className="prod-badge-row">
+          {isHot && <b className="hot">HOT</b>}
+          {isFull && <b className="full">FULL</b>}
+          {isVip && <b className="vip">VIP</b>}
+        </span>
+      </Link>
+      <button
+        className={favorite ? 'prod-fav-button active' : 'prod-fav-button'}
+        type="button"
+        onClick={() => setFavorite(value => !value)}
+        aria-label={favorite ? 'Bỏ yêu thích' : 'Yêu thích truyện'}
+      >
+        ♥
+      </button>
+      <div className="prod-card-body">
+        <Link to={`/truyen/${story.slug}`}><h3>{story.title}</h3></Link>
+        <p>{story.author}</p>
+        <div className="prod-card-meta">
+          <span>★ {story.rating || 4.5}</span>
+          <span>{formatNumber(chapterCount)} chương</span>
+        </div>
+        <div className="prod-card-meta muted">
+          <span>{formatNumber(story.views)} lượt đọc</span>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+export function StorySection({ kicker, title, subtitle, to, children }) {
+  return (
+    <RevealSection className="prod-story-section">
+      <div className="prod-section-head">
+        <div>
+          {kicker && <span>{kicker}</span>}
+          <h2>{title}</h2>
+          {subtitle && <p>{subtitle}</p>}
+        </div>
+        {to && <Link to={to}>Xem tất cả</Link>}
+      </div>
+      {children}
+    </RevealSection>
+  );
+}
+
+function StoryGrid({ stories, compact = false }) {
+  if (!stories?.length) {
+    return <div className="prod-empty-state">Chưa có truyện phù hợp để hiển thị.</div>;
+  }
+  return (
+    <div className={compact ? 'prod-story-grid compact' : 'prod-story-grid'}>
+      {stories.map(story => <StoryCard key={story.id || story.slug} story={story} />)}
+    </div>
+  );
+}
+
+export function ContinueReadingSection({ user, items }) {
+  if (!user) {
+    return (
+      <RevealSection className="prod-continue-login">
+        <div>
+          <span>Tiếp tục đọc</span>
+          <h2>Đăng nhập để đồng bộ lịch sử đọc</h2>
+          <p>Lưu vị trí đọc, nhận thông báo chương mới và mở lại truyện đang theo dõi trên mọi thiết bị.</p>
+        </div>
+          <Link className="prod-primary-button" to="/login">Đăng nhập</Link>
+      </RevealSection>
+    );
+  }
+
+  if (!items?.length) return null;
+
+  return (
+    <RevealSection className="prod-continue-section">
+      <div className="prod-section-head">
+        <div>
+          <span>Reading</span>
+          <h2>Tiếp tục đọc</h2>
+          <p>Quay lại đúng chương bạn đang theo dõi.</p>
+        </div>
+        <Link to="/history">Xem lịch sử</Link>
+      </div>
+      <div className="prod-continue-grid">
+        {items.slice(0, 3).map(item => (
+          <Link key={item.id} to={`/truyen/${item.story.slug}/chuong/${item.chapterNumber}`} className="prod-continue-card">
+            <img src={item.story.cover || coverFallback} alt={item.story.title} loading="lazy" onError={handleImageError} />
+            <div>
+              <strong>{item.story.title}</strong>
+              <span>Chương {item.chapterNumber}</span>
+              <em><i style={{ width: `${Math.min(100, item.progress || 18)}%` }} /></em>
+            </div>
+          </Link>
+        ))}
+      </div>
+    </RevealSection>
+  );
+}
+
+export function RankingMini({ stories }) {
+  const list = stories?.length ? stories : mockStories.slice(0, 10);
+  return (
+    <RevealSection className="prod-ranking-mini">
+      <div className="prod-section-head">
+        <div>
+          <span>Top 10</span>
+          <h2>Bảng xếp hạng mini</h2>
+          <p>Truyện được đọc nhiều nhất hiện tại.</p>
+        </div>
+        <Link to="/xep-hang">Xem tất cả</Link>
+      </div>
+      <div className="prod-ranking-list">
+        {list.slice(0, 10).map((story, index) => (
+          <Link key={story.id || story.slug} to={`/truyen/${story.slug}`}>
+            <b>{index + 1}</b>
+            <span>
+              <strong>{story.title}</strong>
+              <small>{story.author}</small>
+            </span>
+            <em>{formatNumber(story.views)}</em>
+          </Link>
+        ))}
+      </div>
+    </RevealSection>
+  );
+}
+
+export function GenreChips({ categories }) {
+  const items = categories?.length ? categories : mockCategories;
+  return (
+    <RevealSection className="prod-genre-chips">
+      <div className="prod-section-head">
+        <div>
+          <span>Genres</span>
+          <h2>Thể loại phổ biến</h2>
+          <p>Chọn nhanh gu đọc bạn thích.</p>
+        </div>
+        <Link to="/danh-sach">Xem tất cả</Link>
+      </div>
+      <div>
+        {items.slice(0, 18).map(category => (
+          <Link key={category} to={`/the-loai/${encodeURIComponent(category)}`}>{category}</Link>
+        ))}
+      </div>
+    </RevealSection>
+  );
+}
+
+export function AuthorCTA() {
+  return (
+    <RevealSection className="prod-author-cta">
+      <div>
+        <span>Dành cho tác giả</span>
+        <h2>Đăng truyện và xây dựng cộng đồng độc giả riêng</h2>
+        <p>Quản lý chương, theo dõi tương tác và mở khóa các công cụ xuất bản trong khu vực tác giả.</p>
+      </div>
+      <Link className="prod-primary-button" to="/author/stories/new">Đăng truyện</Link>
+    </RevealSection>
+  );
+}
+
+export function ProductionFooter() {
+  const quickLinks = [
+    ['Trang chủ', '/'],
+    ['Hoàn thành', '/danh-sach?status=completed'],
+    ['Truyện ngắn', '/truyen-ngan'],
+    ['Xếp hạng', '/xep-hang']
+  ];
+  const supportLinks = [
+    ['Hỗ trợ', '/lien-he'],
+    ['Điều khoản sử dụng', '/dieu-khoan'],
+    ['Chính sách bảo mật', '/bao-mat']
+  ];
+
+  return (
+    <footer className="prod-footer">
+      <div className="prod-footer-inner">
+        <div className="prod-footer-brand">
+          <Link to="/" className="prod-brand">
+            <img src="/images/logo.png" alt="Đậu Đỏ Truyện" />
+            <span>
+              <strong>Đậu Đỏ</strong>
+              <small>Truyện online</small>
+            </span>
+          </Link>
+          <p>Nền tảng đọc truyện online với kho truyện đa thể loại, cập nhật liên tục và tối ưu cho trải nghiệm đọc dài hơi.</p>
+        </div>
+        <FooterColumn title="Link nhanh" links={quickLinks} />
+        <div className="prod-footer-col">
+          <strong>Thể loại phổ biến</strong>
+          {mockCategories.slice(0, 5).map(category => <Link key={category} to={`/the-loai/${encodeURIComponent(category)}`}>{category}</Link>)}
+        </div>
+        <FooterColumn title="Hỗ trợ" links={supportLinks} />
+      </div>
+      <div className="prod-footer-bottom">
+        <span>© 2026 Đậu Đỏ Truyện. Tất cả quyền được bảo lưu.</span>
+        <span>Made for readers, authors and admins.</span>
+      </div>
+    </footer>
+  );
+}
+
+function FooterColumn({ title, links }) {
+  return (
+    <div className="prod-footer-col">
+      <strong>{title}</strong>
+      {links.map(([label, to]) => <Link key={label} to={to}>{label}</Link>)}
+    </div>
+  );
+}
+
+function RevealSection({ children, className = '' }) {
+  const ref = useRef(null);
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    const node = ref.current;
+    if (!node) return undefined;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) {
+        setVisible(true);
+        observer.disconnect();
+      }
+    }, { threshold: 0.12 });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
+  return (
+    <section ref={ref} className={`${className} prod-reveal ${visible ? 'visible' : ''}`}>
+      {children}
+    </section>
+  );
+}
+
+function handleImageError(event) {
+  if (event.currentTarget.src.endsWith(coverFallback)) return;
+  event.currentTarget.src = coverFallback;
+}
