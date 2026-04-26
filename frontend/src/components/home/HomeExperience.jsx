@@ -165,6 +165,11 @@ export function ProductionHeader({ user, logout, theme = 'light', toggleTheme, a
   const [categories, setCategories] = useState(mockCategories);
   const [stories, setStories] = useState(mockStories);
   const headerRef = useRef(null);
+  const navId = 'prod-mobile-nav';
+  const genreMenuId = 'prod-genre-menu';
+  const searchPanelId = 'prod-search-panel';
+  const notificationMenuId = 'prod-notification-menu';
+  const userMenuId = 'prod-user-menu';
 
   useEffect(() => {
     let alive = true;
@@ -183,6 +188,7 @@ export function ProductionHeader({ user, logout, theme = 'light', toggleTheme, a
   useEffect(() => {
     const closeByOutside = event => {
       if (!headerRef.current?.contains(event.target)) {
+        setMobileOpen(false);
         setGenreOpen(false);
         setSearchOpen(false);
         setUserOpen(false);
@@ -191,6 +197,7 @@ export function ProductionHeader({ user, logout, theme = 'light', toggleTheme, a
     };
     const closeByEscape = event => {
       if (event.key === 'Escape') {
+        setMobileOpen(false);
         setGenreOpen(false);
         setSearchOpen(false);
         setUserOpen(false);
@@ -205,6 +212,20 @@ export function ProductionHeader({ user, logout, theme = 'light', toggleTheme, a
     };
   }, []);
 
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 768px)');
+    const updateLock = () => {
+      const shouldLock = media.matches && (mobileOpen || genreOpen || searchOpen || userOpen || notificationOpen);
+      document.body.classList.toggle('prod-mobile-panel-open', shouldLock);
+    };
+    updateLock();
+    media.addEventListener('change', updateLock);
+    return () => {
+      media.removeEventListener('change', updateLock);
+      document.body.classList.remove('prod-mobile-panel-open');
+    };
+  }, [mobileOpen, genreOpen, searchOpen, userOpen, notificationOpen]);
+
   const closeAll = () => {
     setMobileOpen(false);
     setGenreOpen(false);
@@ -215,9 +236,21 @@ export function ProductionHeader({ user, logout, theme = 'light', toggleTheme, a
 
   const openSearch = () => {
     setSearchOpen(true);
+    setMobileOpen(false);
     setGenreOpen(false);
     setUserOpen(false);
     setNotificationOpen(false);
+  };
+
+  const toggleMobileNav = () => {
+    const nextOpen = !mobileOpen;
+    setMobileOpen(nextOpen);
+    if (nextOpen) {
+      setGenreOpen(false);
+      setSearchOpen(false);
+      setUserOpen(false);
+      setNotificationOpen(false);
+    }
   };
 
   const goCategory = category => {
@@ -236,11 +269,18 @@ export function ProductionHeader({ user, logout, theme = 'light', toggleTheme, a
           </span>
         </Link>
 
-        <button className="prod-icon-button prod-mobile-toggle" type="button" onClick={() => setMobileOpen(open => !open)} aria-label="Mở menu">
+        <button
+          className="prod-icon-button prod-mobile-toggle"
+          type="button"
+          onClick={toggleMobileNav}
+          aria-label="Mở menu"
+          aria-expanded={mobileOpen}
+          aria-controls={navId}
+        >
           <span aria-hidden="true">☰</span>
         </button>
 
-        <nav className={mobileOpen ? 'prod-nav open' : 'prod-nav'} aria-label="Menu chính">
+        <nav id={navId} className={mobileOpen ? 'prod-nav open' : 'prod-nav'} aria-label="Menu chính">
           <NavLink end to="/" onClick={closeAll}>Trang chủ</NavLink>
           <NavLink to="/danh-sach?status=completed" className={location.search.includes('status=completed') ? 'active' : ''} onClick={closeAll}>Hoàn thành</NavLink>
           <NavLink to="/truyen-ngan" onClick={closeAll}>Truyện ngắn</NavLink>
@@ -250,21 +290,28 @@ export function ProductionHeader({ user, logout, theme = 'light', toggleTheme, a
               className={genreOpen || location.pathname.startsWith('/the-loai') ? 'prod-nav-button active' : 'prod-nav-button'}
               type="button"
               onClick={() => {
-                setGenreOpen(open => !open);
+                const nextOpen = !genreOpen;
+                setGenreOpen(nextOpen);
+                setMobileOpen(false);
                 setSearchOpen(false);
+                setUserOpen(false);
+                setNotificationOpen(false);
               }}
+              aria-expanded={genreOpen}
+              aria-controls={genreMenuId}
             >
               Thể loại <span aria-hidden="true">⌄</span>
             </button>
-            {genreOpen && <MegaMenu categories={categories} onSelect={goCategory} />}
           </div>
         </nav>
+        {genreOpen && <MegaMenu id={genreMenuId} categories={categories} onSelect={goCategory} closeAll={closeAll} />}
 
         <div className="prod-header-actions">
           <SearchCommand
             open={searchOpen}
             setOpen={setSearchOpen}
             onFocus={openSearch}
+            panelId={searchPanelId}
             stories={stories}
             categories={categories}
             navigate={navigate}
@@ -276,10 +323,12 @@ export function ProductionHeader({ user, logout, theme = 'light', toggleTheme, a
             open={notificationOpen}
             setOpen={next => {
               setNotificationOpen(next);
+              setMobileOpen(false);
               setSearchOpen(false);
               setGenreOpen(false);
               setUserOpen(false);
             }}
+            menuId={notificationMenuId}
           />
           <ThemeToggle theme={theme} toggleTheme={toggleTheme} />
           <UserDropdown
@@ -288,11 +337,13 @@ export function ProductionHeader({ user, logout, theme = 'light', toggleTheme, a
             open={userOpen}
             setOpen={next => {
               setUserOpen(next);
+              setMobileOpen(false);
               setSearchOpen(false);
               setGenreOpen(false);
               setNotificationOpen(false);
             }}
             closeAll={closeAll}
+            menuId={userMenuId}
           />
         </div>
       </div>
@@ -300,10 +351,10 @@ export function ProductionHeader({ user, logout, theme = 'light', toggleTheme, a
   );
 }
 
-export function MegaMenu({ categories, onSelect }) {
+export function MegaMenu({ id, categories, onSelect, closeAll }) {
   const columns = chunkIntoColumns(categories.slice(0, 32), 4);
   return (
-    <div className="prod-mega-menu">
+    <div className="prod-mega-menu" id={id}>
       <div className="prod-mega-head">
         <strong>Khám phá thể loại</strong>
         <span>{categories.length} chủ đề đang có truyện</span>
@@ -319,13 +370,14 @@ export function MegaMenu({ categories, onSelect }) {
           </div>
         ))}
       </div>
-      <Link className="prod-mega-all" to="/danh-sach">Xem tất cả truyện</Link>
+      <Link className="prod-mega-all" to="/danh-sach" onClick={closeAll}>Xem tất cả truyện</Link>
     </div>
   );
 }
 
-export function SearchCommand({ open, setOpen, onFocus, stories, categories, navigate, closeAll }) {
+export function SearchCommand({ open, setOpen, onFocus, panelId, stories, categories, navigate, closeAll }) {
   const [keyword, setKeyword] = useState('');
+  const mobileInputRef = useRef(null);
   const [history, setHistory] = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem('daudo_search_history') || '[]');
@@ -334,6 +386,14 @@ export function SearchCommand({ open, setOpen, onFocus, stories, categories, nav
       return mockSearchHistory;
     }
   });
+
+  useEffect(() => {
+    if (!open) return;
+    const shouldFocusMobileInput = window.matchMedia('(max-width: 768px)').matches;
+    if (shouldFocusMobileInput) {
+      window.requestAnimationFrame(() => mobileInputRef.current?.focus());
+    }
+  }, [open]);
 
   const searchText = normalizeForSearch(keyword.trim());
   const quickStories = useMemo(() => {
@@ -381,6 +441,16 @@ export function SearchCommand({ open, setOpen, onFocus, stories, categories, nav
 
   return (
     <div className="prod-search">
+      <button
+        className="prod-icon-button prod-search-trigger"
+        type="button"
+        onClick={() => setOpen(!open)}
+        aria-label="Tìm kiếm"
+        aria-expanded={open}
+        aria-controls={panelId}
+      >
+        <span aria-hidden="true">⌕</span>
+      </button>
       <label className="prod-search-box">
         <span aria-hidden="true">⌕</span>
         <input
@@ -394,11 +464,23 @@ export function SearchCommand({ open, setOpen, onFocus, stories, categories, nav
         />
       </label>
       {open && (
-        <div className="prod-search-panel">
+        <div className="prod-search-panel" id={panelId}>
           <div className="prod-command-head">
             <strong>Tìm kiếm nhanh</strong>
             <button type="button" onClick={() => setOpen(false)}>ESC</button>
           </div>
+          <label className="prod-search-panel-input">
+            <span aria-hidden="true">⌕</span>
+            <input
+              ref={mobileInputRef}
+              value={keyword}
+              onChange={event => setKeyword(event.target.value)}
+              onKeyDown={event => {
+                if (event.key === 'Enter') goSearch(keyword);
+              }}
+              placeholder="Tìm truyện, tác giả..."
+            />
+          </label>
           <SearchBlock title="Gợi ý phổ biến" items={mockPopularSearches} onSelect={goSearch} />
           {history.length > 0 && <SearchBlock title="Lịch sử tìm kiếm" items={history} onSelect={goSearch} muted />}
           <div className="prod-search-results">
@@ -438,7 +520,7 @@ function SearchBlock({ title, items, onSelect, muted = false }) {
   );
 }
 
-export function NotificationDropdown({ open, setOpen, user, apiClient }) {
+export function NotificationDropdown({ open, setOpen, user, apiClient, menuId }) {
   const navigate = useNavigate();
   const [notifications, setNotifications] = useState([]);
   const [unread, setUnread] = useState(0);
@@ -520,12 +602,12 @@ export function NotificationDropdown({ open, setOpen, user, apiClient }) {
 
   return (
     <div className="prod-dropdown-wrap">
-      <button className="prod-icon-button" type="button" aria-label="Thông báo" onClick={() => setOpen(!open)}>
+      <button className="prod-icon-button" type="button" aria-label="Thông báo" onClick={() => setOpen(!open)} aria-expanded={open} aria-controls={menuId}>
         <span aria-hidden="true">🔔</span>
         {unread > 0 && <b>{unread}</b>}
       </button>
       {open && (
-        <div className="prod-notification-menu">
+        <div className="prod-notification-menu" id={menuId}>
           <div className="prod-dropdown-head">
             <strong>Thông báo</strong>
             {user && <button type="button" onClick={markAllRead} disabled={!unread}>Đánh dấu đã đọc</button>}
@@ -562,7 +644,7 @@ export function ThemeToggle({ theme, toggleTheme }) {
   );
 }
 
-export function UserDropdown({ user, logout, open, setOpen, closeAll }) {
+export function UserDropdown({ user, logout, open, setOpen, closeAll, menuId }) {
   const navigate = useNavigate();
   const guest = !user;
   const menuItems = user ? [
@@ -576,12 +658,12 @@ export function UserDropdown({ user, logout, open, setOpen, closeAll }) {
 
   return (
     <div className="prod-dropdown-wrap prod-user-wrap">
-      <button className={open ? 'prod-user-button active' : 'prod-user-button'} type="button" onClick={() => setOpen(!open)} aria-label="Tài khoản">
+      <button className={open ? 'prod-user-button active' : 'prod-user-button'} type="button" onClick={() => setOpen(!open)} aria-label="Tài khoản" aria-expanded={open} aria-controls={menuId}>
         <img src={user?.avatar || '/images/logo.png'} alt={user?.name || 'Tài khoản'} />
         <span>{user?.name || 'Đăng nhập'}</span>
       </button>
       {open && (
-        <div className="prod-user-menu">
+        <div className="prod-user-menu" id={menuId}>
           {guest ? (
             <div className="prod-user-guest">
               <strong>Đăng nhập để đồng bộ tủ truyện</strong>

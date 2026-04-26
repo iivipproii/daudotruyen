@@ -146,8 +146,10 @@ Set these environment variables on the backend host:
 
 ```text
 JWT_SECRET=<long-random-secret>
-FRONTEND_ORIGIN=https://daudo-truyen.vercel.app
+FRONTEND_ORIGIN=https://daudotruyen.vercel.app,https://daudo-truyen.vercel.app
 ```
+
+`backend/src/server.js` already accepts a comma-separated `FRONTEND_ORIGIN`, so you can allow both the current public Vercel domain and the legacy hyphenated domain during cutover.
 
 The backend reads `process.env.PORT`, so leave `PORT` to the hosting platform when it provides one.
 
