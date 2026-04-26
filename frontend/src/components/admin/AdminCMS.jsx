@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Link, NavLink, useLocation } from 'react-router-dom';
+import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   mockAdminNotifications,
   mockAdminReports,
@@ -511,7 +511,7 @@ function AdminOverview({ stats, stories, reports, chapters, users }) {
               <span>Hoạt động mới</span>
               <h2>Hàng chờ cần xử lý</h2>
             </div>
-            <Link to="/notifications" className="cms-link-button">Thông báo</Link>
+            <Link to="/notifications" className="cms-link-button">Thông báo cá nhân</Link>
           </div>
           <div className="cms-queue">
             {pendingReports.map(report => (
@@ -1121,70 +1121,95 @@ export function ReportActionModal({ report, onClose, onSubmit }) {
 }
 
 export function NotificationPage({ apiClient, user }) {
-  const [items, setItems] = useState(mockAdminNotifications);
+  const navigate = useNavigate();
+  const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [filter, setFilter] = useState('all');
+  const [unreadOnly, setUnreadOnly] = useState(false);
+  const [type, setType] = useState('all');
+  const [unreadCount, setUnreadCount] = useState(0);
 
-  useEffect(() => {
-    let ignore = false;
+  const dispatchChanged = () => window.dispatchEvent(new CustomEvent('daudo:notifications-changed'));
 
-    async function load() {
-      if (!apiClient) {
-        setLoading(false);
-        return;
-      }
-      try {
-        const data = await apiClient('/notifications');
-        if (ignore) return;
-        const notifications = asArray(data.notifications);
-        setItems(notifications.length ? notifications : mockAdminNotifications);
-        setError(notifications.length ? '' : 'Chưa có thông báo từ backend, đang hiển thị dữ liệu dự phòng.');
-      } catch {
-        if (ignore) return;
-        setItems(mockAdminNotifications);
-        setError('Không tải được API thông báo, đang hiển thị dữ liệu dự phòng.');
-      } finally {
-        if (!ignore) setLoading(false);
-      }
+  async function load() {
+    if (!apiClient) {
+      setItems([]);
+      setError('Không có API client để tải thông báo.');
+      setLoading(false);
+      return;
     }
-
-    load();
-    return () => {
-      ignore = true;
-    };
-  }, [apiClient]);
-
-  const filtered = useMemo(() => {
-    if (filter === 'unread') return items.filter(item => !item.read);
-    if (filter === 'read') return items.filter(item => item.read);
-    return items.filter(item => filter === 'all' || item.type === filter);
-  }, [items, filter]);
-
-  async function markAllRead() {
-    setItems(current => current.map(item => ({ ...item, read: true })));
-    if (apiClient) {
-      try {
-        await apiClient('/notifications/read-all', { method: 'POST' });
-      } catch {
-        setError('Đã đánh dấu đã đọc trên giao diện; API read-all chưa sẵn sàng.');
-      }
+    setLoading(true);
+    setError('');
+    try {
+      const params = new URLSearchParams({ limit: '50' });
+      if (unreadOnly) params.set('unreadOnly', 'true');
+      if (type !== 'all') params.set('type', type);
+      const data = await apiClient(`/notifications?${params.toString()}`);
+      setItems(asArray(data.notifications));
+      setUnreadCount(Number(data.unreadCount || 0));
+    } catch (err) {
+      setItems([]);
+      setError(err.message || 'Không tải được thông báo.');
+    } finally {
+      setLoading(false);
     }
   }
 
-  if (loading) {
-    return <div className="cms-state cms-loading">Đang tải thông báo...</div>;
+  useEffect(() => {
+    load();
+  }, [apiClient, unreadOnly, type]);
+
+  async function markAllRead() {
+    setItems(current => current.map(item => ({ ...item, read: true })));
+    setUnreadCount(0);
+    try {
+      await apiClient('/notifications/read-all', { method: 'POST' });
+      dispatchChanged();
+    } catch (err) {
+      setError(err.message || 'Không đánh dấu được thông báo.');
+      await load();
+    }
+  }
+
+  async function markRead(item) {
+    if (item.read) return;
+    setItems(current => current.map(row => row.id === item.id ? { ...row, read: true } : row));
+    try {
+      const data = await apiClient(`/notifications/${item.id}/read`, { method: 'POST' });
+      setUnreadCount(Number(data.unreadCount || 0));
+      dispatchChanged();
+    } catch (err) {
+      setError(err.message || 'Không cập nhật được thông báo.');
+      await load();
+    }
+  }
+
+  async function deleteItem(item) {
+    setItems(current => current.filter(row => row.id !== item.id));
+    try {
+      const data = await apiClient(`/notifications/${item.id}`, { method: 'DELETE' });
+      setUnreadCount(Number(data.unreadCount || 0));
+      dispatchChanged();
+    } catch (err) {
+      setError(err.message || 'Không xóa được thông báo.');
+      await load();
+    }
+  }
+
+  async function openItem(item) {
+    await markRead(item);
+    if (item.link) navigate(item.link);
   }
 
   return (
     <div className="cms-page">
       <section className="cms-page-head cms-notification-head">
         <div>
-          <span>Thông báo</span>
+          <span>Thông báo cá nhân</span>
           <h1>Trung tâm thông báo</h1>
-          <p>Chương mới, bình luận trả lời, giao dịch, duyệt/từ chối truyện/chương và thông báo hệ thống cho {user?.role === 'admin' ? 'admin' : 'người dùng'}.</p>
+          <p>Thông báo riêng của {user?.name || 'tài khoản hiện tại'}: chương mới, bình luận, theo dõi và giao dịch.</p>
         </div>
-        <button type="button" onClick={markAllRead}>Đánh dấu tất cả là đã đọc</button>
+        <button type="button" onClick={markAllRead} disabled={!unreadCount}>Đánh dấu tất cả đã đọc</button>
       </section>
 
       {error && <div className="cms-alert">{error}</div>}
@@ -1192,19 +1217,23 @@ export function NotificationPage({ apiClient, user }) {
       <div className="cms-notification-filters">
         {[
           ['all', 'Tất cả'],
-          ['unread', 'Chưa đọc'],
-          ['read', 'Đã đọc'],
           ['chapter', 'Chương mới'],
+          ['comment', 'Bình luận'],
           ['reply', 'Trả lời'],
-          ['transaction', 'Giao dịch'],
-          ['moderation', 'Duyệt truyện']
+          ['follow', 'Theo dõi'],
+          ['wallet', 'Ví Đậu'],
+          ['purchase', 'Mua chương'],
+          ['system', 'Hệ thống'],
+          ['promo', 'Khuyến mãi']
         ].map(([value, label]) => (
-          <button key={value} type="button" className={filter === value ? 'active' : ''} onClick={() => setFilter(value)}>{label}</button>
+          <button key={value} type="button" className={type === value ? 'active' : ''} onClick={() => setType(value)}>{label}</button>
         ))}
+        <button type="button" className={unreadOnly ? 'active' : ''} onClick={() => setUnreadOnly(current => !current)}>Chưa đọc ({unreadCount})</button>
       </div>
 
+      {loading && <div className="cms-state cms-loading">Đang tải thông báo...</div>}
       <section className="cms-notification-list">
-        {filtered.map(item => (
+        {!loading && items.map(item => (
           <article key={item.id} className={item.read ? 'read' : 'unread'}>
             <span className="cms-notification-dot" />
             <div>
@@ -1212,11 +1241,15 @@ export function NotificationPage({ apiClient, user }) {
               <p>{item.body}</p>
               <small>{item.read ? 'Đã đọc' : 'Chưa đọc'} · {formatDate(item.createdAt)}</small>
             </div>
-            {item.actionTo && <Link to={item.actionTo}>{item.actionText || 'Xem'}</Link>}
+            <div className="cms-notification-actions">
+              {!item.read && <button type="button" onClick={() => markRead(item)}>Đã đọc</button>}
+              {item.link && <button type="button" onClick={() => openItem(item)}>Mở</button>}
+              <button type="button" onClick={() => deleteItem(item)}>Xóa</button>
+            </div>
           </article>
         ))}
       </section>
-      {!filtered.length && <EmptyState title="Không có thông báo" text="Thông báo phù hợp với bộ lọc sẽ xuất hiện tại đây." />}
+      {!loading && !items.length && <EmptyState title="Không có thông báo" text="Thông báo phù hợp với bộ lọc sẽ xuất hiện tại đây." />}
     </div>
   );
 }

@@ -3,7 +3,6 @@ import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   mockCategories,
   mockContinueReading,
-  mockNotifications,
   mockPopularSearches,
   mockSearchHistory,
   mockStories
@@ -272,6 +271,8 @@ export function ProductionHeader({ user, logout, theme = 'light', toggleTheme, a
             closeAll={closeAll}
           />
           <NotificationDropdown
+            user={user}
+            apiClient={apiClient}
             open={notificationOpen}
             setOpen={next => {
               setNotificationOpen(next);
@@ -437,32 +438,85 @@ function SearchBlock({ title, items, onSelect, muted = false }) {
   );
 }
 
-export function NotificationDropdown({ open, setOpen }) {
-  const [notifications, setNotifications] = useState(mockNotifications);
+export function NotificationDropdown({ open, setOpen, user, apiClient }) {
+  const navigate = useNavigate();
+  const [notifications, setNotifications] = useState([]);
+  const [unread, setUnread] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const dispatchChanged = () => window.dispatchEvent(new CustomEvent('daudo:notifications-changed'));
+
+  async function loadUnread() {
+    if (!user || !apiClient) {
+      setUnread(0);
+      setNotifications([]);
+      return;
+    }
+    try {
+      const data = await apiClient('/notifications/unread-count');
+      setUnread(Number(data.count || 0));
+    } catch {
+      setUnread(0);
+    }
+  }
+
+  async function loadNotifications() {
+    if (!user || !apiClient) return;
+    setLoading(true);
+    setError('');
+    try {
+      const data = await apiClient('/notifications?limit=6');
+      setNotifications(data.notifications || []);
+      setUnread(Number(data.unreadCount ?? 0));
+    } catch (err) {
+      setError(err.message || 'Không tải được thông báo.');
+    } finally {
+      setLoading(false);
+    }
+  }
 
   useEffect(() => {
-    const timer = window.setInterval(() => {
-      setNotifications(current => {
-        if (current.some(item => item.id === 'mock-live')) return current;
-        return [
-          {
-            id: 'mock-live',
-            title: 'Thông báo realtime mẫu',
-            body: 'Một truyện trong tủ sách của bạn vừa có cập nhật mới.',
-            read: false,
-            createdAt: new Date().toISOString()
-          },
-          ...current
-        ].slice(0, 6);
-      });
-    }, 18000);
-    return () => window.clearInterval(timer);
-  }, []);
+    loadUnread();
+    const refresh = () => loadUnread();
+    window.addEventListener('daudo:notifications-changed', refresh);
+    window.addEventListener('focus', refresh);
+    return () => {
+      window.removeEventListener('daudo:notifications-changed', refresh);
+      window.removeEventListener('focus', refresh);
+    };
+  }, [user?.id, apiClient]);
 
-  const unread = notifications.filter(item => !item.read).length;
-  const markAllRead = () => {
+  useEffect(() => {
+    if (open) loadNotifications();
+  }, [open, user?.id, apiClient]);
+
+  async function markAllRead() {
+    if (!user || !apiClient) return;
     setNotifications(current => current.map(item => ({ ...item, read: true })));
-  };
+    setUnread(0);
+    try {
+      await apiClient('/notifications/read-all', { method: 'POST' });
+      dispatchChanged();
+    } catch (err) {
+      setError(err.message || 'Không đánh dấu được thông báo.');
+      await loadNotifications();
+    }
+  }
+
+  async function openNotification(item) {
+    if (!item.read && apiClient) {
+      try {
+        const data = await apiClient(`/notifications/${item.id}/read`, { method: 'POST' });
+        setUnread(Number(data.unreadCount || 0));
+        dispatchChanged();
+      } catch {
+        await loadUnread();
+      }
+    }
+    setOpen(false);
+    if (item.link) navigate(item.link);
+  }
 
   return (
     <div className="prod-dropdown-wrap">
@@ -474,17 +528,21 @@ export function NotificationDropdown({ open, setOpen }) {
         <div className="prod-notification-menu">
           <div className="prod-dropdown-head">
             <strong>Thông báo</strong>
-            <button type="button" onClick={markAllRead}>Đánh dấu đã đọc</button>
+            {user && <button type="button" onClick={markAllRead} disabled={!unread}>Đánh dấu đã đọc</button>}
           </div>
           <div className="prod-notification-list">
-            {notifications.map(item => (
-              <div key={item.id} className={item.read ? 'read' : 'unread'}>
+            {!user && <div className="read"><span /><div><strong>Cần đăng nhập</strong><p>Đăng nhập để xem thông báo cá nhân.</p></div></div>}
+            {user && loading && <div className="read"><span /><div><strong>Đang tải</strong><p>Đang lấy thông báo mới nhất.</p></div></div>}
+            {user && error && <div className="read"><span /><div><strong>Lỗi</strong><p>{error}</p></div></div>}
+            {user && !loading && !error && notifications.length === 0 && <div className="read"><span /><div><strong>Chưa có thông báo</strong><p>Thông báo mới sẽ xuất hiện ở đây.</p></div></div>}
+            {user && notifications.map(item => (
+              <button type="button" key={item.id} className={item.read ? 'read' : 'unread'} onClick={() => openNotification(item)}>
                 <span />
                 <div>
                   <strong>{item.title}</strong>
                   <p>{item.body}</p>
                 </div>
-              </div>
+              </button>
             ))}
           </div>
           <Link className="prod-notification-footer" to="/notifications" onClick={() => setOpen(false)}>
@@ -512,7 +570,7 @@ export function UserDropdown({ user, logout, open, setOpen, closeAll }) {
     { label: 'Lịch sử đọc', to: '/history', icon: '◷' },
     { label: 'Nạp xu', to: '/wallet', icon: '◈' },
     { label: 'Khu tác giả', to: '/author', icon: '✎' },
-    { label: 'Cài đặt', to: '/settings', icon: '⚙' },
+    { label: 'Cài đặt', to: '/settings#profile', icon: '⚙' },
     ...(user.role === 'admin' ? [{ label: 'Quản trị viên', to: '/admin', icon: '✦' }] : [])
   ] : [];
 

@@ -437,7 +437,8 @@ body {
   gap: 8px;
 }
 
-.prod-notification-list > div {
+.prod-notification-list > div,
+.prod-notification-list > button {
   display: grid;
   grid-template-columns: 10px minmax(0, 1fr);
   gap: 10px;
@@ -445,9 +446,17 @@ body {
   border: 1px solid var(--prod-line);
   border-radius: 14px;
   background: var(--prod-surface);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
-.prod-notification-list > div > span {
+.prod-notification-list > div {
+  cursor: default;
+}
+
+.prod-notification-list > div > span,
+.prod-notification-list > button > span {
   width: 8px;
   height: 8px;
   margin-top: 5px;
@@ -455,7 +464,8 @@ body {
   background: var(--prod-muted);
 }
 
-.prod-notification-list > div.unread > span {
+.prod-notification-list > div.unread > span,
+.prod-notification-list > button.unread > span {
   background: var(--prod-primary);
   box-shadow: 0 0 0 4px rgba(239, 63, 95, .14);
 }

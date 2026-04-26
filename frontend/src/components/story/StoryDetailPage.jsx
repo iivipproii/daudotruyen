@@ -290,19 +290,19 @@ export function StoryDetailPage({ apiClient, user, updateUser }) {
       setToast('Bạn cần đăng nhập để bình luận.');
       return false;
     }
+    const result = await fetchSafe(apiClient, `/stories/${story.id}/comments`, { method: 'POST', body: JSON.stringify({ body, parentId }) });
+    const savedComment = result?.comment || { id: parentId ? `reply-${Date.now()}` : `comment-${Date.now()}`, userName: user.name || 'Bạn', userAvatar: user.avatar, body, likes: 0, createdAt: new Date().toISOString(), replies: [] };
     if (parentId) {
       setPayload(current => ({
         ...current,
         comments: current.comments.map(comment => comment.id === parentId
-          ? { ...comment, replies: [...(comment.replies || []), { id: `reply-${Date.now()}`, userName: user.name || 'Bạn', body, likes: 0 }] }
+          ? { ...comment, replies: [...(comment.replies || []), savedComment] }
           : comment)
       }));
       setToast('Đã gửi phản hồi.');
       return true;
     }
-    const result = await fetchSafe(apiClient, `/stories/${story.id}/comments`, { method: 'POST', body: JSON.stringify({ body }) });
-    const comment = result?.comment || { id: `comment-${Date.now()}`, userName: user.name || 'Bạn', userAvatar: user.avatar, body, likes: 0, createdAt: new Date().toISOString(), replies: [] };
-    setPayload(current => ({ ...current, comments: [comment, ...current.comments] }));
+    setPayload(current => ({ ...current, comments: [savedComment, ...current.comments] }));
     setToast('Đã gửi bình luận.');
     return true;
   }

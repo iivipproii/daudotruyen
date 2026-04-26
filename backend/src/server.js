@@ -38,7 +38,13 @@ function sign(data) {
 }
 
 function createToken(user) {
-  const payload = base64url(JSON.stringify({ id: user.id, email: user.email, role: user.role, iat: Date.now() }));
+  const payload = base64url(JSON.stringify({
+    id: user.id,
+    email: user.email,
+    role: user.role,
+    tokenVersion: Number(user.tokenVersion || 0),
+    iat: Date.now()
+  }));
   return `${payload}.${sign(payload)}`;
 }
 
@@ -130,7 +136,10 @@ function getAuthUser(req, db) {
   const token = header.startsWith('Bearer ') ? header.slice(7) : '';
   const payload = verifyToken(token);
   if (!payload) return null;
-  return db.users.find(user => user.id === payload.id) || null;
+  const user = db.users.find(user => user.id === payload.id);
+  if (!user || user.status === 'deactivated') return null;
+  if (Number(payload.tokenVersion || 0) !== Number(user.tokenVersion || 0)) return null;
+  return user;
 }
 
 function requireUser(req, res, db) {
@@ -220,6 +229,46 @@ const RANKING_PERIODS = ['day', 'week', 'month', 'year', 'all'];
 const RANKING_METRICS = ['views', 'follows', 'rating', 'comments', 'revenue'];
 const DAY_MS = 24 * 60 * 60 * 1000;
 const VALID_CHAPTER_STATUSES = ['pending', 'reviewing', 'approved', 'rejected', 'hidden'];
+const DEFAULT_NOTIFICATION_PREFERENCES = {
+  emailNotifications: true,
+  webNotifications: true,
+  chapterNotifications: true,
+  commentNotifications: true,
+  followNotifications: true,
+  promoNotifications: true,
+  systemNotifications: true
+};
+const ALWAYS_CREATE_NOTIFICATION_TYPES = new Set(['wallet', 'purchase', 'system']);
+const NOTIFICATION_PREFERENCE_BY_TYPE = {
+  chapter: 'chapterNotifications',
+  comment: 'commentNotifications',
+  reply: 'commentNotifications',
+  follow: 'followNotifications',
+  promo: 'promoNotifications'
+};
+const PROFILE_FIELDS = new Set(['name', 'email', 'phone', 'birthday', 'gender', 'address', 'website', 'bio', 'avatar', 'cover', 'socialLinks']);
+const NOTIFICATION_PREFERENCE_KEYS = Object.keys(DEFAULT_NOTIFICATION_PREFERENCES);
+const PRIVACY_PREFERENCE_DEFAULTS = {
+  publicReading: false,
+  publicProfile: true,
+  publicBookmarks: false,
+  publicFollows: true,
+  publicComments: true
+};
+const APPEARANCE_PREFERENCE_DEFAULTS = {
+  theme: 'light',
+  language: 'vi',
+  readerFontSize: 18,
+  readerLineHeight: 1.8,
+  readerBackground: 'default'
+};
+const ACCOUNT_PREFERENCE_DEFAULTS = {
+  ...DEFAULT_NOTIFICATION_PREFERENCES,
+  ...PRIVACY_PREFERENCE_DEFAULTS,
+  ...APPEARANCE_PREFERENCE_DEFAULTS
+};
+const ACCOUNT_PREFERENCE_KEYS = new Set(Object.keys(ACCOUNT_PREFERENCE_DEFAULTS));
+const SOCIAL_LINK_KEY_PATTERN = /^[A-Za-z0-9_-]{1,32}$/;
 
 function chapterStatus(chapter) {
   return chapter.status || 'approved';
@@ -227,6 +276,171 @@ function chapterStatus(chapter) {
 
 function isPublicChapter(chapter) {
   return chapterStatus(chapter) === 'approved';
+}
+
+function defaultNotificationPreferences() {
+  return { ...DEFAULT_NOTIFICATION_PREFERENCES };
+}
+
+function normalizeNotificationPreferences(input = {}) {
+  return Object.entries(DEFAULT_NOTIFICATION_PREFERENCES).reduce((prefs, [key, fallback]) => {
+    prefs[key] = input[key] === undefined ? fallback : Boolean(input[key]);
+    return prefs;
+  }, {});
+}
+
+function defaultAccountPreferences() {
+  return { ...ACCOUNT_PREFERENCE_DEFAULTS, updatedAt: now() };
+}
+
+function clampNumber(value, min, max, fallback) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(max, Math.max(min, number));
+}
+
+function normalizeAccountPreferences(input = {}, notificationInput = {}) {
+  const source = { ...notificationInput, ...input };
+  const prefs = { ...ACCOUNT_PREFERENCE_DEFAULTS };
+  [...NOTIFICATION_PREFERENCE_KEYS, ...Object.keys(PRIVACY_PREFERENCE_DEFAULTS)].forEach(key => {
+    if (source[key] !== undefined) prefs[key] = Boolean(source[key]);
+  });
+  if (['light', 'dark'].includes(source.theme)) prefs.theme = source.theme;
+  if (['vi', 'en'].includes(source.language)) prefs.language = source.language;
+  if (['default', 'paper', 'sepia', 'night'].includes(source.readerBackground)) prefs.readerBackground = source.readerBackground;
+  prefs.readerFontSize = clampNumber(source.readerFontSize, 14, 28, ACCOUNT_PREFERENCE_DEFAULTS.readerFontSize);
+  prefs.readerLineHeight = clampNumber(source.readerLineHeight, 1.4, 2.4, ACCOUNT_PREFERENCE_DEFAULTS.readerLineHeight);
+  prefs.updatedAt = input.updatedAt || now();
+  return prefs;
+}
+
+function isHttpUrl(value) {
+  if (!value) return true;
+  try {
+    const parsed = new URL(String(value));
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function normalizeSocialLinks(input = {}) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return {};
+  return Object.entries(input).reduce((links, [key, value]) => {
+    if (!SOCIAL_LINK_KEY_PATTERN.test(key)) return links;
+    const url = String(value || '').trim();
+    if (url) links[key] = url;
+    return links;
+  }, {});
+}
+
+function profileResponse(user) {
+  return {
+    name: user.name || '',
+    email: user.email || '',
+    phone: user.phone || '',
+    birthday: user.birthday || '',
+    gender: user.gender || '',
+    address: user.address || '',
+    website: user.website || '',
+    bio: user.bio || '',
+    avatar: isHttpUrl(user.avatar) ? user.avatar || '' : '',
+    cover: isHttpUrl(user.cover) ? user.cover || '' : '',
+    socialLinks: normalizeSocialLinks(user.socialLinks),
+    updatedAt: user.updatedAt || user.createdAt || null
+  };
+}
+
+function validateProfilePayload(body, user, db) {
+  const unknown = Object.keys(body).filter(key => !PROFILE_FIELDS.has(key));
+  if (unknown.length) return { error: `Trường hồ sơ không hợp lệ: ${unknown.join(', ')}.` };
+
+  const name = String(body.name ?? user.name ?? '').trim();
+  const email = String(body.email ?? user.email ?? '').trim().toLowerCase();
+  const phone = String(body.phone ?? user.phone ?? '').trim();
+  const birthday = String(body.birthday ?? user.birthday ?? '').trim();
+  const gender = String(body.gender ?? user.gender ?? '').trim();
+  const address = String(body.address ?? user.address ?? '').trim();
+  const website = String(body.website ?? user.website ?? '').trim();
+  const bio = String(body.bio ?? user.bio ?? '').trim();
+  const avatar = String(body.avatar ?? (isHttpUrl(user.avatar) ? user.avatar || '' : '')).trim();
+  const cover = String(body.cover ?? (isHttpUrl(user.cover) ? user.cover || '' : '')).trim();
+
+  if (!name) return { error: 'Tên hiển thị là bắt buộc.' };
+  if (name.length > 80) return { error: 'Tên hiển thị tối đa 80 ký tự.' };
+  if (!isEmail(email)) return { error: 'Email không hợp lệ.' };
+  if (db.users.some(item => item.id !== user.id && item.email.toLowerCase() === email)) return { error: 'Email đã tồn tại.' };
+  if (phone && !/^[0-9+\-\s().]{7,20}$/.test(phone)) return { error: 'Số điện thoại không hợp lệ.' };
+  if (birthday) {
+    const date = new Date(`${birthday}T00:00:00`);
+    if (Number.isNaN(date.getTime())) return { error: 'Ngày sinh không hợp lệ.' };
+    const today = new Date();
+    today.setHours(23, 59, 59, 999);
+    if (date > today) return { error: 'Ngày sinh không được ở tương lai.' };
+  }
+  if (gender && !['male', 'female', 'other', 'prefer-not'].includes(gender)) return { error: 'Giới tính không hợp lệ.' };
+  if (address.length > 200) return { error: 'Địa chỉ tối đa 200 ký tự.' };
+  if (bio.length > 500) return { error: 'Giới thiệu tối đa 500 ký tự.' };
+  for (const [field, value] of Object.entries({ website, avatar, cover })) {
+    if (value && !isHttpUrl(value)) return { error: `${field} phải là URL http/https hợp lệ.` };
+  }
+
+  let socialLinks = normalizeSocialLinks(user.socialLinks);
+  if (body.socialLinks !== undefined) {
+    if (!body.socialLinks || typeof body.socialLinks !== 'object' || Array.isArray(body.socialLinks)) {
+      return { error: 'Liên kết mạng xã hội không hợp lệ.' };
+    }
+    const entries = Object.entries(body.socialLinks);
+    if (entries.length > 12) return { error: 'Tối đa 12 liên kết mạng xã hội.' };
+    socialLinks = {};
+    for (const [key, rawValue] of entries) {
+      if (!SOCIAL_LINK_KEY_PATTERN.test(key)) return { error: `Tên social link không hợp lệ: ${key}.` };
+      const value = String(rawValue || '').trim();
+      if (value && !isHttpUrl(value)) return { error: `Liên kết ${key} phải là URL http/https hợp lệ.` };
+      if (value) socialLinks[key] = value;
+    }
+  }
+
+  return {
+    value: { name, email, phone, birthday, gender, address, website, bio, avatar, cover, socialLinks }
+  };
+}
+
+function passwordMatches(user, password) {
+  if (!user?.salt || !user?.passwordHash) return false;
+  return hashPassword(password, user.salt).passwordHash === user.passwordHash;
+}
+
+function passwordPolicyError(password) {
+  if (password.length < 8) return 'Mật khẩu mới cần tối thiểu 8 ký tự.';
+  if (!/[A-Z]/.test(password)) return 'Mật khẩu mới cần có ít nhất 1 chữ hoa.';
+  if (!/[a-z]/.test(password)) return 'Mật khẩu mới cần có ít nhất 1 chữ thường.';
+  if (!/[0-9]/.test(password)) return 'Mật khẩu mới cần có ít nhất 1 chữ số.';
+  if (!/[^A-Za-z0-9]/.test(password)) return 'Mật khẩu mới cần có ít nhất 1 ký tự đặc biệt.';
+  return '';
+}
+
+function applyPreferencePatch(user, patch) {
+  const unknown = Object.keys(patch).filter(key => !ACCOUNT_PREFERENCE_KEYS.has(key));
+  if (unknown.length) return { error: `Cài đặt không hợp lệ: ${unknown.join(', ')}.` };
+  user.preferences = normalizeAccountPreferences(user.preferences, user.notificationPreferences);
+  Object.entries(patch).forEach(([key, value]) => {
+    if ([...NOTIFICATION_PREFERENCE_KEYS, ...Object.keys(PRIVACY_PREFERENCE_DEFAULTS)].includes(key)) {
+      user.preferences[key] = Boolean(value);
+      if (NOTIFICATION_PREFERENCE_KEYS.includes(key)) {
+        user.notificationPreferences[key] = Boolean(value);
+      }
+      return;
+    }
+    if (key === 'theme' && ['light', 'dark'].includes(value)) user.preferences.theme = value;
+    else if (key === 'language' && ['vi', 'en'].includes(value)) user.preferences.language = value;
+    else if (key === 'readerBackground' && ['default', 'paper', 'sepia', 'night'].includes(value)) user.preferences.readerBackground = value;
+    else if (key === 'readerFontSize') user.preferences.readerFontSize = clampNumber(value, 14, 28, user.preferences.readerFontSize);
+    else if (key === 'readerLineHeight') user.preferences.readerLineHeight = clampNumber(value, 1.4, 2.4, user.preferences.readerLineHeight);
+    else return;
+  });
+  user.preferences.updatedAt = now();
+  return { preferences: user.preferences };
 }
 
 function wordCount(value) {
@@ -393,8 +607,18 @@ function ensureDbShape(db) {
   db.reports ||= [];
   db.newsletters ||= [];
   db.viewEvents ||= [];
+  db.users.forEach(user => {
+    user.tokenVersion = Number(user.tokenVersion || 0);
+    user.notificationPreferences = normalizeNotificationPreferences(user.notificationPreferences || user.preferences);
+    user.preferences = normalizeAccountPreferences(user.preferences, user.notificationPreferences);
+    user.socialLinks = normalizeSocialLinks(user.socialLinks);
+  });
   db.stories.forEach(story => {
     if (!story.approvalStatus) story.approvalStatus = story.hidden ? 'pending' : 'approved';
+    if (!story.ownerId) {
+      const admin = db.users.find(user => user.role === 'admin');
+      if (admin) story.ownerId = admin.id;
+    }
   });
   db.follows.forEach(follow => {
     if (!follow.createdAt) follow.createdAt = now();
@@ -412,6 +636,15 @@ function ensureDbShape(db) {
   db.chapters.forEach(chapter => {
     if (chapter.status && !VALID_CHAPTER_STATUSES.includes(chapter.status)) chapter.status = 'approved';
   });
+  db.notifications.forEach(notification => {
+    if (!notification.id) notification.id = uid('noti');
+    notification.type ||= 'system';
+    notification.title ||= 'Thông báo';
+    notification.body ||= '';
+    notification.link ||= '';
+    notification.read = Boolean(notification.read);
+    notification.createdAt ||= now();
+  });
   return db;
 }
 
@@ -424,12 +657,111 @@ function publicComment(db, comment) {
   return {
     id: comment.id,
     storyId: comment.storyId,
+    chapterId: comment.chapterId || null,
+    parentId: comment.parentId || null,
     userId: comment.userId,
     userName: user?.name || 'Bạn đọc',
     userAvatar: user?.avatar || '/images/logo.png',
     body: comment.body,
     createdAt: comment.createdAt
   };
+}
+
+function publicCommentsForStory(db, storyId) {
+  const comments = db.comments
+    .filter(comment => comment.storyId === storyId)
+    .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+  const byId = new Map(comments.map(comment => [comment.id, { ...publicComment(db, comment), replies: [] }]));
+  const roots = [];
+  comments.forEach(comment => {
+    const payload = byId.get(comment.id);
+    if (comment.parentId && byId.has(comment.parentId)) {
+      byId.get(comment.parentId).replies.push(payload);
+    } else {
+      roots.push(payload);
+    }
+  });
+  return roots.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+}
+
+function notificationResponse(notification) {
+  return {
+    id: notification.id,
+    userId: notification.userId,
+    type: notification.type,
+    title: notification.title,
+    body: notification.body,
+    link: notification.link || '',
+    read: Boolean(notification.read),
+    createdAt: notification.createdAt,
+    actorId: notification.actorId || null,
+    storyId: notification.storyId || null,
+    chapterId: notification.chapterId || null
+  };
+}
+
+function notificationPreferenceAllows(db, userId, type) {
+  if (!userId) return false;
+  if (ALWAYS_CREATE_NOTIFICATION_TYPES.has(type)) return true;
+  const user = db.users.find(item => item.id === userId);
+  if (!user) return false;
+  const preferenceKey = NOTIFICATION_PREFERENCE_BY_TYPE[type];
+  if (!preferenceKey) return true;
+  user.notificationPreferences = normalizeNotificationPreferences(user.notificationPreferences);
+  return user.notificationPreferences[preferenceKey] !== false;
+}
+
+function createNotification(db, userId, { type = 'system', title, body, link = '', actorId, storyId, chapterId } = {}) {
+  if (!notificationPreferenceAllows(db, userId, type)) return null;
+  const notification = {
+    id: uid('noti'),
+    userId,
+    type,
+    title: String(title || 'Thông báo').trim(),
+    body: String(body || '').trim(),
+    link: String(link || '').trim(),
+    read: false,
+    createdAt: now()
+  };
+  if (actorId) notification.actorId = actorId;
+  if (storyId) notification.storyId = storyId;
+  if (chapterId) notification.chapterId = chapterId;
+  db.notifications.unshift(notification);
+  return notification;
+}
+
+function countUnreadNotifications(db, userId) {
+  return db.notifications.filter(item => item.userId === userId && !item.read).length;
+}
+
+function getStoryOwnerId(story) {
+  return story?.ownerId || story?.authorId || story?.createdBy || story?.userId || null;
+}
+
+function storyLink(story, chapter) {
+  if (!story?.slug) return '';
+  if (chapter?.number) return `/truyen/${story.slug}/chuong/${chapter.number}`;
+  return `/truyen/${story.slug}`;
+}
+
+function notifyChapterPublished(db, story, chapter, actorId) {
+  if (!story || !chapter || !isPublicChapter(chapter) || chapter.notifiedAt) return;
+  const followers = db.follows
+    .filter(follow => follow.storyId === story.id)
+    .map(follow => follow.userId)
+    .filter((userId, index, list) => userId && userId !== actorId && list.indexOf(userId) === index);
+  followers.forEach(userId => {
+    createNotification(db, userId, {
+      type: 'chapter',
+      title: 'Có chương mới',
+      body: `${story.title} vừa đăng chương ${chapter.number}: ${chapter.title}.`,
+      link: storyLink(story, chapter),
+      actorId,
+      storyId: story.id,
+      chapterId: chapter.id
+    });
+  });
+  chapter.notifiedAt = now();
 }
 
 async function handle(req, res) {
@@ -451,6 +783,7 @@ async function handle(req, res) {
       const password = String(body.password || '');
       const user = db.users.find(item => item.email.toLowerCase() === email);
       if (!user) return badRequest(res, 'Email hoặc mật khẩu không đúng.');
+      if (user.status === 'deactivated') return forbidden(res);
       const check = hashPassword(password, user.salt);
       if (check.passwordHash !== user.passwordHash) return badRequest(res, 'Email hoặc mật khẩu không đúng.');
       return send(res, 200, { token: createToken(user), user: safeUser(user) });
@@ -473,13 +806,24 @@ async function handle(req, res) {
         email,
         role: 'user',
         seeds: 30,
-        avatar: '/images/logo.png',
+        avatar: '',
+        cover: '',
+        socialLinks: {},
+        preferences: defaultAccountPreferences(),
+        notificationPreferences: defaultNotificationPreferences(),
+        tokenVersion: 0,
         createdAt: now(),
         salt: hashed.salt,
         passwordHash: hashed.passwordHash
       };
       db.users.push(user);
       db.transactions.push({ id: uid('txn'), userId: user.id, type: 'bonus', amount: 30, note: 'Thưởng đăng ký tài khoản mới', createdAt: now() });
+      createNotification(db, user.id, {
+        type: 'system',
+        title: 'Chào mừng đến Đậu Đỏ Truyện',
+        body: 'Bạn đã nhận 30 xu thưởng đăng ký để bắt đầu đọc truyện trả phí.',
+        link: '/wallet'
+      });
       writeDb(db);
       return send(res, 201, { token: createToken(user), user: safeUser(user) });
     }
@@ -488,6 +832,119 @@ async function handle(req, res) {
       const user = requireUser(req, res, db);
       if (!user) return;
       return send(res, 200, { user: safeUser(user) });
+    }
+
+    if (req.method === 'GET' && pathname === '/api/me/profile') {
+      const user = requireUser(req, res, db);
+      if (!user) return;
+      return send(res, 200, { profile: profileResponse(user), user: safeUser(user) });
+    }
+
+    if (req.method === 'PATCH' && pathname === '/api/me/profile') {
+      const user = requireUser(req, res, db);
+      if (!user) return;
+      const body = await parseBody(req);
+      const result = validateProfilePayload(body, user, db);
+      if (result.error) return badRequest(res, result.error);
+      Object.assign(user, result.value, { updatedAt: now() });
+      writeDb(db);
+      return send(res, 200, { profile: profileResponse(user), user: safeUser(user) });
+    }
+
+    if (req.method === 'GET' && pathname === '/api/me/preferences') {
+      const user = requireUser(req, res, db);
+      if (!user) return;
+      user.notificationPreferences = normalizeNotificationPreferences(user.notificationPreferences || user.preferences);
+      user.preferences = normalizeAccountPreferences(user.preferences, user.notificationPreferences);
+      writeDb(db);
+      return send(res, 200, { preferences: user.preferences, user: safeUser(user) });
+    }
+
+    if (req.method === 'PATCH' && pathname === '/api/me/preferences') {
+      const user = requireUser(req, res, db);
+      if (!user) return;
+      const body = await parseBody(req);
+      user.notificationPreferences = normalizeNotificationPreferences(user.notificationPreferences || user.preferences);
+      const result = applyPreferencePatch(user, body);
+      if (result.error) return badRequest(res, result.error);
+      writeDb(db);
+      return send(res, 200, { preferences: result.preferences, user: safeUser(user) });
+    }
+
+    if (req.method === 'POST' && pathname === '/api/me/password') {
+      const user = requireUser(req, res, db);
+      if (!user) return;
+      const body = await parseBody(req);
+      const currentPassword = String(body.currentPassword ?? body.current ?? '');
+      const newPassword = String(body.newPassword ?? body.next ?? '');
+      const confirmPassword = String(body.confirmPassword ?? body.confirm ?? '');
+      if (!currentPassword || !newPassword || !confirmPassword) return badRequest(res, 'Vui lòng nhập đủ mật khẩu hiện tại, mật khẩu mới và xác nhận.');
+      if (!passwordMatches(user, currentPassword)) return badRequest(res, 'Mật khẩu hiện tại không đúng.');
+      const policyError = passwordPolicyError(newPassword);
+      if (policyError) return badRequest(res, policyError);
+      if (newPassword !== confirmPassword) return badRequest(res, 'Xác nhận mật khẩu chưa khớp.');
+      if (passwordMatches(user, newPassword)) return badRequest(res, 'Mật khẩu mới không được trùng mật khẩu cũ.');
+      const hashed = hashPassword(newPassword);
+      user.salt = hashed.salt;
+      user.passwordHash = hashed.passwordHash;
+      user.updatedAt = now();
+      createNotification(db, user.id, {
+        type: 'security',
+        title: 'Mật khẩu đã được thay đổi',
+        body: 'Mật khẩu tài khoản của bạn vừa được cập nhật.',
+        link: '/settings#security'
+      });
+      writeDb(db);
+      return send(res, 200, { ok: true, message: 'Đã đổi mật khẩu.' });
+    }
+
+    if (req.method === 'POST' && pathname === '/api/me/logout-all') {
+      const user = requireUser(req, res, db);
+      if (!user) return;
+      user.tokenVersion = Number(user.tokenVersion || 0) + 1;
+      user.sessionsRevokedAt = now();
+      user.updatedAt = now();
+      writeDb(db);
+      return send(res, 200, { ok: true, message: 'Đã đăng xuất khỏi các thiết bị khác.' });
+    }
+
+    if (req.method === 'POST' && pathname === '/api/me/deactivate') {
+      const user = requireUser(req, res, db);
+      if (!user) return;
+      const body = await parseBody(req);
+      const password = String(body.password || '');
+      if (!password) return badRequest(res, 'Vui lòng nhập mật khẩu để xác nhận.');
+      if (!passwordMatches(user, password)) return badRequest(res, 'Mật khẩu xác nhận không đúng.');
+      user.status = 'deactivated';
+      user.deactivatedAt = now();
+      user.tokenVersion = Number(user.tokenVersion || 0) + 1;
+      user.updatedAt = now();
+      writeDb(db);
+      return send(res, 200, { ok: true, message: 'Tài khoản đã được vô hiệu hóa.' });
+    }
+
+    if (req.method === 'GET' && pathname === '/api/me/notification-preferences') {
+      const user = requireUser(req, res, db);
+      if (!user) return;
+      user.notificationPreferences = normalizeNotificationPreferences(user.notificationPreferences);
+      user.preferences = normalizeAccountPreferences(user.preferences, user.notificationPreferences);
+      writeDb(db);
+      return send(res, 200, { preferences: user.notificationPreferences });
+    }
+
+    if (req.method === 'PATCH' && pathname === '/api/me/notification-preferences') {
+      const user = requireUser(req, res, db);
+      if (!user) return;
+      const body = await parseBody(req);
+      const unknown = Object.keys(body).filter(key => !NOTIFICATION_PREFERENCE_KEYS.includes(key));
+      if (unknown.length) return badRequest(res, `Cài đặt thông báo không hợp lệ: ${unknown.join(', ')}.`);
+      user.notificationPreferences = normalizeNotificationPreferences({ ...user.notificationPreferences });
+      Object.entries(body).forEach(([key, value]) => {
+        user.notificationPreferences[key] = Boolean(value);
+      });
+      user.preferences = normalizeAccountPreferences({ ...user.preferences, ...user.notificationPreferences, updatedAt: now() }, user.notificationPreferences);
+      writeDb(db);
+      return send(res, 200, { preferences: user.notificationPreferences, user: safeUser(user) });
     }
 
     if (req.method === 'GET' && pathname === '/api/categories') {
@@ -568,10 +1025,7 @@ async function handle(req, res) {
         .filter(chapter => chapter.storyId === story.id)
         .filter(chapter => viewer?.role === 'admin' || isPublicChapter(chapter))
         .sort((a, b) => a.number - b.number);
-      const comments = db.comments
-        .filter(comment => comment.storyId === story.id)
-        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-        .map(comment => publicComment(db, comment));
+      const comments = publicCommentsForStory(db, story.id);
       return send(res, 200, { story: enriched, chapters, comments });
     }
 
@@ -627,6 +1081,17 @@ async function handle(req, res) {
       if (followed) {
         db.follows.push({ id: uid('flw'), userId: user.id, storyId: story.id, createdAt: now() });
         story.follows += 1;
+        const ownerId = getStoryOwnerId(story);
+        if (ownerId && ownerId !== user.id) {
+          createNotification(db, ownerId, {
+            type: 'follow',
+            title: 'Có người theo dõi truyện',
+            body: `${user.name} vừa theo dõi ${story.title}.`,
+            link: storyLink(story),
+            actorId: user.id,
+            storyId: story.id
+          });
+        }
       } else {
         db.follows.splice(index, 1);
         story.follows = Math.max(0, story.follows - 1);
@@ -640,10 +1105,7 @@ async function handle(req, res) {
       const story = db.stories.find(item => item.id === commentsParams.id || item.slug === commentsParams.id);
       if (!story) return notFound(res);
       if (!isPublicStory(story) && (!viewer || viewer.role !== 'admin')) return notFound(res);
-      const comments = db.comments
-        .filter(comment => comment.storyId === story.id)
-        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-        .map(comment => publicComment(db, comment));
+      const comments = publicCommentsForStory(db, story.id);
       return send(res, 200, { comments });
     }
 
@@ -657,9 +1119,33 @@ async function handle(req, res) {
       const text = String(body.body || '').trim();
       if (text.length < 2) return badRequest(res, 'Bình luận cần ít nhất 2 ký tự.');
       if (text.length > 500) return badRequest(res, 'Bình luận tối đa 500 ký tự.');
-      const comment = { id: uid('cmt'), storyId: story.id, userId: user.id, body: text, createdAt: now() };
+      const parent = body.parentId ? db.comments.find(item => item.id === body.parentId && item.storyId === story.id) : null;
+      const comment = {
+        id: uid('cmt'),
+        storyId: story.id,
+        chapterId: body.chapterId ? String(body.chapterId) : null,
+        parentId: parent?.id || null,
+        userId: user.id,
+        body: text,
+        createdAt: now()
+      };
       db.comments.unshift(comment);
-      db.notifications.push({ id: uid('noti'), userId: user.id, type: 'comment', title: 'Đã gửi bình luận', body: `Bình luận của bạn trong ${story.title} đã được lưu.`, read: false, createdAt: now() });
+      const ownerId = getStoryOwnerId(story);
+      const recipients = new Set();
+      if (parent?.userId && parent.userId !== user.id) recipients.add(parent.userId);
+      if (ownerId && ownerId !== user.id) recipients.add(ownerId);
+      recipients.forEach(recipientId => {
+        const isReplyRecipient = parent?.userId === recipientId;
+        createNotification(db, recipientId, {
+          type: isReplyRecipient ? 'reply' : 'comment',
+          title: isReplyRecipient ? 'Có phản hồi bình luận' : 'Có bình luận mới',
+          body: `${user.name} vừa ${isReplyRecipient ? 'trả lời bình luận' : 'bình luận'} trong ${story.title}.`,
+          link: storyLink(story),
+          actorId: user.id,
+          storyId: story.id,
+          chapterId: comment.chapterId
+        });
+      });
       writeDb(db);
       return send(res, 201, { comment: publicComment(db, comment) });
     }
@@ -721,7 +1207,13 @@ async function handle(req, res) {
       user.seeds -= price;
       db.purchases.push({ id: uid('pur'), userId: user.id, storyId: story.id, chapterId: null, combo: true, price, createdAt: now() });
       db.transactions.push({ id: uid('txn'), userId: user.id, storyId: story.id, chapterId: null, price, type: 'purchase', amount: -price, note: `Mua combo ${story.title}`, createdAt: now() });
-      db.notifications.push({ id: uid('noti'), userId: user.id, type: 'purchase', title: 'Đã mở khóa combo', body: `Bạn đã mở khóa toàn bộ chương VIP hiện tại của ${story.title}.`, read: false, createdAt: now() });
+      createNotification(db, user.id, {
+        type: 'purchase',
+        title: 'Đã mở khóa combo',
+        body: `Bạn đã mở khóa toàn bộ chương VIP hiện tại của ${story.title}.`,
+        link: storyLink(story),
+        storyId: story.id
+      });
       writeDb(db);
       return send(res, 200, { unlocked: true, user: safeUser(user), price });
     }
@@ -760,13 +1252,46 @@ async function handle(req, res) {
       ]});
     }
 
+    if (req.method === 'GET' && pathname === '/api/notifications/unread-count') {
+      const user = requireUser(req, res, db);
+      if (!user) return;
+      return send(res, 200, { count: countUnreadNotifications(db, user.id) });
+    }
+
     if (req.method === 'GET' && pathname === '/api/notifications') {
       const user = requireUser(req, res, db);
       if (!user) return;
-      const notifications = db.notifications
+      const limit = Math.min(50, Math.max(1, parsePositiveNumber(url.searchParams.get('limit'), 20)));
+      const cursor = url.searchParams.get('cursor') || '';
+      const unreadOnly = url.searchParams.get('unreadOnly') === 'true';
+      const type = String(url.searchParams.get('type') || '').trim();
+      let notifications = db.notifications
         .filter(item => item.userId === user.id)
+        .filter(item => !unreadOnly || !item.read)
+        .filter(item => !type || item.type === type)
         .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-      return send(res, 200, { notifications });
+      if (cursor) {
+        const cursorIndex = notifications.findIndex(item => item.id === cursor);
+        if (cursorIndex >= 0) notifications = notifications.slice(cursorIndex + 1);
+        else notifications = notifications.filter(item => new Date(item.createdAt) < new Date(cursor));
+      }
+      const page = notifications.slice(0, limit);
+      return send(res, 200, {
+        notifications: page.map(notificationResponse),
+        nextCursor: notifications.length > limit ? page.at(-1)?.id || null : null,
+        unreadCount: countUnreadNotifications(db, user.id)
+      });
+    }
+
+    const notificationReadParams = match(pathname, '/api/notifications/:id/read');
+    if (notificationReadParams && req.method === 'POST') {
+      const user = requireUser(req, res, db);
+      if (!user) return;
+      const notification = db.notifications.find(item => item.id === notificationReadParams.id && item.userId === user.id);
+      if (!notification) return notFound(res);
+      notification.read = true;
+      writeDb(db);
+      return send(res, 200, { notification: notificationResponse(notification), unreadCount: countUnreadNotifications(db, user.id) });
     }
 
     if (req.method === 'POST' && pathname === '/api/notifications/read-all') {
@@ -776,7 +1301,18 @@ async function handle(req, res) {
         if (item.userId === user.id) item.read = true;
       });
       writeDb(db);
-      return send(res, 200, { ok: true });
+      return send(res, 200, { ok: true, unreadCount: 0 });
+    }
+
+    const notificationParams = match(pathname, '/api/notifications/:id');
+    if (notificationParams && req.method === 'DELETE') {
+      const user = requireUser(req, res, db);
+      if (!user) return;
+      const index = db.notifications.findIndex(item => item.id === notificationParams.id && item.userId === user.id);
+      if (index === -1) return notFound(res);
+      db.notifications.splice(index, 1);
+      writeDb(db);
+      return send(res, 200, { ok: true, unreadCount: countUnreadNotifications(db, user.id) });
     }
 
     if (req.method === 'GET' && pathname === '/api/wallet/transactions') {
@@ -802,6 +1338,12 @@ async function handle(req, res) {
       if (!seeds) return badRequest(res, 'Gói nạp không hợp lệ.');
       user.seeds += seeds;
       db.transactions.push({ id: uid('txn'), userId: user.id, type: 'topup', amount: seeds, note: `Nạp ${seeds} xu`, createdAt: now() });
+      createNotification(db, user.id, {
+        type: 'wallet',
+        title: 'Nạp Đậu thành công',
+        body: `Tài khoản của bạn vừa được cộng ${seeds} xu.`,
+        link: '/wallet'
+      });
       writeDb(db);
       return send(res, 200, { user: safeUser(user), balance: user.seeds });
     }
@@ -820,6 +1362,15 @@ async function handle(req, res) {
       user.seeds -= chapter.price;
       db.purchases.push({ id: uid('pur'), userId: user.id, storyId: chapter.storyId, chapterId: chapter.id, price: chapter.price, createdAt: now() });
       db.transactions.push({ id: uid('txn'), userId: user.id, storyId: chapter.storyId, chapterId: chapter.id, price: chapter.price, type: 'purchase', amount: -chapter.price, note: `Mở khóa ${chapter.title}`, createdAt: now() });
+      const story = db.stories.find(item => item.id === chapter.storyId);
+      createNotification(db, user.id, {
+        type: 'purchase',
+        title: 'Đã mở khóa chương',
+        body: `Bạn đã mở khóa ${chapter.title}.`,
+        link: storyLink(story, chapter),
+        storyId: chapter.storyId,
+        chapterId: chapter.id
+      });
       writeDb(db);
       return send(res, 200, { unlocked: true, user: safeUser(user) });
     }
@@ -889,6 +1440,7 @@ async function handle(req, res) {
       if (db.stories.some(story => story.slug === slug)) return badRequest(res, 'Slug đã tồn tại.');
       const story = {
         id: uid('story'),
+        ownerId: admin.id,
         slug,
         title: String(body.title).trim(),
         author: String(body.author).trim(),
@@ -927,10 +1479,12 @@ async function handle(req, res) {
       if (!chapter) return notFound(res);
       const body = await parseBody(req);
       if (!VALID_CHAPTER_STATUSES.includes(body.status)) return badRequest(res, 'Trạng thái chương không hợp lệ.');
+      const wasPublic = isPublicChapter(chapter);
       chapter.status = body.status;
       chapter.updatedAt = now();
       const story = db.stories.find(item => item.id === chapter.storyId);
       if (story) story.updatedAt = now();
+      if (!wasPublic && story) notifyChapterPublished(db, story, chapter, admin.id);
       writeDb(db);
       return send(res, 200, { chapter: chapterAdminSummary(db, chapter) });
     }
@@ -1034,6 +1588,7 @@ async function handle(req, res) {
       };
       db.chapters.push(chapter);
       story.updatedAt = now();
+      notifyChapterPublished(db, story, chapter, admin.id);
       writeDb(db);
       return send(res, 201, { chapter });
     }
@@ -1051,6 +1606,7 @@ async function handle(req, res) {
       if (body.number !== undefined) chapter.number = Number(body.number);
       if (body.isPremium !== undefined) chapter.isPremium = Boolean(body.isPremium);
       if (body.price !== undefined) chapter.price = Number(body.price);
+      const wasPublic = isPublicChapter(chapter);
       if (body.status !== undefined) {
         if (!VALID_CHAPTER_STATUSES.includes(body.status)) return badRequest(res, 'Trạng thái chương không hợp lệ.');
         chapter.status = body.status;
@@ -1059,6 +1615,7 @@ async function handle(req, res) {
       const story = db.stories.find(item => item.id === chapter.storyId);
       if (story) story.updatedAt = now();
       chapter.updatedAt = now();
+      if (!wasPublic && story) notifyChapterPublished(db, story, chapter, admin.id);
       writeDb(db);
       return send(res, 200, { chapter: chapterAdminSummary(db, chapter) });
     }
@@ -1167,7 +1724,7 @@ function createSeedDb() {
     ['s7','kiem-lai','Kiếm Lai','Phong Hỏa Hí Chư Hầu','/images/cover-7.jpg','Thiếu niên nơi trấn nhỏ mang theo một thanh kiếm và tấm lòng chân thành đi qua giang hồ rộng lớn.','ongoing',true,9,true,689221,4.9,20771,['Kiếm hiệp','Tiên hiệp']],
     ['s8','mat-the-sieu-cap-he-thong','Mạt Thế Siêu Cấp Hệ Thống','Lam Lĩnh Tiếu Tiếu Sinh','/images/cover-8.jpg','Khi tận thế ập tới, một hệ thống bí ẩn giúp người bình thường sống sót và xây dựng căn cứ mới.','ongoing',false,0,false,198112,4.4,4890,['Mạt thế','Hệ thống','Sinh tồn']]
   ].concat(extraSeedStoryRows()).map(([id, slug, title, author, cover, description, status, premium, price, featured, views, rating, follows, categories], index) => ({
-    id, slug, title, author, cover, description, status, premium, price, featured, views, rating, follows, categories,
+    id, ownerId: 'u_admin', slug, title, author, cover, description, status, premium, price, featured, views, rating, follows, categories,
     tags: categories,
     translator: '',
     language: 'Tiếng Việt',
@@ -1200,8 +1757,8 @@ function createSeedDb() {
 
   return {
     users: [
-      { id: 'u_admin', name: 'Quản trị viên', email: 'admin@example.com', role: 'admin', seeds: 999, avatar: '/images/logo.png', createdAt: now(), salt: adminPass.salt, passwordHash: adminPass.passwordHash },
-      { id: 'u_user', name: 'Bạn đọc Đậu Đỏ', email: 'user@example.com', role: 'user', seeds: 80, avatar: '/images/logo.png', createdAt: now(), salt: userPass.salt, passwordHash: userPass.passwordHash }
+      { id: 'u_admin', name: 'Quản trị viên', email: 'admin@example.com', role: 'admin', seeds: 999, avatar: '', cover: '', socialLinks: {}, preferences: defaultAccountPreferences(), notificationPreferences: defaultNotificationPreferences(), tokenVersion: 0, createdAt: now(), salt: adminPass.salt, passwordHash: adminPass.passwordHash },
+      { id: 'u_user', name: 'Bạn đọc Đậu Đỏ', email: 'user@example.com', role: 'user', seeds: 80, avatar: '', cover: '', socialLinks: {}, preferences: defaultAccountPreferences(), notificationPreferences: defaultNotificationPreferences(), tokenVersion: 0, createdAt: now(), salt: userPass.salt, passwordHash: userPass.passwordHash }
     ],
     stories,
     chapters,
@@ -1221,7 +1778,7 @@ function createSeedDb() {
     ],
     viewEvents: [],
     notifications: [
-      { id: 'noti_seed_1', userId: 'u_user', type: 'system', title: 'Chào mừng đến Đậu Đỏ Truyện', body: 'Bạn đã nhận xu khởi tạo để đọc chương trả phí.', read: false, createdAt: now() }
+      { id: 'noti_seed_1', userId: 'u_user', type: 'system', title: 'Chào mừng đến Đậu Đỏ Truyện', body: 'Bạn đã nhận xu khởi tạo để đọc chương trả phí.', link: '/wallet', read: false, createdAt: now() }
     ],
     reports: [],
     newsletters: []

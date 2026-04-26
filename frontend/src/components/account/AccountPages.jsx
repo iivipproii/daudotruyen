@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { mockStories } from '../../data/mockStories';
 
 const coverFallback = '/images/cover-1.jpg';
@@ -177,7 +177,6 @@ export function LoginPage({ login }) {
           {error && <div className="acct-error">{error}</div>}
           <button type="submit" disabled={loading}>{loading ? 'Đang đăng nhập...' : 'Đăng nhập'}</button>
         </form>
-        <SocialLoginMock />
         <p className="acct-auth-foot">Chưa có tài khoản? <Link to="/register">Đăng ký</Link></p>
       </div>
     </AuthShell>
@@ -312,18 +311,6 @@ function AuthShell({ children, mode }) {
 
 function AuthHeader({ title, subtitle }) {
   return <div className="acct-auth-head"><h1>{title}</h1><p>{subtitle}</p></div>;
-}
-
-function SocialLoginMock() {
-  return (
-    <div className="acct-social">
-      <span>Hoặc đăng nhập nhanh</span>
-      <div>
-        <button type="button">Google <small>UI mock</small></button>
-        <button type="button">Facebook <small>UI mock</small></button>
-      </div>
-    </div>
-  );
 }
 
 export function ReaderDashboard({ user, apiClient }) {
@@ -636,65 +623,416 @@ export function PaymentHistory({ transactions }) {
   );
 }
 
-export function AccountSettings({ user, updateUser, theme, toggleTheme }) {
-  const [profile, setProfile] = useState({ name: user?.name || '', email: user?.email || '', phone: '', avatar: user?.avatar || '/images/logo.png' });
-  const [password, setPassword] = useState({ current: '', next: '', confirm: '' });
-  const [prefs, setPrefs] = useState({ email: true, web: true, chapters: true, comments: true, transactions: true, privacy: 'public', language: 'vi' });
-  const [notice, setNotice] = useState('');
+const settingsNav = [
+  ['profile', 'Hồ sơ'],
+  ['security', 'Bảo mật'],
+  ['notifications', 'Thông báo'],
+  ['privacy', 'Quyền riêng tư'],
+  ['appearance', 'Giao diện'],
+  ['danger', 'Vùng nguy hiểm']
+];
 
-  function saveProfile(event) {
-    event.preventDefault();
-    updateUser?.({ ...user, name: profile.name, avatar: profile.avatar });
-    setNotice('Đã lưu thông tin cá nhân trong phiên hiện tại.');
+const notificationPreferenceFields = [
+  ['emailNotifications', 'Email thông báo'],
+  ['chapterNotifications', 'Chương mới từ truyện đang theo dõi'],
+  ['commentNotifications', 'Bình luận và trả lời'],
+  ['followNotifications', 'Người theo dõi mới'],
+  ['promoNotifications', 'Khuyến mãi và ưu đãi'],
+  ['systemNotifications', 'Thông báo hệ thống']
+];
+
+const privacyPreferenceFields = [
+  ['publicReading', 'Công khai truyện đang đọc'],
+  ['publicProfile', 'Công khai hồ sơ cá nhân'],
+  ['publicBookmarks', 'Công khai truyện đã lưu'],
+  ['publicFollows', 'Công khai danh sách theo dõi'],
+  ['publicComments', 'Công khai bình luận']
+];
+
+const socialLinkFields = [
+  ['facebook', 'Facebook'],
+  ['instagram', 'Instagram'],
+  ['tiktok', 'TikTok'],
+  ['youtube', 'YouTube']
+];
+
+function defaultSettingsProfile(user = {}) {
+  return {
+    name: user?.name || '',
+    email: user?.email || '',
+    phone: user?.phone || '',
+    birthday: user?.birthday || '',
+    gender: user?.gender || '',
+    address: user?.address || '',
+    website: user?.website || '',
+    bio: user?.bio || '',
+    avatar: user?.avatar && /^https?:\/\//i.test(user.avatar) ? user.avatar : '',
+    cover: user?.cover && /^https?:\/\//i.test(user.cover) ? user.cover : '',
+    socialLinks: { facebook: '', instagram: '', tiktok: '', youtube: '', ...(user?.socialLinks || {}) }
+  };
+}
+
+function normalizeSettingsProfile(data, user) {
+  const profile = data?.profile || {};
+  return {
+    ...defaultSettingsProfile(user),
+    ...profile,
+    socialLinks: {
+      ...defaultSettingsProfile(user).socialLinks,
+      ...(profile.socialLinks || {})
+    }
+  };
+}
+
+function defaultSettingsPreferences(theme = 'light') {
+  return {
+    emailNotifications: true,
+    chapterNotifications: true,
+    commentNotifications: true,
+    followNotifications: true,
+    promoNotifications: true,
+    systemNotifications: true,
+    publicReading: false,
+    publicProfile: true,
+    publicBookmarks: false,
+    publicFollows: true,
+    publicComments: true,
+    theme: theme === 'dark' ? 'dark' : 'light',
+    language: 'vi',
+    readerFontSize: 18,
+    readerLineHeight: 1.8,
+    readerBackground: 'default'
+  };
+}
+
+function SettingsMessage({ state }) {
+  if (!state?.text) return null;
+  return <div className={state.type === 'error' ? 'acct-error' : 'acct-success'}>{state.text}</div>;
+}
+
+export function AccountSettings({ user, updateUser, logout, theme, toggleTheme, apiClient }) {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const syncedThemeRef = useRef(false);
+  const [profile, setProfile] = useState(() => defaultSettingsProfile(user));
+  const [password, setPassword] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
+  const [prefs, setPrefs] = useState(() => defaultSettingsPreferences(theme));
+  const [danger, setDanger] = useState({ password: '', phrase: '' });
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [saving, setSaving] = useState({ profile: false, password: false, danger: false, logoutAll: false });
+  const [savingPrefs, setSavingPrefs] = useState({});
+  const [messages, setMessages] = useState({});
+
+  function setMessage(section, type, text) {
+    setMessages(current => ({ ...current, [section]: { type, text } }));
   }
 
-  function savePassword(event) {
+  async function loadSettings() {
+    if (!apiClient) {
+      setLoadError('Không có API client để tải cài đặt.');
+      setInitialLoading(false);
+      return;
+    }
+    setInitialLoading(true);
+    setLoadError('');
+    try {
+      const [profileData, preferenceData] = await Promise.all([
+        apiClient('/me/profile'),
+        apiClient('/me/preferences')
+      ]);
+      setProfile(normalizeSettingsProfile(profileData, user));
+      const nextPrefs = { ...defaultSettingsPreferences(theme), ...(preferenceData.preferences || {}) };
+      setPrefs(nextPrefs);
+      if (!syncedThemeRef.current && ['light', 'dark'].includes(nextPrefs.theme) && nextPrefs.theme !== theme) {
+        syncedThemeRef.current = true;
+        toggleTheme?.();
+      }
+      if (profileData.user) updateUser?.(profileData.user);
+    } catch (err) {
+      setLoadError(err.message || 'Không tải được cài đặt tài khoản.');
+    } finally {
+      setInitialLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadSettings();
+  }, [apiClient]);
+
+  useEffect(() => {
+    if (!location.hash) return;
+    const id = location.hash.slice(1);
+    const timer = setTimeout(() => {
+      document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 80);
+    return () => clearTimeout(timer);
+  }, [location.hash, initialLoading]);
+
+  function patchProfile(next) {
+    setProfile(current => ({ ...current, ...next }));
+  }
+
+  function patchSocialLink(key, value) {
+    setProfile(current => ({ ...current, socialLinks: { ...current.socialLinks, [key]: value } }));
+  }
+
+  async function saveProfile(event) {
     event.preventDefault();
-    if (password.next.length < 6) return setNotice('Mật khẩu mới tối thiểu 6 ký tự.');
-    if (password.next !== password.confirm) return setNotice('Xác nhận mật khẩu chưa khớp.');
-    setPassword({ current: '', next: '', confirm: '' });
-    setNotice('Đổi mật khẩu là UI mock vì backend chưa có endpoint.');
+    setSaving(current => ({ ...current, profile: true }));
+    setMessage('profile', '', '');
+    try {
+      const result = await apiClient('/me/profile', {
+        method: 'PATCH',
+        body: JSON.stringify(profile)
+      });
+      setProfile(normalizeSettingsProfile(result, result.user || user));
+      if (result.user) updateUser?.(result.user);
+      setMessage('profile', 'success', 'Đã lưu hồ sơ. Dữ liệu sẽ được giữ sau khi tải lại trang.');
+    } catch (err) {
+      setMessage('profile', 'error', err.message || 'Không lưu được hồ sơ.');
+    } finally {
+      setSaving(current => ({ ...current, profile: false }));
+    }
+  }
+
+  async function savePassword(event) {
+    event.preventDefault();
+    setSaving(current => ({ ...current, password: true }));
+    setMessage('password', '', '');
+    try {
+      await apiClient('/me/password', {
+        method: 'POST',
+        body: JSON.stringify(password)
+      });
+      setPassword({ currentPassword: '', newPassword: '', confirmPassword: '' });
+      setMessage('password', 'success', 'Đã đổi mật khẩu và ghi nhận thông báo bảo mật.');
+    } catch (err) {
+      setMessage('password', 'error', err.message || 'Không đổi được mật khẩu.');
+    } finally {
+      setSaving(current => ({ ...current, password: false }));
+    }
+  }
+
+  async function updatePreference(key, value) {
+    const previous = prefs[key];
+    setPrefs(current => ({ ...current, [key]: value }));
+    setSavingPrefs(current => ({ ...current, [key]: true }));
+    setMessage('preferences', '', '');
+    try {
+      const result = await apiClient('/me/preferences', {
+        method: 'PATCH',
+        body: JSON.stringify({ [key]: value })
+      });
+      setPrefs(current => ({ ...current, ...(result.preferences || {}) }));
+      if (result.user) updateUser?.(result.user);
+      setMessage('preferences', 'success', 'Đã lưu cài đặt.');
+    } catch (err) {
+      setPrefs(current => ({ ...current, [key]: previous }));
+      setMessage('preferences', 'error', err.message || 'Không lưu được cài đặt. Thay đổi đã được hoàn tác.');
+    } finally {
+      setSavingPrefs(current => ({ ...current, [key]: false }));
+    }
+  }
+
+  async function updateThemePreference(value) {
+    const previous = prefs.theme;
+    setPrefs(current => ({ ...current, theme: value }));
+    setSavingPrefs(current => ({ ...current, theme: true }));
+    setMessage('preferences', '', '');
+    try {
+      const result = await apiClient('/me/preferences', {
+        method: 'PATCH',
+        body: JSON.stringify({ theme: value })
+      });
+      setPrefs(current => ({ ...current, ...(result.preferences || {}) }));
+      if (value !== theme) toggleTheme?.();
+      if (result.user) updateUser?.(result.user);
+      setMessage('preferences', 'success', 'Đã lưu giao diện.');
+    } catch (err) {
+      setPrefs(current => ({ ...current, theme: previous }));
+      setMessage('preferences', 'error', err.message || 'Không lưu được giao diện. Thay đổi đã được hoàn tác.');
+    } finally {
+      setSavingPrefs(current => ({ ...current, theme: false }));
+    }
+  }
+
+  async function logoutEverywhere() {
+    setSaving(current => ({ ...current, logoutAll: true }));
+    setMessage('danger', '', '');
+    try {
+      await apiClient('/me/logout-all', { method: 'POST' });
+      logout?.();
+      navigate('/dang-nhap', { replace: true });
+    } catch (err) {
+      setMessage('danger', 'error', err.message || 'Không đăng xuất được các thiết bị.');
+      setSaving(current => ({ ...current, logoutAll: false }));
+    }
+  }
+
+  async function deactivateAccount(event) {
+    event.preventDefault();
+    setSaving(current => ({ ...current, danger: true }));
+    setMessage('danger', '', '');
+    try {
+      await apiClient('/me/deactivate', {
+        method: 'POST',
+        body: JSON.stringify({ password: danger.password })
+      });
+      logout?.();
+      navigate('/dang-nhap', { replace: true });
+    } catch (err) {
+      setMessage('danger', 'error', err.message || 'Không vô hiệu hóa được tài khoản.');
+      setSaving(current => ({ ...current, danger: false }));
+    }
+  }
+
+  if (initialLoading) {
+    return (
+      <div className="acct-page">
+        <PageHead title="Cài đặt tài khoản" subtitle="Đang tải hồ sơ, bảo mật, thông báo và quyền riêng tư." />
+        <AccountLoading />
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="acct-page">
+        <PageHead title="Cài đặt tài khoản" subtitle="Không thể tải dữ liệu cài đặt từ backend." />
+        <div className="acct-panel acct-settings-error">
+          <h2>Không tải được cài đặt</h2>
+          <p>{loadError}</p>
+          <button type="button" onClick={loadSettings}>Thử lại</button>
+        </div>
+      </div>
+    );
   }
 
   return (
-    <div className="acct-page">
-      {notice && <div className="acct-success">{notice}</div>}
-      <PageHead title="Cài đặt tài khoản" subtitle="Quản lý hồ sơ, bảo mật, thông báo và quyền riêng tư." />
-      <div className="acct-settings-grid">
-        <form className="acct-panel acct-settings-form" onSubmit={saveProfile}>
-          <h2>Thông tin cá nhân</h2>
-          <img src={profile.avatar || coverFallback} alt="avatar" onError={handleImageError} />
-          <label>Avatar URL<input value={profile.avatar} onChange={event => setProfile({ ...profile, avatar: event.target.value })} /></label>
-          <label>Tên hiển thị<input value={profile.name} onChange={event => setProfile({ ...profile, name: event.target.value })} /></label>
-          <label>Email<input value={profile.email} disabled /></label>
-          <label>Số điện thoại<input value={profile.phone} onChange={event => setProfile({ ...profile, phone: event.target.value })} placeholder="Chưa cập nhật" /></label>
-          <button type="submit">Lưu hồ sơ</button>
-        </form>
-        <form className="acct-panel acct-settings-form" onSubmit={savePassword}>
+    <div className="acct-page acct-settings-page">
+      <PageHead title="Cài đặt tài khoản" subtitle="Quản lý hồ sơ, bảo mật, thông báo, quyền riêng tư và trải nghiệm đọc." />
+      <nav className="acct-settings-nav" aria-label="Điều hướng cài đặt">
+        {settingsNav.map(([id, label]) => <a key={id} href={`#${id}`}>{label}</a>)}
+      </nav>
+
+      <form id="profile" className="acct-panel acct-settings-section acct-settings-form" onSubmit={saveProfile}>
+        <div className="acct-settings-section-head">
+          <span>Hồ sơ cá nhân</span>
+          <h2>Thông tin công khai và liên hệ</h2>
+        </div>
+        <SettingsMessage state={messages.profile} />
+        <div className="acct-media-preview">
+          <img src={profile.avatar || '/images/logo.png'} alt="Ảnh đại diện hiện tại" onError={handleImageError} />
+          <div style={{ backgroundImage: `url(${profile.cover || coverFallback})` }} aria-label="Ảnh bìa hiện tại" />
+        </div>
+        <div className="acct-settings-fields two">
+          <label>Tên hiển thị<input required maxLength="80" value={profile.name} onChange={event => patchProfile({ name: event.target.value })} /></label>
+          <label>Email<input required type="email" value={profile.email} onChange={event => patchProfile({ email: event.target.value })} /></label>
+          <label>Số điện thoại<input value={profile.phone} onChange={event => patchProfile({ phone: event.target.value })} placeholder="+84..." /></label>
+          <label>Ngày sinh<input type="date" value={profile.birthday} onChange={event => patchProfile({ birthday: event.target.value })} /></label>
+          <label>Giới tính<select value={profile.gender} onChange={event => patchProfile({ gender: event.target.value })}><option value="">Chưa chọn</option><option value="female">Nữ</option><option value="male">Nam</option><option value="other">Khác</option><option value="prefer-not">Không công khai</option></select></label>
+          <label>Website<input type="url" value={profile.website} onChange={event => patchProfile({ website: event.target.value })} placeholder="https://example.com" /></label>
+          <label>Avatar URL<input type="url" value={profile.avatar} onChange={event => patchProfile({ avatar: event.target.value })} placeholder="https://..." /></label>
+          <label>Cover URL<input type="url" value={profile.cover} onChange={event => patchProfile({ cover: event.target.value })} placeholder="https://..." /></label>
+        </div>
+        <label>Địa chỉ<input maxLength="200" value={profile.address} onChange={event => patchProfile({ address: event.target.value })} placeholder="Tỉnh/thành phố hoặc địa chỉ liên hệ" /></label>
+        <label>Giới thiệu<textarea maxLength="500" rows="5" value={profile.bio} onChange={event => patchProfile({ bio: event.target.value })} placeholder="Viết ngắn gọn về bạn" /></label>
+        <div className="acct-social-links">
+          <h3>Social links</h3>
+          <div className="acct-settings-fields two">
+            {socialLinkFields.map(([key, label]) => <label key={key}>{label}<input type="url" value={profile.socialLinks[key] || ''} onChange={event => patchSocialLink(key, event.target.value)} placeholder="https://..." /></label>)}
+          </div>
+        </div>
+        <button type="submit" disabled={saving.profile}>{saving.profile ? 'Đang lưu...' : 'Lưu hồ sơ'}</button>
+      </form>
+
+      <form id="security" className="acct-panel acct-settings-section acct-settings-form" onSubmit={savePassword}>
+        <div className="acct-settings-section-head">
+          <span>Bảo mật</span>
           <h2>Đổi mật khẩu</h2>
-          <label>Mật khẩu hiện tại<input type="password" value={password.current} onChange={event => setPassword({ ...password, current: event.target.value })} /></label>
-          <label>Mật khẩu mới<input type="password" value={password.next} onChange={event => setPassword({ ...password, next: event.target.value })} /></label>
-          <label>Xác nhận mật khẩu<input type="password" value={password.confirm} onChange={event => setPassword({ ...password, confirm: event.target.value })} /></label>
-          <button type="submit">Đổi mật khẩu</button>
-        </form>
-        <section className="acct-panel acct-settings-form">
-          <h2>Thông báo</h2>
-          {[
-            ['email', 'Email'],
-            ['web', 'Web realtime'],
-            ['chapters', 'Chương mới'],
-            ['comments', 'Bình luận'],
-            ['transactions', 'Giao dịch']
-          ].map(([key, label]) => <label className="acct-switch" key={key}><input type="checkbox" checked={prefs[key]} onChange={event => setPrefs({ ...prefs, [key]: event.target.checked })} /> {label}</label>)}
-        </section>
-        <section className="acct-panel acct-settings-form">
-          <h2>Giao diện & riêng tư</h2>
-          <label>Chủ đề<button type="button" onClick={toggleTheme}>{theme === 'dark' ? 'Tối' : 'Sáng'} · bấm để đổi</button></label>
-          <label>Ngôn ngữ<select value={prefs.language} onChange={event => setPrefs({ ...prefs, language: event.target.value })}><option value="vi">Tiếng Việt</option><option value="en">English</option></select></label>
-          <label>Quyền riêng tư<select value={prefs.privacy} onChange={event => setPrefs({ ...prefs, privacy: event.target.value })}><option value="public">Công khai hoạt động</option><option value="private">Riêng tư</option></select></label>
-          <button type="button" className="danger" onClick={() => setNotice('Yêu cầu xóa dữ liệu là UI mock, cần endpoint backend để xử lý thật.')}>Yêu cầu xóa dữ liệu</button>
-        </section>
-      </div>
+        </div>
+        <SettingsMessage state={messages.password} />
+        <div className="acct-password-policy" aria-live="polite">
+          <strong>Chính sách mật khẩu</strong>
+          <p>Tối thiểu 8 ký tự, có chữ hoa, chữ thường, số và ký tự đặc biệt. Mật khẩu mới không được trùng mật khẩu hiện tại.</p>
+        </div>
+        <div className="acct-settings-fields three">
+          <label>Mật khẩu hiện tại<input required type="password" autoComplete="current-password" value={password.currentPassword} onChange={event => setPassword({ ...password, currentPassword: event.target.value })} /></label>
+          <label>Mật khẩu mới<input required type="password" autoComplete="new-password" value={password.newPassword} onChange={event => setPassword({ ...password, newPassword: event.target.value })} /></label>
+          <label>Xác nhận mật khẩu<input required type="password" autoComplete="new-password" value={password.confirmPassword} onChange={event => setPassword({ ...password, confirmPassword: event.target.value })} /></label>
+        </div>
+        <button type="submit" disabled={saving.password}>{saving.password ? 'Đang đổi...' : 'Đổi mật khẩu'}</button>
+      </form>
+
+      <section id="notifications" className="acct-panel acct-settings-section acct-settings-form">
+        <div className="acct-settings-section-head">
+          <span>Thông báo</span>
+          <h2>Kênh và loại thông báo</h2>
+        </div>
+        <SettingsMessage state={messages.preferences} />
+        <div className="acct-toggle-list">
+          {notificationPreferenceFields.map(([key, label]) => (
+            <label className="acct-switch acct-toggle-row" key={key}>
+              <input type="checkbox" checked={Boolean(prefs[key])} disabled={Boolean(savingPrefs[key])} aria-label={label} onChange={event => updatePreference(key, event.target.checked)} />
+              <span><b>{label}</b><small>{savingPrefs[key] ? 'Đang lưu...' : prefs[key] ? 'Đang bật' : 'Đang tắt'}</small></span>
+            </label>
+          ))}
+        </div>
+      </section>
+
+      <section id="privacy" className="acct-panel acct-settings-section acct-settings-form">
+        <div className="acct-settings-section-head">
+          <span>Quyền riêng tư</span>
+          <h2>Kiểm soát dữ liệu hiển thị công khai</h2>
+        </div>
+        <SettingsMessage state={messages.preferences} />
+        <div className="acct-toggle-list">
+          {privacyPreferenceFields.map(([key, label]) => (
+            <label className="acct-switch acct-toggle-row" key={key}>
+              <input type="checkbox" checked={Boolean(prefs[key])} disabled={Boolean(savingPrefs[key])} aria-label={label} onChange={event => updatePreference(key, event.target.checked)} />
+              <span><b>{label}</b><small>{savingPrefs[key] ? 'Đang lưu...' : prefs[key] ? 'Công khai' : 'Riêng tư'}</small></span>
+            </label>
+          ))}
+        </div>
+      </section>
+
+      <section id="appearance" className="acct-panel acct-settings-section acct-settings-form">
+        <div className="acct-settings-section-head">
+          <span>Giao diện/đọc truyện</span>
+          <h2>Trải nghiệm hiển thị</h2>
+        </div>
+        <SettingsMessage state={messages.preferences} />
+        <div className="acct-settings-fields two">
+          <label>Chủ đề<select value={theme === 'dark' ? 'dark' : 'light'} disabled={Boolean(savingPrefs.theme)} onChange={event => updateThemePreference(event.target.value)}><option value="light">Sáng</option><option value="dark">Tối</option></select></label>
+          <label>Ngôn ngữ<select value={prefs.language} disabled={Boolean(savingPrefs.language)} onChange={event => updatePreference('language', event.target.value)}><option value="vi">Tiếng Việt</option><option value="en">English</option></select></label>
+          <label>Cỡ chữ đọc truyện<input type="range" min="14" max="28" value={prefs.readerFontSize} disabled={Boolean(savingPrefs.readerFontSize)} onChange={event => updatePreference('readerFontSize', Number(event.target.value))} /><small>{prefs.readerFontSize}px</small></label>
+          <label>Khoảng dòng<input type="range" min="1.4" max="2.4" step="0.1" value={prefs.readerLineHeight} disabled={Boolean(savingPrefs.readerLineHeight)} onChange={event => updatePreference('readerLineHeight', Number(event.target.value))} /><small>{prefs.readerLineHeight}</small></label>
+          <label>Nền đọc<select value={prefs.readerBackground} disabled={Boolean(savingPrefs.readerBackground)} onChange={event => updatePreference('readerBackground', event.target.value)}><option value="default">Mặc định</option><option value="paper">Giấy</option><option value="sepia">Sepia</option><option value="night">Đêm</option></select></label>
+        </div>
+      </section>
+
+      <section id="danger" className="acct-panel acct-settings-section acct-settings-form acct-danger-zone">
+        <div className="acct-settings-section-head">
+          <span>Vùng nguy hiểm</span>
+          <h2>Phiên đăng nhập và trạng thái tài khoản</h2>
+        </div>
+        <SettingsMessage state={messages.danger} />
+        <div className="acct-danger-actions">
+          <div>
+            <h3>Đăng xuất mọi thiết bị</h3>
+            <p>Thu hồi token hiện tại và các phiên cũ bằng cách tăng phiên bản đăng nhập của tài khoản.</p>
+            <button type="button" className="danger" disabled={saving.logoutAll} onClick={logoutEverywhere}>{saving.logoutAll ? 'Đang đăng xuất...' : 'Đăng xuất mọi thiết bị'}</button>
+          </div>
+          <form onSubmit={deactivateAccount}>
+            <h3>Vô hiệu hóa tài khoản</h3>
+            <p>Tài khoản sẽ bị khóa đăng nhập. Dữ liệu nội dung không bị xóa cứng trong thao tác này.</p>
+            <label>Mật khẩu xác nhận<input type="password" value={danger.password} onChange={event => setDanger({ ...danger, password: event.target.value })} /></label>
+            <label>Nhập VO HIEU HOA<input value={danger.phrase} onChange={event => setDanger({ ...danger, phrase: event.target.value })} /></label>
+            <button type="submit" className="danger" disabled={saving.danger || danger.phrase !== 'VO HIEU HOA' || !danger.password}>{saving.danger ? 'Đang xử lý...' : 'Vô hiệu hóa tài khoản'}</button>
+          </form>
+        </div>
+      </section>
     </div>
   );
 }

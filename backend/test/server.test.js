@@ -121,6 +121,196 @@ test('login returns token and user', async () => {
   assert.equal(data.user.email, 'user@example.com');
 });
 
+test('account profile endpoint validates and persists profile fields', async () => {
+  const token = await loginToken('user@example.com');
+  const headers = { Authorization: `Bearer ${token}` };
+
+  const invalidEmail = await request('/api/me/profile', {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify({ name: 'Bạn đọc Đậu Đỏ', email: 'bad-email' })
+  });
+  assert.equal(invalidEmail.response.status, 400);
+  assert.match(invalidEmail.data.message, /Email/i);
+
+  const duplicateEmail = await request('/api/me/profile', {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify({ name: 'Bạn đọc Đậu Đỏ', email: 'admin@example.com' })
+  });
+  assert.equal(duplicateEmail.response.status, 400);
+  assert.match(duplicateEmail.data.message, /tồn tại/i);
+
+  const futureBirthday = await request('/api/me/profile', {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify({ name: 'Bạn đọc Đậu Đỏ', email: 'user@example.com', birthday: '2999-01-01' })
+  });
+  assert.equal(futureBirthday.response.status, 400);
+  assert.match(futureBirthday.data.message, /tương lai/i);
+
+  const invalidWebsite = await request('/api/me/profile', {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify({ name: 'Bạn đọc Đậu Đỏ', email: 'user@example.com', website: 'ftp://example.com' })
+  });
+  assert.equal(invalidWebsite.response.status, 400);
+  assert.match(invalidWebsite.data.message, /http\/https/i);
+
+  const unknownField = await request('/api/me/profile', {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify({ name: 'Bạn đọc Đậu Đỏ', email: 'user@example.com', role: 'admin' })
+  });
+  assert.equal(unknownField.response.status, 400);
+
+  const saved = await request('/api/me/profile', {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify({
+      name: 'Bạn đọc Production',
+      email: 'user@example.com',
+      phone: '+84 912 345 678',
+      birthday: '2000-05-20',
+      gender: 'prefer-not',
+      address: 'TP. Hồ Chí Minh',
+      website: 'https://daudotruyen.vn',
+      avatar: 'https://example.com/avatar.png',
+      cover: 'https://example.com/cover.png',
+      bio: 'Hồ sơ test',
+      socialLinks: { facebook: 'https://facebook.com/daudo' }
+    })
+  });
+  assert.equal(saved.response.status, 200);
+  assert.equal(saved.data.profile.name, 'Bạn đọc Production');
+  assert.equal(saved.data.profile.socialLinks.facebook, 'https://facebook.com/daudo');
+
+  const reloaded = await request('/api/me/profile', { headers });
+  assert.equal(reloaded.response.status, 200);
+  assert.equal(reloaded.data.profile.website, 'https://daudotruyen.vn');
+  assert.equal(reloaded.data.profile.birthday, '2000-05-20');
+});
+
+test('account preferences endpoint whitelists keys and persists values', async () => {
+  const token = await loginToken('user@example.com');
+  const headers = { Authorization: `Bearer ${token}` };
+
+  const unknown = await request('/api/me/preferences', {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify({ unknownPreference: true })
+  });
+  assert.equal(unknown.response.status, 400);
+
+  const saved = await request('/api/me/preferences', {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify({ promoNotifications: false, publicBookmarks: true, readerFontSize: 22, readerLineHeight: 2 })
+  });
+  assert.equal(saved.response.status, 200);
+  assert.equal(saved.data.preferences.promoNotifications, false);
+  assert.equal(saved.data.preferences.publicBookmarks, true);
+  assert.equal(saved.data.preferences.readerFontSize, 22);
+  assert.ok(saved.data.preferences.updatedAt);
+
+  const reloaded = await request('/api/me/preferences', { headers });
+  assert.equal(reloaded.data.preferences.promoNotifications, false);
+  assert.equal(reloaded.data.preferences.publicBookmarks, true);
+});
+
+test('password endpoint enforces policy, changes password, and creates security notification', async () => {
+  const register = await request('/api/auth/register', {
+    method: 'POST',
+    body: JSON.stringify({ name: 'Password Test', email: 'password-test@example.com', password: '123456' })
+  });
+  assert.equal(register.response.status, 201);
+  const headers = { Authorization: `Bearer ${register.data.token}` };
+
+  const wrongCurrent = await request('/api/me/password', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ currentPassword: 'wrong', newPassword: 'Strong!123', confirmPassword: 'Strong!123' })
+  });
+  assert.equal(wrongCurrent.response.status, 400);
+  assert.match(wrongCurrent.data.message, /hiện tại/i);
+
+  const weak = await request('/api/me/password', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ currentPassword: '123456', newPassword: 'weakpass', confirmPassword: 'weakpass' })
+  });
+  assert.equal(weak.response.status, 400);
+  assert.match(weak.data.message, /chữ hoa|số|đặc biệt|8/i);
+
+  const mismatch = await request('/api/me/password', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ currentPassword: '123456', newPassword: 'Strong!123', confirmPassword: 'Strong!124' })
+  });
+  assert.equal(mismatch.response.status, 400);
+  assert.match(mismatch.data.message, /khớp/i);
+
+  const changed = await request('/api/me/password', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ currentPassword: '123456', newPassword: 'Strong!123', confirmPassword: 'Strong!123' })
+  });
+  assert.equal(changed.response.status, 200);
+
+  const loginNew = await request('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ email: 'password-test@example.com', password: 'Strong!123' })
+  });
+  assert.equal(loginNew.response.status, 200);
+
+  const notifications = await request('/api/notifications?type=security', { headers });
+  assert.ok(notifications.data.notifications.some(item => item.type === 'security'));
+});
+
+test('logout-all invalidates the current token version', async () => {
+  const register = await request('/api/auth/register', {
+    method: 'POST',
+    body: JSON.stringify({ name: 'Logout Test', email: 'logout-test@example.com', password: '123456' })
+  });
+  assert.equal(register.response.status, 201);
+  const headers = { Authorization: `Bearer ${register.data.token}` };
+
+  const logoutAll = await request('/api/me/logout-all', { method: 'POST', headers });
+  assert.equal(logoutAll.response.status, 200);
+
+  const me = await request('/api/auth/me', { headers });
+  assert.equal(me.response.status, 401);
+});
+
+test('deactivate account requires password and blocks future login', async () => {
+  const register = await request('/api/auth/register', {
+    method: 'POST',
+    body: JSON.stringify({ name: 'Deactivate Test', email: 'deactivate-test@example.com', password: '123456' })
+  });
+  assert.equal(register.response.status, 201);
+  const headers = { Authorization: `Bearer ${register.data.token}` };
+
+  const wrong = await request('/api/me/deactivate', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ password: 'wrong' })
+  });
+  assert.equal(wrong.response.status, 400);
+
+  const deactivated = await request('/api/me/deactivate', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ password: '123456' })
+  });
+  assert.equal(deactivated.response.status, 200);
+
+  const login = await request('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ email: 'deactivate-test@example.com', password: '123456' })
+  });
+  assert.equal(login.response.status, 403);
+});
+
 test('story detail includes chapters', async () => {
   const { response, data } = await request('/api/stories/dau-pha-thuong-khung');
   assert.equal(response.status, 200);
@@ -400,6 +590,169 @@ test('combo purchase unlocks premium chapters', async () => {
   assert.equal(chapter.response.status, 200);
   assert.equal(chapter.data.unlocked, true);
   assert.doesNotMatch(chapter.data.chapter.content, /Đoạn xem trước/);
+});
+
+test('notification APIs require auth, isolate users, and persist read/delete state', async () => {
+  const userToken = await loginToken('user@example.com');
+  const adminToken = await loginToken('admin@example.com');
+  const db = readTestDb();
+  db.notifications.unshift(
+    { id: 'noti_private_user', userId: 'u_user', type: 'system', title: 'User private', body: 'Only user can see this', link: '/account', read: false, createdAt: new Date().toISOString() },
+    { id: 'noti_private_admin', userId: 'u_admin', type: 'system', title: 'Admin private', body: 'Only admin can see this', link: '/admin', read: false, createdAt: new Date().toISOString() }
+  );
+  writeTestDb(db);
+
+  const unauthenticated = await request('/api/notifications');
+  assert.equal(unauthenticated.response.status, 401);
+
+  const userList = await request('/api/notifications?limit=20', {
+    headers: { Authorization: `Bearer ${userToken}` }
+  });
+  assert.equal(userList.response.status, 200);
+  assert.ok(userList.data.notifications.some(item => item.id === 'noti_private_user'));
+  assert.ok(!userList.data.notifications.some(item => item.id === 'noti_private_admin'));
+
+  const beforeCount = await request('/api/notifications/unread-count', {
+    headers: { Authorization: `Bearer ${userToken}` }
+  });
+  const forbiddenRead = await request('/api/notifications/noti_private_admin/read', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${userToken}` }
+  });
+  assert.equal(forbiddenRead.response.status, 404);
+
+  const readOne = await request('/api/notifications/noti_private_user/read', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${userToken}` }
+  });
+  assert.equal(readOne.response.status, 200);
+  assert.equal(readOne.data.notification.read, true);
+  assert.equal(readOne.data.unreadCount, beforeCount.data.count - 1);
+
+  const reloaded = await request('/api/notifications?limit=20', {
+    headers: { Authorization: `Bearer ${userToken}` }
+  });
+  assert.equal(reloaded.data.notifications.find(item => item.id === 'noti_private_user').read, true);
+
+  const forbiddenDelete = await request('/api/notifications/noti_private_admin', {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${userToken}` }
+  });
+  assert.equal(forbiddenDelete.response.status, 404);
+
+  const deleteOwn = await request('/api/notifications/noti_private_user', {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${userToken}` }
+  });
+  assert.equal(deleteOwn.response.status, 200);
+
+  const adminList = await request('/api/notifications?limit=20', {
+    headers: { Authorization: `Bearer ${adminToken}` }
+  });
+  assert.ok(adminList.data.notifications.some(item => item.id === 'noti_private_admin'));
+});
+
+test('read-all clears unread notification count', async () => {
+  const userToken = await loginToken('user@example.com');
+  const db = readTestDb();
+  db.notifications.unshift(
+    { id: 'noti_read_all_1', userId: 'u_user', type: 'system', title: 'A', body: 'A', read: false, createdAt: new Date().toISOString() },
+    { id: 'noti_read_all_2', userId: 'u_user', type: 'wallet', title: 'B', body: 'B', read: false, createdAt: new Date().toISOString() }
+  );
+  writeTestDb(db);
+
+  const readAll = await request('/api/notifications/read-all', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${userToken}` }
+  });
+  assert.equal(readAll.response.status, 200);
+  assert.equal(readAll.data.unreadCount, 0);
+
+  const count = await request('/api/notifications/unread-count', {
+    headers: { Authorization: `Bearer ${userToken}` }
+  });
+  assert.equal(count.data.count, 0);
+});
+
+test('user actions create notifications for the correct recipients', async () => {
+  const userToken = await loginToken('user@example.com');
+  const adminToken = await loginToken('admin@example.com');
+
+  const topup = await request('/api/wallet/topup', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${userToken}` },
+    body: JSON.stringify({ packageId: 'seed-10' })
+  });
+  assert.equal(topup.response.status, 200);
+
+  const unlock = await request('/api/chapters/c_s1_5/unlock', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${userToken}` }
+  });
+  assert.equal(unlock.response.status, 200);
+
+  const comment = await request('/api/stories/s1/comments', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${userToken}` },
+    body: JSON.stringify({ body: 'Thong bao cho chu truyen' })
+  });
+  assert.equal(comment.response.status, 201);
+
+  const follow = await request('/api/stories/s2/follow', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${userToken}` }
+  });
+  assert.equal(follow.response.status, 200);
+  assert.equal(follow.data.followed, true);
+
+  const userNotifications = await request('/api/notifications?limit=50', {
+    headers: { Authorization: `Bearer ${userToken}` }
+  });
+  assert.ok(userNotifications.data.notifications.some(item => item.type === 'wallet'));
+  assert.ok(userNotifications.data.notifications.some(item => item.type === 'purchase' && item.chapterId === 'c_s1_5'));
+  assert.ok(!userNotifications.data.notifications.some(item => item.type === 'comment' && item.actorId === 'u_user'));
+
+  const adminNotifications = await request('/api/notifications?limit=50', {
+    headers: { Authorization: `Bearer ${adminToken}` }
+  });
+  assert.ok(adminNotifications.data.notifications.some(item => item.type === 'comment' && item.actorId === 'u_user' && item.storyId === 's1'));
+  assert.ok(adminNotifications.data.notifications.some(item => item.type === 'follow' && item.actorId === 'u_user' && item.storyId === 's2'));
+});
+
+test('chapter publish notifications go only to followers with chapter notifications enabled', async () => {
+  const userToken = await loginToken('user@example.com');
+  const adminToken = await loginToken('admin@example.com');
+
+  const first = await request('/api/admin/stories/s7/chapters', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({ title: 'Follower notified chapter', content: 'New approved content for followers.', status: 'approved' })
+  });
+  assert.equal(first.response.status, 201);
+
+  const chapterNotifications = await request('/api/notifications?type=chapter&limit=20', {
+    headers: { Authorization: `Bearer ${userToken}` }
+  });
+  assert.ok(chapterNotifications.data.notifications.some(item => item.chapterId === first.data.chapter.id));
+
+  const prefs = await request('/api/me/notification-preferences', {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${userToken}` },
+    body: JSON.stringify({ chapterNotifications: false })
+  });
+  assert.equal(prefs.response.status, 200);
+
+  const second = await request('/api/admin/stories/s7/chapters', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({ title: 'Muted follower chapter', content: 'This should respect chapter preferences.', status: 'approved' })
+  });
+  assert.equal(second.response.status, 201);
+
+  const mutedNotifications = await request('/api/notifications?type=chapter&limit=50', {
+    headers: { Authorization: `Bearer ${userToken}` }
+  });
+  assert.ok(!mutedNotifications.data.notifications.some(item => item.chapterId === second.data.chapter.id));
 });
 
 test('admin can review reports', async () => {

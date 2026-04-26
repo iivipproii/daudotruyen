@@ -28,7 +28,14 @@ import { AuthorDashboard } from './components/author/AuthorDashboard.jsx';
 import { AdminDashboard as AdminCMSDashboard, NotificationPage as CMSNotificationPage } from './components/admin/AdminCMS.jsx';
 import { PageSeo } from './components/shared/Seo.jsx';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:4000/api';
+const API_BASE = (() => {
+  const configured = String(import.meta.env.VITE_API_URL || '').trim();
+  if (configured) return configured.replace(/\/+$/, '');
+  if (import.meta.env.PROD) {
+    throw new Error('Missing VITE_API_URL for production build.');
+  }
+  return '/api';
+})();
 const AuthContext = createContext(null);
 const ThemeContext = createContext(null);
 const STORY_CATEGORIES = [
@@ -384,12 +391,12 @@ function WalletRoute() {
 }
 
 function AccountSettingsRoute() {
-  const { user, updateUser } = useAuth();
+  const { user, updateUser, logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
   return (
     <>
       <PageSeo title="Cài đặt tài khoản" description="Cập nhật hồ sơ, mật khẩu, thông báo, giao diện, ngôn ngữ và quyền riêng tư." canonical="/settings" />
-      <AccountSettings user={user} updateUser={updateUser} theme={theme} toggleTheme={toggleTheme} />
+      <AccountSettings user={user} updateUser={updateUser} logout={logout} theme={theme} toggleTheme={toggleTheme} apiClient={api} />
     </>
   );
 }
@@ -737,7 +744,7 @@ function PublicHeaderEnhanced() {
   };
 
   const profileMenuItems = [
-    { icon: '◉', label: 'Hồ sơ cá nhân', to: '/ho-so' },
+    { icon: '◉', label: 'Hồ sơ cá nhân', to: '/settings#profile' },
     { icon: '▰', label: 'Tủ truyện', to: '/bookmarks' },
     { icon: '◒', label: 'Đăng truyện mới', to: '/dang-truyen', adminOnly: true },
     { icon: '▣', label: 'Quản lý truyện', to: '/admin', adminOnly: true },
@@ -890,7 +897,7 @@ function PublicHeaderEnhanced() {
                         ))}
                       </div>
                       <div className="dd-profile-list dd-profile-footer-list">
-                        <Link to="/ho-so" onClick={closeMenu}><span>⚙</span><strong>Cài đặt</strong></Link>
+                        <Link to="/settings#profile" onClick={closeMenu}><span>⚙</span><strong>Cài đặt</strong></Link>
                         <button type="button" onClick={() => { logout(); closeMenu(); }}>
                           <span>↵</span>
                           <strong>Đăng xuất</strong>
@@ -926,7 +933,7 @@ function PublishShell({ children }) {
 function Protected({ children, admin = false }) {
   const { user, loading } = useAuth();
   if (loading) return <Loader />;
-  if (!user) return <Navigate to="/login" replace />;
+  if (!user) return <Navigate to="/dang-nhap" replace />;
   if (admin && user.role !== 'admin') return <Navigate to="/" replace />;
   return children;
 }
@@ -2266,11 +2273,20 @@ function Admin() {
 function PublishSidebar({ user }) {
   const location = useLocation();
   const groups = [
-    ['TÀI KHOẢN', ['Hồ sơ cá nhân', 'Bảo mật', 'Thông báo', 'Ví của tôi']],
+    ['TÀI KHOẢN', ['Hồ sơ cá nhân', 'Bảo mật', 'Thông báo', 'Quyền riêng tư', 'Giao diện', 'Ví của tôi']],
     ['SÁNG TÁC', ['Quản lý truyện', 'Đăng truyện mới', 'Kiểm tra chương lỗi']],
     ['NỘI DUNG', ['Thư viện', 'Đã đọc', 'Yêu thích']],
     ['THỐNG KÊ', ['Quảng bá', 'Độc giả', 'Doanh thu']]
   ];
+  const sidebarLinks = {
+    'Hồ sơ cá nhân': '/settings#profile',
+    'Bảo mật': '/settings#security',
+    'Thông báo': '/settings#notifications',
+    'Quyền riêng tư': '/settings#privacy',
+    'Giao diện': '/settings#appearance',
+    'Ví của tôi': '/wallet'
+  };
+  const currentPath = `${location.pathname}${location.hash || ''}`;
 
   return (
     <aside className="publish-sidebar" aria-label="Bảng điều khiển đăng truyện">
@@ -2282,7 +2298,11 @@ function PublishSidebar({ user }) {
       {groups.map(([group, items]) => (
         <div className="sidebar-group" key={group}>
           <strong>{group}</strong>
-          {items.map(item => <span className={item === 'Đăng truyện mới' && location.pathname === '/dang-truyen' ? 'active' : ''} key={item}>{item}</span>)}
+          {items.map(item => {
+            const to = sidebarLinks[item];
+            const className = to && currentPath === to ? 'active' : item === 'Đăng truyện mới' && location.pathname === '/dang-truyen' ? 'active' : '';
+            return to ? <Link className={className} to={to} key={item}>{item}</Link> : <span className={className} key={item}>{item}</span>;
+          })}
         </div>
       ))}
       <div className="sidebar-group">

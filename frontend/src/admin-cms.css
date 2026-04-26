@@ -743,6 +743,32 @@
   margin: 4px 0 6px;
 }
 
+.cms-notification-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cms-notification-actions button {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--prod-line);
+  border-radius: 999px;
+  background: var(--prod-surface);
+  color: var(--prod-text);
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.cms-notification-actions button:hover,
+.cms-notification-actions button:focus-visible {
+  border-color: rgba(239, 63, 95, .25);
+  color: var(--prod-primary);
+  outline: 0;
+}
+
 @media (max-width: 1180px) {
   .cms-stats-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
