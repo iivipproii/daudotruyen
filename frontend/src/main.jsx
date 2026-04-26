@@ -145,10 +145,11 @@ function RouteScrollReset() {
 function Shell({ children }) {
   const location = useLocation();
   const publishing = location.pathname === '/dang-truyen';
+  const authPage = location.pathname === '/dang-nhap' || location.pathname === '/dang-ky';
   const home = location.pathname === '/';
   const ranking = location.pathname === '/xep-hang';
   const showHeader = home || ranking;
-  const showSidebar = !showHeader;
+  const showSidebar = !showHeader && !authPage;
 
   if (publishing) {
     return <PublishShell>{children}</PublishShell>;
