@@ -7,6 +7,40 @@ import './publish.css';
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:4000/api';
 const AuthContext = createContext(null);
 const ThemeContext = createContext(null);
+const STORY_CATEGORIES = [
+  'TiÃªn Hiá»‡p', 'Kiáº¿m Hiá»‡p', 'Huyá»n Huyá»…n', 'Ká»³ áº¢o', 'Tu TiÃªn', 'Tu ChÃ¢n', 'Phong Tháº§n',
+  'Hiá»‡n Äáº¡i & ÄÃ´ Thá»‹', 'ÄÃ´ Thá»‹', 'Hiá»‡n Äáº¡i', 'Khoa Huyá»…n', 'Há»‡ Thá»‘ng', 'Äá»i Sá»‘ng', 'Doanh TrÆ°á»ng', 'Giáº£i TrÃ­', 'Thá»ƒ Thao', 'Truyá»‡n Teen',
+  'TÃ¬nh Cáº£m & Romance', 'NgÃ´n TÃ¬nh', 'Äam Má»¹', 'BÃ¡ch Há»£p', 'TÃ¬nh Cáº£m', 'Romance', 'Há»c ÄÆ°á»ng', 'VÄƒn PhÃ²ng', 'Tá»•ng TÃ i', 'NgÆ°á»£c', 'Sá»§ng', 'Ná»¯ CÆ°á»ng', 'Ná»¯ Phá»¥',
+  'Äáº·c Biá»‡t & Fantasy', 'XuyÃªn KhÃ´ng', 'XuyÃªn Nhanh', 'Trá»ng Sinh', 'Dá»‹ Giá»›i', 'VÃµng Du', 'Máº¡t Tháº¿', 'Dá»‹ NÄƒng', 'SiÃªu Anh HÃ¹ng', 'Ma PhÃ¡p',
+  'HÃ nh Äá»™ng & PhiÃªu LÆ°u', 'HÃ nh Äá»™ng', 'PhiÃªu LÆ°u', 'ThÃ¡m Hiá»ƒm', 'Sinh Tá»“n', 'Zombie', 'QuÃ¡i Váº­t', 'SiÃªu NhiÃªn',
+  'Kinh Dá»‹ & BÃ­ áº¨n', 'Kinh Dá»‹', 'Ma Quá»·', 'Linh Dá»‹', 'Trinh ThÃ¡m', 'BÃ­ áº¨n', 'TÃ¢m LÃ½', 'Tá»™i Pháº¡m',
+  'Lá»‹ch Sá»­ & Cá»• Äáº¡i', 'Lá»‹ch Sá»­', 'Cá»• Äáº¡i', 'Cung ÄÃ¬nh', 'Cung Äáº¥u', 'HoÃ ng Gia', 'Chiáº¿n Tranh', 'QuÃ¢n Sá»±', 'Quan TrÆ°á»ng', 'VÃµ TÆ°á»›ng', 'ÄÃ´ng PhÆ°Æ¡ng',
+  'HÃ i HÆ°á»›c & Nháº¹ NhÃ ng', 'HÃ i HÆ°á»›c', 'HÃ i Ká»‹ch', 'Parody', 'Slice of Life', 'áº¤m Ãp', 'Gia ÄÃ¬nh', 'HÃ ng NgÃ y', 'Äiá»n VÄƒn', 'Gia Äáº¥u',
+  'Game & Technology', 'Game', 'VRMMO', 'LitRPG', 'CÃ´ng Nghá»‡', 'AI', 'Cyberpunk', 'TÆ°Æ¡ng Lai',
+  'Má»Ÿ rá»™ng', 'HE', 'SE', 'BE', 'OE', 'Ngá»t', 'Chá»¯a LÃ nh', 'NgÆ°á»£c Nam', 'NgÆ°á»£c Ná»¯', 'NgÆ°á»£c Luyáº¿n TÃ n TÃ¢m', 'Truy ThÃª', 'Tráº£ ThÃ¹', 'Váº£ Máº·t', 'Sáº£ng VÄƒn',
+  'CÆ°á»›i TrÆ°á»›c YÃªu Sau', 'CÆ°á»ng Thá»§ HÃ o Äoáº¡t', 'DÆ°á»¡ng ThÃª', 'HÃ o MÃ´n Tháº¿ Gia', 'GÆ°Æ¡ng Vá»¡ Láº¡i LÃ nh', 'GÆ°Æ¡ng Vá»¡ KhÃ´ng LÃ nh', 'Tháº¿ ThÃ¢n', 'Nam Phá»¥ ThÆ°á»£ng Vá»‹',
+  'KhÃ´ng CP', 'NgÃ´n TÃ¬nh Thá»±c Táº¿', 'Thanh XuÃ¢n VÆ°á»n TrÆ°á»ng', 'Há»c BÃ¡', 'Showbiz', 'BÃ¡c SÄ©', 'Cáº£nh SÃ¡t', 'QuÃ¢n NhÃ¢n', 'DÃ¢n Quá»‘c', 'Tháº­p NiÃªn', 'PhÆ°Æ¡ng ÄÃ´ng',
+  'HoÃ¡n Äá»•i ThÃ¢n XÃ¡c', 'Äá»c TÃ¢m', 'NhÃ¢n ThÃº', 'HÆ° Cáº¥u Ká»³ áº¢o', 'PhÃ©p Thuáº­t', 'XuyÃªn SÃ¡ch', 'CÃ³ Sá»­ Dá»¥ng AI',
+  'Quy táº¯c', 'Äá» Cá»­', 'Review truyá»‡n', 'Tiá»ƒu Thuyáº¿t', 'Truyá»‡n SÃ¡ng TÃ¡c', 'Truyá»‡n Viá»‡t', 'VÃ´ Tri',
+  'Ná»™i dung ngÆ°á»i lá»›n', 'Sáº¯c', 'H', 'H+', 'Cao H+ (*)',
+  'KhÃ¡c', 'PhÆ°Æ¡ng TÃ¢y', 'Light Novel', 'Viá»‡t Nam', 'Zhihu', 'Äoáº£n VÄƒn', 'Review SÃ¡ch'
+];
+
+const PUBLISH_STORY_CATEGORIES = [
+  'Tiên Hiệp', 'Kiếm Hiệp', 'Huyền Huyễn', 'Kỳ Ảo', 'Tu Tiên', 'Tu Chân', 'Phong Thần',
+  'Hiện Đại & Đô Thị', 'Đô Thị', 'Hiện Đại', 'Khoa Huyễn', 'Hệ Thống', 'Đời Sống', 'Doanh Trường', 'Giải Trí', 'Thể Thao', 'Truyện Teen',
+  'Tình Cảm & Romance', 'Ngôn Tình', 'Đam Mỹ', 'Bách Hợp', 'Tình Cảm', 'Romance', 'Học Đường', 'Văn Phòng', 'Tổng Tài', 'Ngược', 'Sủng', 'Nữ Cường', 'Nữ Phụ',
+  'Đặc Biệt & Fantasy', 'Xuyên Không', 'Xuyên Nhanh', 'Trọng Sinh', 'Dị Giới', 'Võng Du', 'Mạt Thế', 'Dị Năng', 'Siêu Anh Hùng', 'Ma Pháp',
+  'Hành Động & Phiêu Lưu', 'Hành Động', 'Phiêu Lưu', 'Thám Hiểm', 'Sinh Tồn', 'Zombie', 'Quái Vật', 'Siêu Nhiên',
+  'Kinh Dị & Bí Ẩn', 'Kinh Dị', 'Ma Quỷ', 'Linh Dị', 'Trinh Thám', 'Bí Ẩn', 'Tâm Lý', 'Tội Phạm',
+  'Lịch Sử & Cổ Đại', 'Lịch Sử', 'Cổ Đại', 'Cung Đình', 'Cung Đấu', 'Hoàng Gia', 'Chiến Tranh', 'Quân Sự', 'Quan Trường', 'Võ Tướng', 'Đông Phương',
+  'Hài Hước & Nhẹ Nhàng', 'Hài Hước', 'Hài Kịch', 'Parody', 'Slice of Life', 'Ấm Áp', 'Gia Đình', 'Hằng Ngày', 'Điền Văn', 'Gia Đấu',
+  'Game & Technology', 'Game', 'VRMMO', 'LitRPG', 'Công Nghệ', 'AI', 'Cyberpunk', 'Tương Lai',
+  'Mở rộng', 'HE', 'SE', 'BE', 'OE', 'Ngọt', 'Chữa Lành', 'Ngược Nam', 'Ngược Nữ', 'Truy Thê', 'Trả Thù', 'Vả Mặt', 'Sảng Văn',
+  'Không CP', 'Showbiz', 'Bác Sĩ', 'Cảnh Sát', 'Quân Nhân', 'Dân Quốc', 'Thập Niên', 'Phương Đông',
+  'Quy tắc', 'Đề Cử', 'Review truyện', 'Tiểu Thuyết', 'Truyện Sáng Tác', 'Truyện Việt',
+  'Khác', 'Phương Tây', 'Light Novel', 'Việt Nam', 'Zhihu', 'Đoản Văn', 'Review Sách'
+];
 
 async function api(path, options = {}) {
   const token = localStorage.getItem('daudo_token');
@@ -114,6 +148,7 @@ function App() {
               <Route path="/thong-bao" element={<Protected><Notifications /></Protected>} />
               <Route path="/ai-tools" element={<AiTools />} />
               <Route path="/dang-truyen" element={<Protected admin><StoryPublish /></Protected>} />
+              <Route path="/dang-truyen/them-nhieu-chuong" element={<Protected admin><BulkChapterPublish /></Protected>} />
               <Route path="/admin" element={<Protected admin><Admin /></Protected>} />
               <Route path="/lien-he" element={<StaticPage type="contact" />} />
               <Route path="/dieu-khoan" element={<StaticPage type="terms" />} />
@@ -144,8 +179,7 @@ function RouteScrollReset() {
 
 function Shell({ children }) {
   const location = useLocation();
-  const publishing = location.pathname === '/dang-truyen';
-  const home = location.pathname === '/';
+  const publishing = location.pathname.startsWith('/dang-truyen');
 
   if (publishing) {
     return <PublishShell>{children}</PublishShell>;
@@ -154,7 +188,7 @@ function Shell({ children }) {
   return (
     <div className="app-shell public-shell">
       <RouteScrollReset />
-      {home && <PublicHeaderEnhanced />}
+      <PublicHeaderEnhanced />
       <main className="container">{children}</main>
       <Footer />
     </div>
@@ -274,7 +308,7 @@ function PublicHeader() {
       <div className="userbar">
         {user ? (
           <>
-            <Link to="/ho-so" className="pill">🌱 {user.seeds} Đậu</Link>
+            <Link to="/ho-so" className="pill">🌱 {user.seeds} Hạt</Link>
             {user.role === 'admin' && <Link to="/dang-truyen" className="pill admin-pill">Đăng truyện</Link>}
             {user.role === 'admin' && <Link to="/admin" className="pill admin-pill">Admin</Link>}
             <button onClick={logout} className="ghost">Thoát</button>
@@ -289,7 +323,7 @@ function PublicHeader() {
 
 
 function Footer() {
-  const readerLinks = ['Trang chủ', 'Danh sách truyện', 'Thể loại', 'Bảng xếp hạng', 'Truyện ngắn', 'Hoàn thành', 'Ví Đậu'];
+  const readerLinks = ['Trang chủ', 'Danh sách truyện', 'Thể loại', 'Bảng xếp hạng', 'Truyện ngắn', 'Hoàn thành', 'Ví Hạt Đậu'];
   const authorLinks = ['Khu vực tác giả', 'Đăng truyện mới', 'Quản lý truyện', 'Thống kê doanh thu', 'AI Tools Beta', 'Vinh danh dịch giả'];
   const supportLinks = ['Liên hệ', 'Phản hồi / Báo lỗi', 'Câu hỏi thường gặp', 'Điều khoản sử dụng', 'Chính sách bảo mật', 'Xóa dữ liệu', 'Quy định nội dung'];
 
@@ -612,7 +646,7 @@ function PublicHeaderEnhanced() {
                         <div>
                           <strong>{user.name || 'Độc giả'}</strong>
                           <div className="dd-profile-meta">
-                            <span>☁ {formatNumber(user.seeds || 0)} Đậu</span>
+                            <span>☁ {formatNumber(user.seeds || 0)} hạt</span>
                             <span>★ Lv.{user.level || 1}</span>
                           </div>
                         </div>
@@ -700,6 +734,38 @@ function statusLabel(value) {
 
 function approvalLabel(value) {
   return { pending: 'Chờ duyệt', approved: 'Đã duyệt', rejected: 'Từ chối' }[value] || 'Đã duyệt';
+}
+
+const BULK_CHAPTER_HEADING = /^\s*((?:Quy[eể]n\s+\d+\s*[-–—]\s*)?Ch[uư][oơ]ng\s+\d+(?:\s*[:：\-–—]\s*.*)?|Th[eế]\s*gi[oớ]i\s+\d+(?:\s*[:：\-–—]\s*.*)?|Ph[oó]\s*b[aả]n\s+\d+(?:\s*[:：\-–—]\s*.*)?)\s*$/i;
+
+function parseBulkChapters(input = '') {
+  const lines = String(input || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+  const chapters = [];
+  let current = null;
+
+  lines.forEach(line => {
+    const heading = line.match(BULK_CHAPTER_HEADING);
+    if (heading) {
+      if (current) chapters.push(current);
+      current = { title: heading[1].trim(), contentLines: [] };
+      return;
+    }
+    if (current) current.contentLines.push(line);
+  });
+
+  if (current) chapters.push(current);
+
+  return chapters.map((chapter, index) => {
+    const content = chapter.contentLines.join('\n').trim();
+    return {
+      index: index + 1,
+      title: chapter.title,
+      content,
+      charCount: content.length,
+      valid: content.length > 0,
+      error: content.length > 0 ? '' : 'Chương chưa có nội dung.'
+    };
+  });
 }
 
 function getStoryCardStatusLabel(status) {
@@ -834,7 +900,7 @@ function HomePremiumBlock({ stories }) {
   if (!stories.length) return null;
   return (
     <section className="section premium-home">
-      <div className="section-head"><div><SectionKicker>Premium</SectionKicker><h2>Truyện Trả Phí</h2><p>Mua từng chương hoặc combo trọn bộ — không cần đăng ký gói</p></div><Link to="/vi-hat" className="small-link">Nạp Đậu ➜</Link></div>
+      <div className="section-head"><div><SectionKicker>Premium</SectionKicker><h2>Truyện Trả Phí</h2><p>Mua từng chương hoặc combo trọn bộ — không cần đăng ký gói</p></div><Link to="/vi-hat" className="small-link">Nạp Hạt Đậu ➜</Link></div>
       <div className="premium-benefits"><span>📖 Đọc miễn phí chương đầu</span><span>🎁 Mua từng chương</span><span>📦 Combo trọn bộ</span></div>
       <div className="grid stories">{stories.map(story => <StoryCard key={story.id} story={story} />)}</div>
     </section>
@@ -1131,10 +1197,37 @@ function RankingPage() {
   useEffect(() => { api('/stories?sort=views').then(data => setStories(data.stories || [])).catch(() => {}); }, []);
   const topThree = stories.slice(0, 3);
   const list = stories.slice(0, 12);
+  const totalViews = stories.reduce((sum, story) => sum + Number(story.views || 0), 0);
+  const topStory = stories[0];
 
   return (
     <div className="ranking-page">
       <section className="catalog-hero-readdy ranking-hero"><div className="catalog-breadcrumb">Trang chủ › Xếp hạng</div><span className="catalog-hero-pill gold">Bảng xếp hạng</span><h1>Top Truyện Hay</h1><p>Những tác phẩm được đọc nhiều nhất, đánh giá cao nhất từ cộng đồng độc giả.</p></section>
+      <section className="ranking-page-header">
+        <div className="ranking-page-heading">
+          <span className="ranking-page-kicker">Bảng xếp hạng</span>
+          <h2>Theo dõi những truyện đang dẫn đầu cộng đồng</h2>
+          <p>Cập nhật nhanh các tác phẩm có lượt đọc cao, điểm đánh giá nổi bật và tốc độ tăng trưởng tốt nhất.</p>
+        </div>
+        <div className="ranking-header-stats" aria-label="Thống kê bảng xếp hạng">
+          <div>
+            <span>Tổng truyện</span>
+            <strong>{formatNumber(stories.length)}</strong>
+          </div>
+          <div>
+            <span>Lượt đọc</span>
+            <strong>{formatNumber(totalViews)}</strong>
+          </div>
+          <div>
+            <span>Top hiện tại</span>
+            <strong>{topStory?.title || 'Đang cập nhật'}</strong>
+          </div>
+        </div>
+        <div className="ranking-header-actions">
+          <Link to="/danh-sach?sort=views" className="button">Khám phá thêm</Link>
+          <Link to="/truyen-moi" className="ghost">Truyện mới</Link>
+        </div>
+      </section>
       <div className="ranking-tabs"><button>Hôm nay</button><button className="active">Tuần này</button><button>Tháng này</button><button>Năm nay</button><button>Tất cả</button><span></span><button className="active orange">Tất cả</button><button>Đang Hot</button><button>Truyện Mới</button><button>Hoàn Thành</button></div>
       <h2 className="ranking-title">🏆 Top 3 Nổi Bật</h2>
       <div className="podium-row">
@@ -1328,7 +1421,7 @@ function StoryDetail() {
     try {
       const result = await api(`/stories/${data.story.id}/unlock-combo`, { method: 'POST' });
       updateUser(result.user);
-      setNotice(result.price ? `Đã mua combo với ${result.price} Đậu.` : 'Combo đã được mở khóa.');
+      setNotice(result.price ? `Đã mua combo với ${result.price} Hạt.` : 'Combo đã được mở khóa.');
     } catch (err) {
       setError(err.message);
     }
@@ -1354,15 +1447,15 @@ function StoryDetail() {
           <div className="story-author">Tác giả: <Link to={`/tac-gia/${encodeURIComponent(story.author)}`}><strong>{story.author}</strong></Link></div>
           <div className="story-inline-stats"><span>★ {story.rating}/5</span><span>👁 {formatNumber(story.views)} lượt đọc</span><span>▣ {chapters.length} chương</span><span className="green">⦿ {statusLabel(story.status)}</span></div>
           <p className="story-description">{story.description}</p>
-          <div className="purchase-strip"><span>📖 Miễn phí<br /><b>{freeCount} chương đầu</b></span><span>🪙 Mua lẻ<br /><b>{story.price || 1} Đậu/chương</b></span><span>🎁 Combo trọn bộ<br /><b>{Math.max(49, (story.price || 1) * chapters.length)} Đậu</b></span></div>
-          <div className="hero-actions"><Link className="button" to={`/truyen/${story.slug}/chuong/1`}>◎ Đọc từ đầu</Link><button className="button gold" onClick={buyCombo}>🪙 Mua combo {Math.max(49, (story.price || 1) * chapters.length)} Đậu</button><button className="ghost light" onClick={() => toggle('follow')}>{story.followed ? '✓ Đang theo dõi' : '♡ Theo dõi'}</button><button className="ghost light" onClick={() => toggle('bookmark')}>{story.bookmarked ? '✓ Đã lưu' : '🔖 Lưu'}</button><button className="ghost light" onClick={reportStory}>⚑ Báo cáo</button></div>
+          <div className="purchase-strip"><span>📖 Miễn phí<br /><b>{freeCount} chương đầu</b></span><span>🪙 Mua lẻ<br /><b>{story.price || 1} Hạt/chương</b></span><span>🎁 Combo trọn bộ<br /><b>{Math.max(49, (story.price || 1) * chapters.length)} Hạt</b></span></div>
+          <div className="hero-actions"><Link className="button" to={`/truyen/${story.slug}/chuong/1`}>◎ Đọc từ đầu</Link><button className="button gold" onClick={buyCombo}>🪙 Mua combo {Math.max(49, (story.price || 1) * chapters.length)} Hạt</button><button className="ghost light" onClick={() => toggle('follow')}>{story.followed ? '✓ Đang theo dõi' : '♡ Theo dõi'}</button><button className="ghost light" onClick={() => toggle('bookmark')}>{story.bookmarked ? '✓ Đã lưu' : '🔖 Lưu'}</button><button className="ghost light" onClick={reportStory}>⚑ Báo cáo</button></div>
           {notice && <div className="success-box">{notice}</div>}
         </div>
       </section>
 
       <section className="story-section chapter-section-readdy">
         <div className="story-section-head"><h2>▰ Danh sách chương <small>({chapters.length} chương)</small></h2><div className="chapter-tabs"><button className="active">Tất cả</button><button>Miễn phí</button><button>Trả phí</button><button>Mới nhất</button></div></div>
-        <div className="free-note">📚 {freeCount} chương đầu miễn phí — Từ chương {freeCount + 1} trở đi cần <b>{story.price || 1} Đậu/chương</b></div>
+        <div className="free-note">📚 {freeCount} chương đầu miễn phí — Từ chương {freeCount + 1} trở đi cần <b>{story.price || 1} Hạt Đậu/chương</b></div>
         <div className="chapter-grid-readdy">
           {orderedChapters.map(chapter => (
             <Link key={chapter.id} to={`/truyen/${story.slug}/chuong/${chapter.number}`}>
@@ -1387,7 +1480,7 @@ function StoryDetail() {
       </section>
 
       {related.length > 0 && <HomeSection title="Truyện liên quan" subtitle="Các tác phẩm cùng thể loại" kicker="Related" to={`/the-loai/${encodeURIComponent(story.categories[0])}`}><div className="related-list-column">{related.slice(0, 6).map(item => <MiniStoryRow key={item.id} story={item} compact />)}</div></HomeSection>}
-      <div className="combo-banner">Mua combo tiết kiệm hơn! <b>Mở khóa toàn bộ {chapters.length} chương chỉ với {Math.max(49, (story.price || 1) * chapters.length)} Đậu</b><button onClick={buyCombo}>Mua combo ngay</button></div>
+      <div className="combo-banner">Mua combo tiết kiệm hơn! <b>Mở khóa toàn bộ {chapters.length} chương chỉ với {Math.max(49, (story.price || 1) * chapters.length)} Hạt Đậu</b><button onClick={buyCombo}>Mua combo ngay</button></div>
       {related.length > 0 && <HomeSection title="Có thể bạn thích" subtitle="Gợi ý thêm cho bạn" kicker="Suggest"><div className="grid stories">{related.map(item => <StoryCard key={item.id} story={item} />)}</div></HomeSection>}
     </div>
   );
@@ -1606,7 +1699,7 @@ function StaticPage({ type }) {
   const pages = {
     contact: ['Liên hệ', 'Gửi phản hồi, báo lỗi hoặc yêu cầu gỡ nội dung qua email support@daudotruyen.vn. Đội ngũ quản trị sẽ phản hồi trong thời gian sớm nhất.'],
     terms: ['Điều khoản sử dụng', 'Người dùng chịu trách nhiệm với nội dung đăng tải, không đăng nội dung vi phạm bản quyền, pháp luật hoặc gây hại cho cộng đồng. Admin có quyền ẩn hoặc gỡ nội dung khi cần.'],
-    privacy: ['Chính sách bảo mật', 'Đậu Đỏ Truyện lưu thông tin tài khoản, lịch sử đọc và giao dịch Đậu để vận hành dịch vụ demo. Không chia sẻ dữ liệu cá nhân cho bên thứ ba trong phạm vi MVP này.']
+    privacy: ['Chính sách bảo mật', 'Đậu Đỏ Truyện lưu thông tin tài khoản, lịch sử đọc và giao dịch Hạt để vận hành dịch vụ demo. Không chia sẻ dữ liệu cá nhân cho bên thứ ba trong phạm vi MVP này.']
   };
   const [title, body] = pages[type] || pages.contact;
   return (
@@ -1678,221 +1771,11 @@ function AuthForm({ title, submitLabel, form, setForm, onSubmit, error, register
 }
 
 function Profile() {
-  const { user, updateUser, logout } = useAuth();
-  const navigate = useNavigate();
-  const [form, setForm] = useState(() => ({
-    name: user?.name || '',
-    username: user?.username || user?.id || '',
-    email: user?.email || '',
-    phone: user?.phone || '',
-    birthday: user?.birthday || '',
-    gender: user?.gender || '',
-    address: user?.address || '',
-    website: user?.website || '',
-    bio: user?.bio || '',
-    avatar: user?.avatar || '/images/logo.png',
-    cover: user?.cover || ''
-  }));
-  const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
-  const [prefs, setPrefs] = useState(() => ({
-    emailNotifications: user?.preferences?.emailNotifications ?? true,
-    chapterNotifications: user?.preferences?.chapterNotifications ?? true,
-    commentNotifications: user?.preferences?.commentNotifications ?? true,
-    followNotifications: user?.preferences?.followNotifications ?? true,
-    promoNotifications: user?.preferences?.promoNotifications ?? false,
-    publicReading: user?.preferences?.publicReading ?? true
-  }));
-  const [library, setLibrary] = useState({ bookmarks: [], follows: [], history: [] });
-  const [wallet, setWallet] = useState({ transactions: [] });
-  const [notice, setNotice] = useState('');
-  const [error, setError] = useState('');
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    Promise.all([api('/me/library'), api('/wallet/transactions')])
-      .then(([libraryData, walletData]) => {
-        setLibrary(libraryData);
-        setWallet(walletData);
-      })
-      .catch(err => setError(err.message));
-  }, []);
-
-  const myStories = useMemo(() => {
-    if (user?.role !== 'admin') return [];
-    return [];
-  }, [user?.role]);
-
-  const stats = {
-    stories: myStories.length || (user?.role === 'admin' ? 265 : library.follows.length),
-    chapters: user?.role === 'admin' ? 36600 : library.history.length,
-    followers: library.follows.length || 5,
-    views: user?.role === 'admin' ? 2000000 : library.history.length * 120
-  };
-
-  const showNotice = message => {
-    setNotice(message);
-    setTimeout(() => setNotice(''), 2600);
-  };
-
-  async function saveProfile(event) {
-    event.preventDefault();
-    setSaving(true);
-    setError('');
-    try {
-      const result = await api('/me/profile', { method: 'PATCH', body: JSON.stringify(form) });
-      updateUser(result.user);
-      showNotice('Đã lưu thay đổi hồ sơ.');
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function savePrefs(nextPrefs) {
-    setPrefs(nextPrefs);
-    setError('');
-    try {
-      const result = await api('/me/preferences', { method: 'PATCH', body: JSON.stringify(nextPrefs) });
-      updateUser(result.user);
-      showNotice('Đã cập nhật cài đặt.');
-    } catch (err) {
-      setError(err.message);
-    }
-  }
-
-  async function changePassword(event) {
-    event.preventDefault();
-    setSaving(true);
-    setError('');
-    try {
-      await api('/me/password', { method: 'POST', body: JSON.stringify(passwordForm) });
-      setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
-      showNotice('Đã đổi mật khẩu.');
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  const menuGroups = [
-    ['TÀI KHOẢN', [['◉', 'Hồ sơ cá nhân', '/ho-so', true], ['◈', 'Bảo mật', '#security'], ['●', 'Thông báo', '#notifications', false, 7], ['▰', 'Ví của tôi', '#profile-wallet', false, `${formatNumber(user?.seeds || 0)} Đậu`], ['□', 'Mời bạn bè', '#invite'], ['⚙', 'Cài đặt', '#settings']]],
-    ['SÁNG TÁC', [['▣', 'Quản lý truyện', '/admin', false, user?.role === 'admin' ? 14 : 0], ['◒', 'Đăng truyện mới', '/dang-truyen'], ['◢', 'Lọc từ nhạy cảm', '#filter']]],
-    ['NỘI DUNG', [['▰', 'Thư viện', '/bookmarks'], ['▱', 'Đã đọc', '/lich-su'], ['♥', 'Yêu thích', '/theo-doi']]],
-    ['THỐNG KÊ', [['◉', 'Doanh thu', '#revenue']]],
-    ['QUẢN TRỊ', [['●', 'Duyệt bình luận', '/admin'], ['■', 'Duyệt truyện trùng', '/admin'], ['◷', 'Lịch sử MOD', '/admin']]],
-    ['HỖ TRỢ', [['?', 'Hướng dẫn', '/lien-he'], ['♟', 'Liên hệ', '/lien-he'], ['☞', 'Phản hồi', '/lien-he']]]
-  ];
-
-  const quickLinks = [
-    ['▣', 'Truyện của tôi', '/admin'],
-    ['▰', 'Truyện đã lưu', '/bookmarks'],
-    ['◷', 'Lịch sử đọc', '/lich-su'],
-    ['◇', 'Thành tựu', '#achievements'],
-    ['⚙', 'Cài đặt nâng cao', '#settings']
-  ];
-
-  const togglePref = key => savePrefs({ ...prefs, [key]: !prefs[key] });
-  const membership = user?.createdAt ? new Date(user.createdAt).toLocaleDateString('vi-VN', { month: 'long', year: 'numeric' }) : 'March 2026';
-
+  const { user } = useAuth();
   return (
-    <div className="profile-workspace">
-      <aside className="profile-side-nav">
-        <div className="profile-side-brand"><img src="/images/logo.png" alt="logo" /><strong>Đậu Đỏ</strong><button type="button" onClick={() => navigate('/')}>‹</button></div>
-        <div className="profile-side-user"><img src={form.avatar || '/images/logo.png'} alt={user.name} /><div><strong>{user.name}</strong><span>Mod</span><small>⭐ Cấp 1</small></div></div>
-        {menuGroups.map(([group, items]) => (
-          <section className="profile-menu-group" key={group}>
-            <h3>{group}<span>⌄</span></h3>
-            {items.map(([icon, label, to, active, badge]) => (
-              to.startsWith('/') ? (
-                <Link key={label} className={active ? 'active' : ''} to={to}><span>{icon}</span>{label}{badge ? <b>{badge}</b> : null}</Link>
-              ) : (
-                <a key={label} className={active ? 'active' : ''} href={to}><span>{icon}</span>{label}{badge ? <b>{badge}</b> : null}</a>
-              )
-            ))}
-          </section>
-        ))}
-        <button type="button" className="profile-logout" onClick={logout}>⇥ Đăng xuất</button>
-      </aside>
-
-      <main className="profile-main">
-        <div className="profile-title"><span>♟</span><h1>Hồ sơ cá nhân</h1></div>
-        <ErrorBox message={error} />
-        {notice && <div className="success-box">{notice}</div>}
-
-        <section className="profile-hero-card">
-          <div className="profile-cover" style={{ backgroundImage: form.cover ? `url(${form.cover})` : 'none' }}><button type="button">◉</button></div>
-          <div className="profile-identity">
-            <button type="button" className="profile-avatar-edit" onClick={() => {
-              const avatar = prompt('Nhập URL avatar:', form.avatar);
-              if (avatar !== null) setForm(prev => ({ ...prev, avatar }));
-            }}><img src={form.avatar || '/images/logo.png'} alt={user.name} /><span>●</span></button>
-            <div><h2>{user.name}</h2><p>@_{user.id}</p><span>♛ {user.role === 'admin' ? 'Moderator' : 'Member'}</span></div>
-            <button type="button" className="profile-share" onClick={() => navigator.clipboard?.writeText(window.location.href).then(() => showNotice('Đã sao chép link hồ sơ.'))}>↗ Chia sẻ hồ sơ</button>
-          </div>
-          <div className="profile-joined">▦ Tham gia từ {membership}</div>
-        </section>
-
-        <form className="profile-card" onSubmit={saveProfile}>
-          <div className="profile-card-head"><h2>▣ Thông tin cá nhân</h2><button className="profile-save" disabled={saving}>▣ {saving ? 'Đang lưu...' : 'Lưu thay đổi'}</button></div>
-          <div className="profile-form-grid">
-            <label>Tên hiển thị *<input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></label>
-            <label>Tên đăng nhập<input value={`_${form.username}`} disabled /></label>
-            <label>Email *<input type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} /></label>
-            <label>Số điện thoại<input value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} placeholder="Nhập số điện thoại" /></label>
-            <label>Ngày sinh<input type="date" value={form.birthday} onChange={e => setForm({ ...form, birthday: e.target.value })} /></label>
-            <fieldset><legend>Giới tính</legend>{['Nam','Nữ','Khác'].map(item => <label key={item}><input type="radio" name="gender" checked={form.gender === item} onChange={() => setForm({ ...form, gender: item })} /> {item}</label>)}</fieldset>
-            <label>Địa chỉ<input value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} placeholder="VD: Hà Nội, Việt Nam" /></label>
-            <label>Website<input value={form.website} onChange={e => setForm({ ...form, website: e.target.value })} placeholder="https://website.com" /></label>
-            <label className="profile-wide">Giới thiệu bản thân<textarea maxLength="500" value={form.bio} onChange={e => setForm({ ...form, bio: e.target.value })} placeholder="Viết vài dòng giới thiệu về bản thân..." /><small>Tối đa 500 ký tự</small></label>
-          </div>
-        </form>
-
-        <form id="security" className="profile-card" onSubmit={changePassword}>
-          <div className="profile-card-head"><h2>⌕ Đổi mật khẩu</h2></div>
-          <p className="profile-alert">ⓘ Bảo mật tài khoản: Sử dụng mật khẩu mạnh với ít nhất 8 ký tự, bao gồm chữ hoa, chữ thường, số và ký tự đặc biệt.</p>
-          <label>Mật khẩu hiện tại *<input type="password" value={passwordForm.currentPassword} onChange={e => setPasswordForm({ ...passwordForm, currentPassword: e.target.value })} placeholder="Nhập mật khẩu hiện tại" /></label>
-          <div className="profile-form-grid">
-            <label>Mật khẩu mới *<input type="password" value={passwordForm.newPassword} onChange={e => setPasswordForm({ ...passwordForm, newPassword: e.target.value })} placeholder="Nhập mật khẩu mới" /><small>Ít nhất 8 ký tự</small></label>
-            <label>Xác nhận mật khẩu mới *<input type="password" value={passwordForm.confirmPassword} onChange={e => setPasswordForm({ ...passwordForm, confirmPassword: e.target.value })} placeholder="Nhập lại mật khẩu mới" /></label>
-          </div>
-          <div className="profile-card-actions"><button className="profile-save" disabled={saving}>⌕ Đổi mật khẩu</button></div>
-        </form>
-
-        <section id="notifications" className="profile-card">
-          <div className="profile-card-head"><h2>● Cài đặt thông báo</h2></div>
-          {[
-            ['emailNotifications', 'Thông báo qua Email', 'Nhận thông báo về chương mới, bình luận và cập nhật hệ thống qua email'],
-            ['chapterNotifications', 'Thông báo chương mới', 'Nhận thông báo khi truyện bạn theo dõi có chương mới'],
-            ['commentNotifications', 'Thông báo bình luận', 'Nhận thông báo khi có người bình luận truyện của bạn'],
-            ['followNotifications', 'Thông báo theo dõi', 'Nhận thông báo khi có người theo dõi bạn'],
-            ['promoNotifications', 'Thông báo khuyến mãi', 'Nhận thông báo về các chương trình khuyến mãi và sự kiện đặc biệt']
-          ].map(([key, title, desc]) => <ToggleRow key={key} title={title} desc={desc} checked={prefs[key]} onChange={() => togglePref(key)} />)}
-        </section>
-
-        <section className="profile-card">
-          <div className="profile-card-head"><h2>◉ Quyền riêng tư</h2></div>
-          <ToggleRow title="Hiển thị truyện đang đọc trên Tường nhà" desc="Cho phép mọi người xem danh sách truyện bạn đang đọc trên trang Tường nhà (my-wall)" checked={prefs.publicReading} onChange={() => togglePref('publicReading')} />
-        </section>
-      </main>
-
-      <aside className="profile-right-rail">
-        <section className="profile-card profile-mini"><h2>▥ Thống kê</h2><div className="profile-stat-grid"><strong>{formatCompact(stats.stories)}<span>Truyện đã đăng</span></strong><strong>{formatCompact(stats.chapters)}<span>Chương đã viết</span></strong><strong>{formatCompact(stats.followers)}<span>Người theo dõi</span></strong><strong>{formatCompact(stats.views)}<span>Lượt xem</span></strong></div></section>
-        <section id="profile-wallet" className="profile-card profile-mini"><h2>☁ Ví của tôi</h2><div className="profile-wallet-line"><span>◒</span><b>Đậu<br />{formatNumber(user.seeds || 0)}</b><button type="button" onClick={() => navigate('/vi-hat')}>+</button></div><button type="button" className="profile-white-btn" onClick={() => navigate('/vi-hat')}>◉ Lịch sử giao dịch</button></section>
-        <section className="profile-card profile-mini"><h2>♣ Liên kết mạng xã hội</h2><div className="profile-socials">{['f','𝕏','◎','♪'].map(item => <button key={item} type="button">{item}</button>)}</div><p>Cập nhật liên kết trong phần thông tin cá nhân</p></section>
-        <section className="profile-card profile-mini"><h2>⌁ Liên kết nhanh</h2><div className="profile-quick-list">{quickLinks.map(([icon, label, to]) => to.startsWith('/') ? <Link key={label} to={to}><span>{icon}</span>{label}<b>›</b></Link> : <a key={label} href={to}><span>{icon}</span>{label}<b>›</b></a>)}</div></section>
-        <section className="profile-card profile-danger"><h2>▲ Vùng nguy hiểm</h2><p>Các hành động dưới đây không thể hoàn tác. Hãy cân nhắc kỹ trước khi thực hiện.</p><button type="button" onClick={logout}>↳ Đăng xuất khỏi tất cả thiết bị</button></section>
-      </aside>
-    </div>
-  );
-}
-
-function ToggleRow({ title, desc, checked, onChange }) {
-  return (
-    <div className="profile-toggle-row">
-      <div><strong>{title}</strong><small>{desc}</small></div>
-      <button type="button" className={checked ? 'profile-toggle on' : 'profile-toggle'} onClick={onChange} aria-pressed={checked}><span /></button>
+    <div className="dashboard-grid">
+      <div className="panel profile-panel"><img src={user.avatar} alt="avatar" /><h1>{user.name}</h1><p>{user.email}</p><span className="pill">Vai trò: {user.role}</span><span className="pill">Số dư: {user.seeds} Hạt</span></div>
+      <div className="panel"><h2>Lối tắt</h2><div className="quick-links"><Link to="/bookmarks">Bookmarks</Link><Link to="/theo-doi">Theo dõi</Link><Link to="/lich-su">Lịch sử đọc</Link><Link to="/vi-hat">Ví Hạt</Link></div></div>
     </div>
   );
 }
@@ -1943,31 +1826,12 @@ const DEFAULT_WALLET_PACKAGES = [
   { id: 'seed-500', seeds: 500, bonus: 150, price: 500000, label: 'Cao cấp' }
 ];
 
-const STORY_CATEGORY_GROUPS = [
-  { icon: '⚔', title: 'Võ Hiệp & Kiếm Hiệp', items: ['Tiên Hiệp', 'Kiếm Hiệp', 'Huyền Huyễn', 'Kỳ Ảo', 'Tu Tiên', 'Tu Chân', 'Phong Thần'] },
-  { icon: '▦', title: 'Hiện Đại & Đô Thị', items: ['Đô Thị', 'Hiện Đại', 'Khoa Huyễn', 'Hệ Thống', 'Đời Sống', 'Doanh Trường', 'Giải Trí', 'Thể Thao', 'Truyện Teen'] },
-  { icon: '♥', title: 'Tình Cảm & Romance', items: ['Ngôn Tình', 'Đam Mỹ', 'Bách Hợp', 'Tình Cảm', 'Romance', 'Học Đường', 'Văn Phòng', 'Tổng Tài', 'Ngược', 'Sủng', 'Nữ Cường', 'Nữ Phụ'] },
-  { icon: '◢', title: 'Đặc Biệt & Fantasy', items: ['Xuyên Không', 'Xuyên Nhanh', 'Trọng Sinh', 'Dị Giới', 'Võng Du', 'Mạt Thế', 'Dị Năng', 'Siêu Anh Hùng', 'Ma Pháp'] },
-  { icon: '✊', title: 'Hành Động & Phiêu Lưu', items: ['Hành Động', 'Phiêu Lưu', 'Thám Hiểm', 'Sinh Tồn', 'Zombie', 'Quái Vật', 'Siêu Nhiên'] },
-  { icon: '●', title: 'Kinh Dị & Bí Ẩn', items: ['Kinh Dị', 'Ma Quỷ', 'Linh Dị', 'Trinh Thám', 'Bí Ẩn', 'Tâm Lý', 'Tội Phạm'] },
-  { icon: '▥', title: 'Lịch Sử & Cổ Đại', items: ['Lịch Sử', 'Cổ Đại', 'Cung Đình', 'Cung Đấu', 'Hoàng Gia', 'Chiến Tranh', 'Quân Sự', 'Quan Trường', 'Võ Tướng', 'Đông Phương'] },
-  { icon: '☻', title: 'Hài Hước & Nhẹ Nhàng', items: ['Hài Hước', 'Hài Kịch', 'Parody', 'Slice of Life', 'Ấm Áp', 'Gia Đình', 'Hàng Ngày', 'Điền Văn', 'Gia Đấu'] },
-  { icon: '✜', title: 'Game & Technology', items: ['Game', 'VRMMO', 'LitRPG', 'Công Nghệ', 'AI', 'Cyberpunk', 'Tương Lai'] },
-  { icon: '+', title: 'Mở rộng', items: ['HE', 'SE', 'BE', 'OE', 'Ngọt', 'Chữa Lành', 'Ngược Nam', 'Ngược Nữ', 'Ngược Luyến Tàn Tâm', 'Truy Thê', 'Trả Thù', 'Vả Mặt', 'Sảng Văn', 'Cưới Trước Yêu Sau', 'Cường Thủ Hào Đoạt', 'Dưỡng Thê', 'Hào Môn Thế Gia', 'Gương Vỡ Lại Lành', 'Gương Vỡ Không Lành', 'Thế Thân', 'Nam Phụ Thượng Vị', 'Không CP', 'Ngôn Tình Thực Tế', 'Thanh Xuân Vườn Trường', 'Học Bá', 'Showbiz', 'Bác Sĩ', 'Cảnh Sát', 'Quân Nhân', 'Dân Quốc', 'Thập Niên', 'Phương Đông', 'Hoán Đổi Thân Xác', 'Đọc Tâm', 'Nhân Thú', 'Hư Cấu Kỳ Ảo', 'Phép Thuật', 'Xuyên Sách', 'Có Sử Dụng AI', 'Quy tắc', 'Đề Cử', 'Review truyện', 'Tiểu Thuyết', 'Truyện Sáng Tác', 'Truyện Việt', 'Vô Tri'] },
-  { icon: '⚠', title: 'Nội dung người lớn', items: ['Sắc', 'H', 'H+', 'Cao H+ (*)'] },
-  { icon: '•••', title: 'Khác', items: ['Phương Tây', 'Light Novel', 'Việt Nam', 'Zhihu', 'Đoản Văn', 'Review Sách', 'Khác'] }
-];
-
-const STORY_CATEGORIES = Array.from(new Set(STORY_CATEGORY_GROUPS.flatMap(group => group.items)));
-
 function Wallet() {
   const { user, updateUser } = useAuth();
   const [data, setData] = useState({ packages: [], transactions: [] });
   const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
   const [selected, setSelected] = useState('seed-50');
   const [method, setMethod] = useState('MoMo');
-  const [paying, setPaying] = useState(false);
 
   const load = async () => {
     const [packs, txns] = await Promise.all([api('/wallet/packages'), api('/wallet/transactions')]);
@@ -1976,43 +1840,30 @@ function Wallet() {
   useEffect(() => { load().catch(err => setError(err.message)); }, []);
 
   async function topup(packageId) {
-    setPaying(true);
-    setError('');
-    setSuccess('');
     try {
-      const result = await api('/wallet/topup', { method: 'POST', body: JSON.stringify({ packageId, method }) });
+      const result = await api('/wallet/topup', { method: 'POST', body: JSON.stringify({ packageId }) });
       updateUser(result.user);
       await load();
-      setSuccess(`Nạp thành công ${result.amount || 0} Đậu bằng ${method}.`);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setPaying(false);
-    }
+    } catch (err) { setError(err.message); }
   }
 
-  const packages = data.packages.length ? data.packages.map(pack => ({ ...pack, featured: pack.id === 'seed-50' })) : DEFAULT_WALLET_PACKAGES;
-  const selectedPack = packages.find(pack => pack.id === selected) || packages[0] || DEFAULT_WALLET_PACKAGES[2];
-  const usedSeeds = Math.abs(data.transactions.filter(txn => txn.amount < 0).reduce((sum, txn) => sum + txn.amount, 0));
-  const toppedSeeds = data.transactions.filter(txn => txn.type === 'topup').reduce((sum, txn) => sum + Math.max(0, txn.amount), 0);
-  const bonusSeeds = data.transactions.filter(txn => txn.type === 'bonus').reduce((sum, txn) => sum + Math.max(0, txn.amount), 0);
+  const selectedPack = DEFAULT_WALLET_PACKAGES.find(pack => pack.id === selected) || DEFAULT_WALLET_PACKAGES[2];
 
   return (
     <div className="wallet-page">
-      <div className="catalog-breadcrumb">Trang chủ › Ví Đậu</div>
-      <div className="wallet-title"><span>🪙</span><div><h1>Ví Đậu</h1><p>Nạp tiền vào ví sẽ chuyển thành Đậu để mua chương truyện yêu thích</p></div></div>
+      <div className="catalog-breadcrumb">Trang chủ › Ví Hạt Đậu</div>
+      <div className="wallet-title"><span>🪙</span><div><h1>Ví Hạt Đậu</h1><p>Nạp Hạt Đậu để mua chương truyện yêu thích</p></div></div>
       <ErrorBox message={error} />
-      {success && <div className="success-box">{success}</div>}
-      <section className="wallet-balance-panel"><p>Số dư hiện tại</p><h2>🪙 {formatNumber(data.balance ?? user.seeds)} <span>Đậu</span></h2><div><span>🛒 Đã dùng: {formatNumber(usedSeeds)} Đậu</span><span>💵 Đã nạp: {formatNumber(toppedSeeds)} Đậu</span><span>🎁 Thưởng: {formatNumber(bonusSeeds)} Đậu</span></div></section>
-      <div className="wallet-feature-row"><span>🪙 <b>1 Đậu</b><small>= 1.000đ</small></span><span>📖 <b>Mua lẻ</b><small>1–2 Đậu/chương</small></span><span>📦 <b>Combo</b><small>Tiết kiệm hơn 50%</small></span></div>
+      <section className="wallet-balance-panel"><p>Số dư hiện tại</p><h2>🪙 {user.seeds} <span>Hạt Đậu</span></h2><div><span>🛒 Đã dùng: 106 Hạt</span><span>💵 Đã nạp: 170 Hạt</span><span>🎁 Thưởng: 23 Hạt</span></div></section>
+      <div className="wallet-feature-row"><span>🪙 <b>1 Hạt Đậu</b><small>= 1.000đ</small></span><span>📖 <b>Mua lẻ</b><small>1–2 Hạt/chương</small></span><span>📦 <b>Combo</b><small>Tiết kiệm hơn 50%</small></span></div>
       <h2 className="wallet-section-title">◇ Chọn gói nạp</h2>
-      <div className="wallet-packages">{packages.map(pack => <button key={pack.id} type="button" className={selected === pack.id ? 'active' : ''} onClick={() => setSelected(pack.id)}>{pack.featured && <b>Phổ biến nhất</b>}<strong>{pack.seeds}<small>{pack.bonus ? ` +${pack.bonus} Đậu` : ' Đậu'}</small></strong><em>{pack.bonus ? `Tặng thêm ${pack.bonus} Đậu` : 'Không bonus'}</em><span>{pack.price.toLocaleString('vi-VN')}đ</span><small>{pack.label}</small></button>)}</div>
+      <div className="wallet-packages">{DEFAULT_WALLET_PACKAGES.map(pack => <button key={pack.id} type="button" className={selected === pack.id ? 'active' : ''} onClick={() => setSelected(pack.id)}>{pack.featured && <b>Phổ biến nhất</b>}<strong>{pack.seeds}<small>{pack.bonus ? ` +${pack.bonus} Hạt Đậu` : ' Hạt Đậu'}</small></strong><em>{pack.bonus ? `Tặng thêm ${pack.bonus} Hạt` : 'Không bonus'}</em><span>{pack.price.toLocaleString('vi-VN')}đ</span><small>{pack.label}</small></button>)}</div>
       <h2 className="wallet-section-title">▰ Phương thức thanh toán</h2>
-      <div className="payment-methods">{['MoMo', 'VNPay', 'ZaloPay', 'Chuyển khoản'].map(item => <button key={item} type="button" className={method === item ? 'active' : ''} onClick={() => setMethod(item)}>{item}</button>)}</div>
-      <button className="button wallet-pay" type="button" disabled={paying} onClick={() => topup(selected)}>{paying ? 'Đang xử lý...' : `◎ Nạp ${selectedPack.price.toLocaleString('vi-VN')}đ — nhận ${selectedPack.seeds + (selectedPack.bonus || 0)} Đậu`}</button>
+      <div className="payment-methods">{['MoMo', 'VNPay', 'ZaloPay', 'Chuyển khoản'].map(item => <button key={item} className={method === item ? 'active' : ''} onClick={() => setMethod(item)}>{item}</button>)}</div>
+      <button className="button wallet-pay" onClick={() => topup(selected)}>◎ Nạp {selectedPack.price.toLocaleString('vi-VN')}đ — nhận {selectedPack.seeds + (selectedPack.bonus || 0)} Hạt Đậu</button>
       <small className="wallet-safe">🛡 Thanh toán an toàn, được mã hóa SSL</small>
-      <HomeSection title="Lịch sử giao dịch" subtitle="Các giao dịch gần đây" kicker="History"><div className="wallet-txn-list">{data.transactions.map(txn => <div key={txn.id}><span>{txn.type === 'purchase' ? '🛒' : txn.type === 'bonus' ? '🎁' : '💵'}</span><strong>{txn.note}</strong><small>{formatDateShort(txn.createdAt)}</small><b className={txn.amount > 0 ? 'plus' : 'minus'}>{txn.amount > 0 ? '+' : ''}{formatNumber(txn.amount)}</b></div>)}{data.transactions.length === 0 && <div className="wallet-empty">Chưa có giao dịch nào.</div>}</div></HomeSection>
-      <section className="wallet-faq"><h3>◉ Câu hỏi thường gặp</h3><p><b>Đậu có hết hạn không?</b><br />Không, Đậu không có thời hạn sử dụng.</p><p><b>Có hoàn tiền không?</b><br />Đậu đã nạp không được hoàn tiền.</p><p><b>Mua combo có lợi hơn không?</b><br />Có, combo tiết kiệm hơn 50% so với mua lẻ từng chương.</p></section>
+      <HomeSection title="Lịch sử giao dịch" subtitle="Các giao dịch gần đây" kicker="History"><div className="wallet-txn-list">{data.transactions.map(txn => <div key={txn.id}><span>{txn.type === 'purchase' ? '🛒' : '💵'}</span><strong>{txn.note}</strong><small>{formatDateShort(txn.createdAt)}</small><b className={txn.amount > 0 ? 'plus' : 'minus'}>{txn.amount > 0 ? '+' : ''}{txn.amount}</b></div>)}</div></HomeSection>
+      <section className="wallet-faq"><h3>◉ Câu hỏi thường gặp</h3><p><b>Hạt Đậu có hết hạn không?</b><br />Không, Hạt Đậu không có thời hạn sử dụng.</p><p><b>Có hoàn tiền không?</b><br />Hạt Đậu đã nạp không được hoàn tiền.</p><p><b>Mua combo có lợi hơn không?</b><br />Có, combo tiết kiệm hơn 50% so với mua lẻ từng chương.</p></section>
     </div>
   );
 }
@@ -2039,8 +1890,6 @@ function Admin() {
   const [chapters, setChapters] = useState([]);
   const [chapterForm, setChapterForm] = useState({ title: '', content: '', isPremium: false, price: 0 });
   const [error, setError] = useState('');
-  const [storyQuery, setStoryQuery] = useState('');
-  const [storyFilter, setStoryFilter] = useState('all');
   const load = async () => {
     const [s, list, u, r] = await Promise.all([api('/admin/stats'), api('/admin/stories'), api('/admin/users'), api('/admin/reports')]);
     setStats(s.stats); setStories(list.stories); setUsers(u.users); setReports(r.reports || []);
@@ -2094,7 +1943,7 @@ function Admin() {
     if (!title) return;
     const content = prompt('Nội dung chương:', chapter.content || '');
     if (content === null) return;
-    const price = prompt('Giá Đậu:', String(chapter.price || 0));
+    const price = prompt('Giá Hạt:', String(chapter.price || 0));
     if (price === null) return;
     const isPremium = confirm('Đặt chương này là chương trả phí? Bấm OK để trả phí, Cancel để miễn phí.');
     const result = await api(`/admin/chapters/${chapter.id}`, { method: 'PUT', body: JSON.stringify({ title, content, price, isPremium }) });
@@ -2111,65 +1960,16 @@ function Admin() {
     await load();
   }
   if (!stats) return <Loader />;
-  const visibleStories = stories.filter(story => {
-    const keyword = storyQuery.trim().toLowerCase();
-    const matchesKeyword = !keyword || [story.title, story.author, ...(story.categories || [])].join(' ').toLowerCase().includes(keyword);
-    const matchesFilter =
-      storyFilter === 'all' ||
-      (storyFilter === 'visible' && !story.hidden) ||
-      (storyFilter === 'hidden' && story.hidden) ||
-      story.status === storyFilter ||
-      story.approvalStatus === storyFilter;
-    return matchesKeyword && matchesFilter;
-  });
   return (
     <>
-      <div className="page-title"><h1>Admin Dashboard</h1><p>Quản trị truyện, người dùng và giao dịch Đậu.</p></div>
+      <div className="page-title"><h1>Admin Dashboard</h1><p>Quản trị truyện, người dùng và giao dịch Hạt.</p></div>
       <ErrorBox message={error} />
       <div className="stats-grid">{Object.entries(stats).map(([key, value]) => <div className="panel stat" key={key}><span>{key}</span><strong>{formatNumber(value)}</strong></div>)}</div>
       <div className="admin-grid">
         <form className="panel stack-form" onSubmit={createStory}><h2>Thêm truyện</h2><input placeholder="Tên truyện" value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} /><input placeholder="Tác giả" value={form.author} onChange={e => setForm({ ...form, author: e.target.value })} /><input placeholder="Thể loại, cách nhau bằng dấu phẩy" value={form.categories} onChange={e => setForm({ ...form, categories: e.target.value })} /><textarea placeholder="Mô tả" value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} /><label><input type="checkbox" checked={form.premium} onChange={e => setForm({ ...form, premium: e.target.checked })} /> Truyện trả phí</label><label><input type="checkbox" checked={form.featured} onChange={e => setForm({ ...form, featured: e.target.checked })} /> Ghim nổi bật</label><button className="button">Tạo truyện</button></form>
-        <div className="panel"><h2>Người dùng</h2><div className="list-panel compact">{users.map(user => <div key={user.id}><span>{user.name}</span><small>{user.email} · {user.role} · {user.seeds} Đậu</small></div>)}</div></div>
+        <div className="panel"><h2>Người dùng</h2><div className="list-panel compact">{users.map(user => <div key={user.id}><span>{user.name}</span><small>{user.email} · {user.role} · {user.seeds} Hạt</small></div>)}</div></div>
       </div>
-      <Section title="Quản lý truyện" subtitle="Duyệt, ẩn/hiện, sửa tên và chọn truyện để quản lý chương.">
-        <div className="admin-story-toolbar">
-          <input placeholder="Tìm theo tên truyện, tác giả, thể loại..." value={storyQuery} onChange={e => setStoryQuery(e.target.value)} />
-          <select value={storyFilter} onChange={e => setStoryFilter(e.target.value)}>
-            <option value="all">Tất cả truyện</option>
-            <option value="pending">Chờ duyệt</option>
-            <option value="approved">Đã duyệt</option>
-            <option value="rejected">Từ chối</option>
-            <option value="ongoing">Đang ra</option>
-            <option value="completed">Hoàn thành</option>
-            <option value="visible">Đang hiện</option>
-            <option value="hidden">Đang ẩn</option>
-          </select>
-        </div>
-        <div className="admin-story-list">
-          {visibleStories.map(story => (
-            <article key={story.id} className={selectedStory?.id === story.id ? 'admin-story-card active' : 'admin-story-card'}>
-              <button type="button" className="admin-story-cover" onClick={() => selectStory(story)}><img src={story.cover} alt={story.title} /></button>
-              <div className="admin-story-body">
-                <div className="admin-story-topline">
-                  <button type="button" className="small-link admin-story-title" onClick={() => selectStory(story)}>{story.title}</button>
-                  <span className={`admin-pill ${story.approvalStatus || 'pending'}`}>{approvalLabel(story.approvalStatus)}</span>
-                  <span className={`admin-pill ${story.hidden ? 'hidden' : 'visible'}`}>{story.hidden ? 'Đang ẩn' : 'Đang hiện'}</span>
-                </div>
-                <p>{story.author} · {story.chapterCount || 0} chương · {statusLabel(story.status)} · {formatNumber(story.views || 0)} lượt đọc</p>
-                <div className="admin-story-cats">{(story.categories || []).slice(0, 5).map(item => <span key={item}>{item}</span>)}</div>
-              </div>
-              <div className="admin-story-actions">
-                <button className="ghost" onClick={() => selectStory(story)}>Chương</button>
-                <button className="ghost" onClick={() => updateStory(story, { approvalStatus: story.approvalStatus === 'approved' ? 'pending' : 'approved' })}>{story.approvalStatus === 'approved' ? 'Đưa chờ duyệt' : 'Duyệt'}</button>
-                <button className="ghost" onClick={() => updateStory(story, { hidden: !story.hidden })}>{story.hidden ? 'Hiện' : 'Ẩn'}</button>
-                <button className="ghost" onClick={() => renameStory(story)}>Sửa</button>
-                <button className="ghost danger" onClick={() => deleteStory(story.id)}>Xóa</button>
-              </div>
-            </article>
-          ))}
-          {visibleStories.length === 0 && <div className="center-card">Không có truyện phù hợp bộ lọc.</div>}
-        </div>
-      </Section>
+      <Section title="Quản lý truyện" subtitle="Duyệt, ẩn/hiện, sửa tên và chọn truyện để quản lý chương."><div className="list-panel">{stories.map(story => <div key={story.id} className={selectedStory?.id === story.id ? 'active-admin-row' : ''}><span><button className="small-link" onClick={() => selectStory(story)}>{story.title}</button><small>{story.author} · {story.chapterCount} chương · {statusLabel(story.status)} · {approvalLabel(story.approvalStatus)} · {story.hidden ? 'Đang ẩn' : 'Đang hiện'}</small></span><button className="ghost" onClick={() => updateStory(story, { approvalStatus: story.approvalStatus === 'approved' ? 'pending' : 'approved' })}>{story.approvalStatus === 'approved' ? 'Đưa chờ duyệt' : 'Duyệt'}</button><button className="ghost" onClick={() => updateStory(story, { hidden: !story.hidden })}>{story.hidden ? 'Hiện' : 'Ẩn'}</button><button className="ghost" onClick={() => renameStory(story)}>Sửa</button><button className="ghost danger" onClick={() => deleteStory(story.id)}>Xóa</button></div>)}</div></Section>
       <Section title="Quản lý chương" subtitle={selectedStory ? `Đang chọn: ${selectedStory.title}` : 'Chọn một truyện ở danh sách trên để thêm/sửa/xóa chương.'}>
         {selectedStory ? (
           <div className="chapter-admin-grid">
@@ -2178,11 +1978,11 @@ function Admin() {
               <input placeholder="Tiêu đề chương" value={chapterForm.title} onChange={e => setChapterForm({ ...chapterForm, title: e.target.value })} />
               <textarea rows="6" placeholder="Nội dung chương" value={chapterForm.content} onChange={e => setChapterForm({ ...chapterForm, content: e.target.value })} />
               <label><input type="checkbox" checked={chapterForm.isPremium} onChange={e => setChapterForm({ ...chapterForm, isPremium: e.target.checked })} /> Chương trả phí</label>
-              <input type="number" min="0" placeholder="Giá Đậu" value={chapterForm.price} onChange={e => setChapterForm({ ...chapterForm, price: e.target.value })} />
+              <input type="number" min="0" placeholder="Giá Hạt" value={chapterForm.price} onChange={e => setChapterForm({ ...chapterForm, price: e.target.value })} />
               <button className="button">Thêm chương</button>
             </form>
             <div className="list-panel">
-              {chapters.map(chapter => <div key={chapter.id}><span><strong>Chương {chapter.number}</strong><small>{chapter.title} · {chapter.isPremium ? `${chapter.price} Đậu` : 'Miễn phí'}</small></span><button className="ghost" onClick={() => updateChapter(chapter)}>Sửa tên</button><button className="ghost danger" onClick={() => deleteChapter(chapter)}>Xóa</button></div>)}
+              {chapters.map(chapter => <div key={chapter.id}><span><strong>Chương {chapter.number}</strong><small>{chapter.title} · {chapter.isPremium ? `${chapter.price} Hạt` : 'Miễn phí'}</small></span><button className="ghost" onClick={() => updateChapter(chapter)}>Sửa tên</button><button className="ghost danger" onClick={() => deleteChapter(chapter)}>Xóa</button></div>)}
             </div>
           </div>
         ) : <div className="center-card">Chưa chọn truyện.</div>}
@@ -2198,6 +1998,7 @@ function Admin() {
 }
 
 function PublishSidebar({ user }) {
+  const location = useLocation();
   const groups = [
     ['TÀI KHOẢN', ['Hồ sơ cá nhân', 'Bảo mật', 'Thông báo', 'Ví của tôi']],
     ['SÁNG TÁC', ['Quản lý truyện', 'Đăng truyện mới', 'Kiểm tra chương lỗi']],
@@ -2215,10 +2016,300 @@ function PublishSidebar({ user }) {
       {groups.map(([group, items]) => (
         <div className="sidebar-group" key={group}>
           <strong>{group}</strong>
-          {items.map(item => <span className={item === 'Đăng truyện mới' ? 'active' : ''} key={item}>{item}</span>)}
+          {items.map(item => <span className={item === 'Đăng truyện mới' && location.pathname === '/dang-truyen' ? 'active' : ''} key={item}>{item}</span>)}
         </div>
       ))}
+      <div className="sidebar-group">
+        <strong>THAO TÁC</strong>
+        <Link className={location.pathname === '/dang-truyen/them-nhieu-chuong' ? 'active' : ''} to="/dang-truyen/them-nhieu-chuong">Thêm nhiều chương</Link>
+      </div>
     </aside>
+  );
+}
+
+function BulkChapterPublish() {
+  const { user } = useAuth();
+  const [searchParams] = useSearchParams();
+  const queryStoryId = searchParams.get('storyId') || '';
+  const [stories, setStories] = useState([]);
+  const [storyDetail, setStoryDetail] = useState(null);
+  const [selectedStoryId, setSelectedStoryId] = useState(queryStoryId);
+  const [activeTab, setActiveTab] = useState('paste');
+  const [rawText, setRawText] = useState('');
+  const [isPremium, setIsPremium] = useState(false);
+  const [price, setPrice] = useState(0);
+  const [passwordEnabled, setPasswordEnabled] = useState(false);
+  const [password, setPassword] = useState('');
+  const [checked, setChecked] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [postedStory, setPostedStory] = useState(null);
+  const [draftLoadedKey, setDraftLoadedKey] = useState('');
+
+  const selectedStory = stories.find(story => story.id === selectedStoryId) || null;
+  const parsedChapters = useMemo(() => parseBulkChapters(rawText), [rawText]);
+  const validChapters = parsedChapters.filter(chapter => chapter.valid);
+  const invalidChapters = parsedChapters.filter(chapter => !chapter.valid);
+  const chapterNumbers = storyDetail?.chapters?.map(chapter => Number(chapter.number) || 0) || [];
+  const nextChapterNumber = Math.max(0, ...chapterNumbers, Number(selectedStory?.chapterCount || 0)) + 1;
+  const draftKey = `daudo_bulk_chapters_${selectedStoryId || 'unselected'}`;
+
+  useEffect(() => {
+    api('/admin/stories')
+      .then(data => setStories(data.stories || []))
+      .catch(err => setError(err.message))
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    if (queryStoryId) setSelectedStoryId(queryStoryId);
+  }, [queryStoryId]);
+
+  useEffect(() => {
+    setStoryDetail(null);
+    if (!selectedStoryId) return;
+    api(`/stories/${selectedStoryId}`)
+      .then(data => setStoryDetail(data))
+      .catch(() => setStoryDetail(null));
+  }, [selectedStoryId]);
+
+  useEffect(() => {
+    setDraftLoadedKey('');
+    const rawDraft = localStorage.getItem(draftKey);
+    if (rawDraft) {
+      try {
+        const draft = JSON.parse(rawDraft);
+        setRawText(draft.rawText || '');
+        setActiveTab(draft.activeTab || 'paste');
+        setIsPremium(Boolean(draft.isPremium));
+        setPrice(Number(draft.price || 0));
+        setPasswordEnabled(Boolean(draft.passwordEnabled));
+        setPassword(draft.password || '');
+      } catch {
+        localStorage.removeItem(draftKey);
+      }
+    } else {
+      setRawText('');
+      setActiveTab('paste');
+      setIsPremium(false);
+      setPrice(0);
+      setPasswordEnabled(false);
+      setPassword('');
+    }
+    setChecked(false);
+    setSuccess('');
+    setPostedStory(null);
+    setDraftLoadedKey(draftKey);
+  }, [draftKey]);
+
+  useEffect(() => {
+    if (draftLoadedKey !== draftKey) return;
+    localStorage.setItem(draftKey, JSON.stringify({ rawText, activeTab, isPremium, price, passwordEnabled, password }));
+  }, [draftKey, draftLoadedKey, rawText, activeTab, isPremium, price, passwordEnabled, password]);
+
+  function clearDraft() {
+    localStorage.removeItem(draftKey);
+    setRawText('');
+    setActiveTab('paste');
+    setIsPremium(false);
+    setPrice(0);
+    setPasswordEnabled(false);
+    setPassword('');
+    setChecked(false);
+    setSuccess('Đã xóa bản nháp.');
+  }
+
+  function checkChapters() {
+    setChecked(true);
+    setSuccess('');
+    if (!rawText.trim()) {
+      setError('Vui lòng dán nội dung hoặc tải file .txt.');
+      return;
+    }
+    if (parsedChapters.length === 0) {
+      setError('Chưa tìm thấy tiêu đề chương hợp lệ.');
+      return;
+    }
+    if (invalidChapters.length > 0) {
+      setError(`Có ${invalidChapters.length} chương chưa có nội dung.`);
+      return;
+    }
+    setError('');
+  }
+
+  function handleFile(file) {
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.txt')) {
+      setError('Hiện tại chỉ hỗ trợ file .txt.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setRawText(String(reader.result || ''));
+      setActiveTab('paste');
+      setChecked(false);
+      setError('');
+      setSuccess(`Đã tải file ${file.name}.`);
+    };
+    reader.onerror = () => setError('Không thể đọc file. Vui lòng thử lại.');
+    reader.readAsText(file);
+  }
+
+  async function submitChapters() {
+    setChecked(true);
+    setError('');
+    setSuccess('');
+    if (!selectedStoryId) return setError('Vui lòng chọn truyện trước khi đăng chương.');
+    if (parsedChapters.length === 0) return setError('Chưa parse được chương nào.');
+    if (invalidChapters.length > 0) return setError('Không thể đăng chương rỗng. Vui lòng kiểm tra lại nội dung.');
+    if (isPremium && Number(price) < 0) return setError('Giá chương không hợp lệ.');
+    if (passwordEnabled && !password.trim()) return setError('Vui lòng nhập mật khẩu chương.');
+
+    setSubmitting(true);
+    try {
+      for (const chapter of validChapters) {
+        await api(`/admin/stories/${selectedStoryId}/chapters`, {
+          method: 'POST',
+          body: JSON.stringify({
+            title: chapter.title,
+            content: chapter.content,
+            isPremium,
+            price: isPremium ? Number(price || 0) : 0,
+            preview: chapter.content.slice(0, 300),
+            password: passwordEnabled ? password.trim() : ''
+          })
+        });
+      }
+      localStorage.removeItem(draftKey);
+      setPostedStory(selectedStory);
+      setSuccess(`Đã đăng ${validChapters.length} chương.`);
+      setRawText('');
+      setChecked(false);
+      const detail = await api(`/stories/${selectedStoryId}`).catch(() => null);
+      if (detail) setStoryDetail(detail);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  if (loading) return <Loader />;
+
+  return (
+    <div className="publish-page bulk-chapter-page">
+      <PublishSidebar user={user} />
+      <section className="bulk-chapter-card">
+        <header className="bulk-chapter-header">
+          <div className="bulk-chapter-header-main">
+            <Link className="bulk-back" to="/dang-truyen">‹</Link>
+            <div>
+              <h1>Thêm nhiều chương</h1>
+              <p>Sau khi {selectedStory?.title || 'chọn truyện'}</p>
+            </div>
+          </div>
+          <div className="bulk-next-badge">Chương tiếp: {selectedStoryId ? nextChapterNumber : '-'}</div>
+        </header>
+
+        <ErrorBox message={error} />
+        {success && <div className="success-box">{success}</div>}
+
+        {!queryStoryId && (
+          <div className="bulk-story-select">
+            <label>Chọn truyện</label>
+            <select value={selectedStoryId} onChange={event => setSelectedStoryId(event.target.value)}>
+              <option value="">Chọn truyện cần đăng chương</option>
+              {stories.map(story => <option key={story.id} value={story.id}>{story.title} - {story.chapterCount || 0} chương</option>)}
+            </select>
+          </div>
+        )}
+
+        <div className="bulk-tabs">
+          <button type="button" className={activeTab === 'paste' ? 'active' : ''} onClick={() => setActiveTab('paste')}>Dán nội dung</button>
+          <button type="button" className={activeTab === 'file' ? 'active' : ''} onClick={() => setActiveTab('file')}>Tải file</button>
+        </div>
+
+        {activeTab === 'file' && (
+          <label className="bulk-file-drop">
+            <strong>Tải file .txt</strong>
+            <span>Chọn file văn bản chứa nhiều chương, hệ thống sẽ đọc và đưa vào ô dán nội dung.</span>
+            <input type="file" accept=".txt,text/plain" onChange={event => handleFile(event.target.files?.[0])} />
+          </label>
+        )}
+
+        <textarea
+          className="bulk-chapter-textarea"
+          value={rawText}
+          onChange={event => {
+            setRawText(event.target.value);
+            setChecked(false);
+          }}
+          placeholder={`Chương 1: Tên chương 1
+Nội dung chương 1...
+
+Chương 2: Tên chương 2
+Nội dung chương 2...
+
+Hỗ trợ: Chương N, Quyển N - Chương N, Thế giới N, Phó bản N...`}
+        />
+
+        <div className="bulk-counter">
+          <span>{formatNumber(rawText.length)} ký tự</span>
+          <span>{parsedChapters.length} chương parse được</span>
+          {invalidChapters.length > 0 && <span className="danger">{invalidChapters.length} lỗi</span>}
+        </div>
+
+        <section className="bulk-options">
+          <h2>Tùy chọn chương</h2>
+          <div className="bulk-radio-row">
+            <label><input type="radio" checked={!isPremium} onChange={() => setIsPremium(false)} /> Miễn phí</label>
+            <label><input type="radio" checked={isPremium} onChange={() => setIsPremium(true)} /> Có phí</label>
+          </div>
+          {isPremium && (
+            <div className="bulk-price-row">
+              <label>Giá Hạt/Đậu mỗi chương</label>
+              <input type="number" min="0" value={price} onChange={event => setPrice(event.target.value)} />
+            </div>
+          )}
+          <div className="bulk-password-row">
+            <label><input type="checkbox" checked={passwordEnabled} onChange={event => setPasswordEnabled(event.target.checked)} /> Mật khẩu chương</label>
+            {passwordEnabled && <input placeholder="Nhập mật khẩu" value={password} onChange={event => setPassword(event.target.value)} />}
+          </div>
+        </section>
+
+        {checked && (
+          <section className="bulk-preview">
+            <h2>Preview chương</h2>
+            {parsedChapters.length === 0 && <div className="bulk-empty">Chưa có chương nào được parse.</div>}
+            {parsedChapters.map(chapter => (
+              <div key={`${chapter.index}-${chapter.title}`} className={chapter.valid ? 'bulk-preview-row valid' : 'bulk-preview-row invalid'}>
+                <span>#{chapter.index}</span>
+                <strong>{chapter.title}</strong>
+                <small>{formatNumber(chapter.charCount)} ký tự</small>
+                <em>{chapter.valid ? 'Hợp lệ' : chapter.error}</em>
+              </div>
+            ))}
+          </section>
+        )}
+
+        {postedStory && (
+          <div className="bulk-success-actions">
+            <Link className="button small" to={`/truyen/${postedStory.slug}`}>Xem truyện</Link>
+            <Link className="ghost" to="/admin">Quay lại admin</Link>
+          </div>
+        )}
+      </section>
+
+      <footer className="bulk-chapter-footer">
+        <button type="button" className="ghost" onClick={clearDraft}>Xóa nháp</button>
+        <div>
+          <button type="button" className="ghost" onClick={checkChapters}>Kiểm tra</button>
+          <button type="button" className="button" disabled={submitting || validChapters.length === 0 || invalidChapters.length > 0} onClick={submitChapters}>{submitting ? 'Đang đăng...' : 'Đăng chương'}</button>
+        </div>
+      </footer>
+    </div>
   );
 }
 
@@ -2226,7 +2317,7 @@ function StoryPublish() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const draftKey = 'daudo_story_publish_draft';
-  const [categories] = useState(STORY_CATEGORIES);
+  const [categories] = useState(PUBLISH_STORY_CATEGORIES);
   const [form, setForm] = useState({
     title: '',
     author: '',
@@ -2254,7 +2345,11 @@ function StoryPublish() {
     const raw = localStorage.getItem(draftKey);
     if (!raw) return;
     try {
-      setForm(prev => ({ ...prev, ...JSON.parse(raw) }));
+      const draft = JSON.parse(raw);
+      const draftCategories = Array.isArray(draft.categories)
+        ? draft.categories.filter(item => PUBLISH_STORY_CATEGORIES.includes(item))
+        : [];
+      setForm(prev => ({ ...prev, ...draft, categories: draftCategories.length ? draftCategories : prev.categories }));
     } catch {
       localStorage.removeItem(draftKey);
     }
@@ -2266,9 +2361,6 @@ function StoryPublish() {
   }, [form, draftEnabled]);
 
   const filteredCategories = categories.filter(item => item.toLowerCase().includes(search.toLowerCase()));
-  const filteredCategoryGroups = STORY_CATEGORY_GROUPS
-    .map(group => ({ ...group, items: group.items.filter(item => item.toLowerCase().includes(search.trim().toLowerCase())) }))
-    .filter(group => group.items.length > 0);
 
   function toggleCategory(item) {
     setForm(prev => {
@@ -2369,6 +2461,7 @@ function StoryPublish() {
           <p>{user?.name ? `Đăng nhập với tài khoản ${user.name}` : 'Tạo truyện theo bố cục nhiều cột giống ảnh mẫu.'}</p>
         </div>
         <div className="publish-actions">
+          <Link to="/dang-truyen/them-nhieu-chuong" className="button small">Thêm nhiều chương</Link>
           <Link to="/admin" className="ghost light">Quay lại admin</Link>
         </div>
       </div>
@@ -2411,32 +2504,22 @@ function StoryPublish() {
             </div>
           </div>
 
-          <section className="publish-category-picker">
-            <div className="publish-category-heading">
-              <h2><span>◇</span> Thể loại</h2>
-              <small>{form.categories.length}/5 đã chọn</small>
-            </div>
-            <label>Chọn thể loại <b>*</b><span title="Có thể chọn tối đa 5 thể loại">?</span></label>
-            <div className="publish-category-search"><span>⌕</span><input placeholder="Tìm kiếm thể loại..." value={search} onChange={e => setSearch(e.target.value)} /></div>
-            <div className="publish-category-scroll">
-              {filteredCategoryGroups.map(group => (
-                <section className="publish-category-group" key={group.title}>
-                  <h3><span>{group.icon}</span>{group.title}</h3>
-                  <div className="publish-category-grid">
-                    {group.items.map(item => (
-                      <button
-                        type="button"
-                        key={item}
-                        className={form.categories.includes(item) ? 'active' : ''}
-                        onClick={() => toggleCategory(item)}
-                      >
-                        {item}
-                      </button>
-                    ))}
-                  </div>
-                </section>
+          <section className="category-block publish-category-block">
+            <h2>Thể loại</h2>
+            <label>Chọn thể loại *</label>
+            <input placeholder="Tìm kiếm thể loại..." value={search} onChange={e => setSearch(e.target.value)} />
+            <div className="category-title">Đang chọn: {form.categories.length}/5</div>
+            <div className="chip-wrap">
+              {filteredCategories.map(item => (
+                <button
+                  type="button"
+                  key={item}
+                  className={form.categories.includes(item) ? 'chip active' : 'chip'}
+                  onClick={() => toggleCategory(item)}
+                >
+                  {item}
+                </button>
               ))}
-              {filteredCategories.length === 0 && <div className="publish-category-empty">Không tìm thấy thể loại phù hợp.</div>}
             </div>
           </section>
         </section>
@@ -2556,10 +2639,6 @@ function NotFound() {
 
 function formatNumber(value = 0) {
   return Number(value).toLocaleString('vi-VN');
-}
-
-function formatCompact(value = 0) {
-  return Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(Number(value) || 0);
 }
 
 createRoot(document.getElementById('root')).render(<App />);
