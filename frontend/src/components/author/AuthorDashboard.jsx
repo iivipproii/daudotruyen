@@ -75,6 +75,7 @@ function normalizeStoryForForm(story) {
       title: '',
       author: '',
       cover: '/images/cover-1.jpg',
+      coverPath: '',
       coverPosition: '50% 50%',
       description: '',
       translator: '',
@@ -97,6 +98,7 @@ function normalizeStoryForForm(story) {
     ...story,
     author: story.author || '',
     cover: story.cover || '/images/cover-1.jpg',
+    coverPath: story.coverPath || '',
     coverPosition: story.coverPosition || '50% 50%',
     description: story.description || story.shortDescription || '',
     translator: story.translator || '',
@@ -120,6 +122,7 @@ function buildStoryPayload(form, approvalStatus) {
     title: form.title,
     author: form.author,
     cover: form.cover,
+    coverPath: form.coverPath || '',
     coverPosition: form.coverPosition,
     shortDescription: String(form.description || '').trim().slice(0, 180),
     description: form.description,
@@ -575,7 +578,7 @@ export function AuthorDashboard({ user, apiClient }) {
 
       {!currentLoading && currentView === 'overview' && <OverviewTab stories={state.stories} chapters={state.chapters} promotions={state.promotions} stats={state.stats} revenue={state.revenue} />}
       {!currentLoading && currentView === 'stories' && <AuthorStoryTable stories={state.stories} onUpdate={updateStory} onDelete={deleteStory} />}
-      {!currentLoading && currentView === 'story-form' && <StoryEditorForm story={editingStory} loading={Boolean(params.id && !editingStory)} onSave={saveStory} />}
+      {!currentLoading && currentView === 'story-form' && <StoryEditorForm story={editingStory} loading={Boolean(params.id && !editingStory)} apiClient={apiClient} usingMock={state.usingMock} onSave={saveStory} />}
       {!currentLoading && currentView === 'story-preview' && <AuthorPrivatePreview story={editingStory} chapters={state.chapters.filter(chapter => chapter.storyId === params.id)} loading={Boolean(params.id && !editingStory)} />}
       {!currentLoading && currentView === 'chapter-choice' && <ChapterMethodChooser story={editingStory} loading={Boolean(params.id && !editingStory)} />}
       {!currentLoading && currentView === 'chapter-new' && <SingleChapterPage story={editingStory} stories={state.stories} chapters={state.chapters} loading={Boolean(params.id && !editingStory)} onSave={saveChapter} />}
@@ -845,7 +848,7 @@ function StoryActions({ story, onUpdate, onDelete }) {
   );
 }
 
-export function StoryEditorForm({ story, loading, onSave }) {
+export function StoryEditorForm({ story, loading, apiClient, usingMock, onSave }) {
   const navigate = useNavigate();
   const [form, setForm] = useState(() => normalizeStoryForForm(story));
   const [error, setError] = useState('');
@@ -894,7 +897,7 @@ export function StoryEditorForm({ story, loading, onSave }) {
       {error && <ErrorNotice message={error} />}
       <div className="ad-editor-grid">
         <div className="ad-form-stack">
-          <CoverUploader value={form.cover} position={form.coverPosition} onChange={(cover, coverPosition = form.coverPosition) => setForm({ ...form, cover, coverPosition })} />
+          <CoverUploader value={form.cover} position={form.coverPosition} storyId={form.id} apiClient={apiClient} usingMock={usingMock} onChange={(cover, coverPosition = form.coverPosition, coverPath = form.coverPath) => setForm({ ...form, cover, coverPosition, coverPath })} />
           <div className="ad-two-inputs">
             <label>Người dịch<input value={form.translator} onChange={event => setForm({ ...form, translator: event.target.value })} placeholder="Nếu có" /></label>
             <label>Nhân vật chính<input value={form.mainCharacters} onChange={event => setForm({ ...form, mainCharacters: event.target.value })} placeholder="VD: Minh An, Lục Dao" /></label>
@@ -943,13 +946,58 @@ export function StoryEditorForm({ story, loading, onSave }) {
   );
 }
 
-export function CoverUploader({ value, position = '50% 50%', onChange }) {
-  function handleFile(file) {
+const coverFileTypes = new Set(['image/png', 'image/jpeg', 'image/webp']);
+const coverMaxOriginalBytes = 10 * 1024 * 1024;
+const coverMaxCompressedBytes = 500 * 1024;
+
+async function compressCoverImage(file) {
+  if (!file) return null;
+  if (!coverFileTypes.has(file.type)) throw new Error('Chi chap nhan anh JPG, PNG hoac WEBP.');
+  if (file.size > coverMaxOriginalBytes) throw new Error('Anh goc toi da 10MB.');
+  const objectUrl = URL.createObjectURL(file);
+  const image = await new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Khong doc duoc anh bia.'));
+    img.src = objectUrl;
+  });
+  const scale = Math.min(1, 1100 / image.width);
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(image.width * scale));
+  canvas.height = Math.max(1, Math.round(image.height * scale));
+  canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
+  URL.revokeObjectURL(objectUrl);
+  for (const quality of [0.82, 0.72, 0.62, 0.52]) {
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/webp', quality));
+    if (blob && blob.size <= coverMaxCompressedBytes) return new File([blob], file.name.replace(/\.[^.]+$/, '.webp'), { type: 'image/webp' });
+  }
+  throw new Error('Anh sau nen van lon hon 500KB. Vui long chon anh nho hon.');
+}
+
+export function CoverUploader({ value, position = '50% 50%', storyId, apiClient, usingMock, onChange }) {
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState('');
+
+  async function handleFile(file) {
     if (!file) return;
-    if (!file.type?.startsWith('image/')) return;
-    const reader = new FileReader();
-    reader.onload = () => onChange(reader.result, position);
-    reader.readAsDataURL(file);
+    setError('');
+    setUploading(true);
+    try {
+      const compressed = await compressCoverImage(file);
+      if (usingMock || !apiClient) {
+        onChange(URL.createObjectURL(compressed), position);
+        return;
+      }
+      const body = new FormData();
+      body.append('file', compressed);
+      if (storyId) body.append('storyId', storyId);
+      const result = await apiClient('/uploads/cover', { method: 'POST', body });
+      onChange(result.url || result.cover || result.path, position, result.path || '');
+    } catch (err) {
+      setError(err.message || 'Khong the upload anh bia.');
+    } finally {
+      setUploading(false);
+    }
   }
   return (
     <section className="ad-cover-uploader">

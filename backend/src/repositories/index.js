@@ -67,7 +67,7 @@ const TABLES = {
       seeds: 'seeds',
       tokenVersion: 'token_version',
       name: 'name',
-      avatar: 'avatar',
+      avatar: 'avatar_url',
       cover: 'cover',
       phone: 'phone',
       birthday: 'birthday',
@@ -96,7 +96,8 @@ const TABLES = {
       author: 'author',
       ownerId: 'owner_id',
       description: 'description',
-      cover: 'cover',
+      cover: 'cover_url',
+      coverPath: 'cover_path',
       status: 'status',
       approvalStatus: 'approval_status',
       hidden: 'hidden',
@@ -159,7 +160,7 @@ const TABLES = {
     map: { id: 'id', userId: 'user_id', storyId: 'story_id', createdAt: 'created_at' }
   },
   history: {
-    table: 'reading_history',
+    table: 'reading_progress',
     key: 'history',
     map: {
       id: 'id',
@@ -167,26 +168,28 @@ const TABLES = {
       storyId: 'story_id',
       chapterId: 'chapter_id',
       chapterNumber: 'chapter_number',
-      progress: 'progress',
+      progress: 'progress_percent',
+      progressPercent: 'progress_percent',
+      lastPosition: 'last_position',
+      lastReadAt: 'last_read_at',
       createdAt: 'created_at',
       updatedAt: 'updated_at'
     }
   },
   purchases: {
-    table: 'purchases',
+    table: 'chapter_purchases',
     key: 'purchases',
     map: {
       id: 'id',
       userId: 'user_id',
       storyId: 'story_id',
       chapterId: 'chapter_id',
-      combo: 'combo',
       price: 'price',
-      createdAt: 'created_at'
+      createdAt: 'purchased_at'
     }
   },
   transactions: {
-    table: 'transactions',
+    table: 'coin_transactions',
     key: 'transactions',
     map: {
       id: 'id',
@@ -197,6 +200,10 @@ const TABLES = {
       packageId: 'package_id',
       type: 'type',
       amount: 'amount',
+      balanceBefore: 'balance_before',
+      balanceAfter: 'balance_after',
+      refType: 'ref_type',
+      refId: 'ref_id',
       seeds: 'seeds',
       price: 'price',
       status: 'status',

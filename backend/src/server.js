@@ -3,12 +3,20 @@ const path = require('path');
 const crypto = require('crypto');
 const mammoth = require('mammoth');
 const dataStore = require('./db');
+const storage = require('./services/storage');
 
 const PORT = Number(process.env.PORT || 4000);
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || '*';
 const JSON_LIMIT = 4 * 1024 * 1024;
 const UPLOAD_LIMIT = 10 * 1024 * 1024;
+const COMPRESSED_IMAGE_LIMIT = 500 * 1024;
+const IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const rateBuckets = new Map();
+
+if (process.env.NODE_ENV === 'production' && (!process.env.JWT_SECRET || process.env.JWT_SECRET === 'dev-secret-change-me')) {
+  throw new Error('JWT_SECRET must be set to a strong non-default value in production.');
+}
 
 function now() {
   return new Date().toISOString();
@@ -85,6 +93,32 @@ function send(res, status, body, extraHeaders = {}) {
     ...extraHeaders
   });
   res.end(payload);
+}
+
+function clientIp(req) {
+  return String(req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'local').split(',')[0].trim();
+}
+
+function rateLimitKey(pathname, req) {
+  if (pathname === '/api/auth/login') return { key: `login:${clientIp(req)}`, limit: 100, windowMs: 60 * 1000 };
+  if (pathname === '/api/uploads/cover') return { key: `upload:${clientIp(req)}`, limit: 20, windowMs: 60 * 1000 };
+  if (pathname === '/api/wallet/topup') return { key: `topup:${clientIp(req)}`, limit: 20, windowMs: 60 * 1000 };
+  if (/^\/api\/chapters\/[^/]+\/unlock$/.test(pathname)) return { key: `unlock:${clientIp(req)}`, limit: 40, windowMs: 60 * 1000 };
+  return null;
+}
+
+function checkRateLimit(req, pathname) {
+  const rule = rateLimitKey(pathname, req);
+  if (!rule) return true;
+  const timestamp = Date.now();
+  const bucket = rateBuckets.get(rule.key) || { count: 0, resetAt: timestamp + rule.windowMs };
+  if (bucket.resetAt <= timestamp) {
+    bucket.count = 0;
+    bucket.resetAt = timestamp + rule.windowMs;
+  }
+  bucket.count += 1;
+  rateBuckets.set(rule.key, bucket);
+  return bucket.count <= rule.limit;
 }
 
 function notFound(res) {
@@ -399,6 +433,15 @@ function isHttpUrl(value) {
   }
 }
 
+function isLocalAssetPath(value) {
+  const text = String(value || '');
+  return text.startsWith('/images/') || text.startsWith('/storage/');
+}
+
+function isStorageObjectPath(value) {
+  return /^covers\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+$/i.test(String(value || ''));
+}
+
 function isProfileImageDataUrl(value) {
   const text = String(value || '');
   return /^data:image\/(png|jpeg|jpg|webp);base64,[A-Za-z0-9+/=]+$/i.test(text) && text.length <= 3 * 1024 * 1024;
@@ -406,7 +449,24 @@ function isProfileImageDataUrl(value) {
 
 function isProfileImageValue(value) {
   if (!value) return true;
-  return isHttpUrl(value) || isProfileImageDataUrl(value);
+  return isHttpUrl(value) || isLocalAssetPath(value) || isStorageObjectPath(value);
+}
+
+function isDataImageValue(value) {
+  return /^data:image\/(png|jpeg|jpg|webp);base64,/i.test(String(value || ''));
+}
+
+function isCoverImageValue(value) {
+  if (!value) return true;
+  return isHttpUrl(value) || isLocalAssetPath(value) || isStorageObjectPath(value);
+}
+
+function validateUploadedImage(file) {
+  if (!file) return 'Vui long chon file anh.';
+  if (!IMAGE_MIME_TYPES.has(file.mimeType)) return 'Chi chap nhan anh JPG, PNG hoac WEBP.';
+  if (file.data.length > UPLOAD_LIMIT) return 'File goc toi da 10MB.';
+  if (file.data.length > COMPRESSED_IMAGE_LIMIT) return 'Anh sau nen toi da 500KB. Vui long nen anh truoc khi upload.';
+  return '';
 }
 
 function normalizeSocialLinks(input = {}) {
@@ -495,6 +555,7 @@ function validateProfilePayload(body, user, db) {
 
   if (has('avatar')) {
     const avatar = String(body.avatar || '').trim();
+    if (isDataImageValue(avatar)) return { error: 'Avatar phai duoc upload len storage, khong luu base64 trong database.' };
     if (!isProfileImageValue(avatar)) return { error: 'Avatar phải là ảnh PNG, JPG hoặc WEBP hợp lệ.' };
     value.avatar = avatar;
   }
@@ -507,6 +568,7 @@ function validateProfilePayload(body, user, db) {
 
   if (has('cover')) {
     const cover = String(body.cover || '').trim();
+    if (isDataImageValue(cover)) return { error: 'cover phai duoc upload len storage, khong luu base64 trong database.' };
     if (cover && !isHttpUrl(cover)) return { error: 'cover phải là URL http/https hợp lệ.' };
     value.cover = cover;
   }
@@ -819,6 +881,7 @@ function ensureDbShape(db) {
   db.history ||= [];
   db.purchases ||= [];
   db.transactions ||= [];
+  db.paymentOrders ||= [];
   db.comments ||= [];
   db.ratings ||= [];
   db.notifications ||= [];
@@ -1263,6 +1326,30 @@ function createNotification(db, userId, { type = 'system', title, body, link = '
   return notification;
 }
 
+function upsertReadingProgress(db, { userId, storyId, chapterId, chapterNumber, progressPercent = null, lastPosition = null }) {
+  db.history ||= [];
+  const timestamp = now();
+  const existing = db.history.find(item => item.userId === userId && item.storyId === storyId);
+  const patch = {
+    userId,
+    storyId,
+    chapterId,
+    chapterNumber,
+    progressPercent,
+    progress: progressPercent ?? undefined,
+    lastPosition,
+    lastReadAt: timestamp,
+    updatedAt: timestamp
+  };
+  if (existing) {
+    Object.assign(existing, patch);
+    return existing;
+  }
+  const progress = { id: uid('read'), createdAt: timestamp, ...patch };
+  db.history.push(progress);
+  return progress;
+}
+
 function countUnreadNotifications(db, userId) {
   return db.notifications.filter(item => item.userId === userId && !item.read).length;
 }
@@ -1307,6 +1394,7 @@ function normalizeAuthorStoryInput(body, user, existingStory) {
     author: String(body.author || existingStory?.author || user.name || 'Tac gia').trim(),
     translator: String(body.translator ?? existingStory?.translator ?? '').trim(),
     cover: String(body.cover ?? existingStory?.cover ?? '/images/cover-1.jpg').trim() || '/images/cover-1.jpg',
+    coverPath: String(body.coverPath ?? body.cover_path ?? existingStory?.coverPath ?? '').trim(),
     coverPosition: String(body.coverPosition ?? existingStory?.coverPosition ?? '50% 50%').trim(),
     shortDescription,
     description,
@@ -1329,6 +1417,8 @@ function validateAuthorStoryPayload(payload, approvalStatus) {
   if (!payload.title) return 'Ten truyen la bat buoc.';
   if (payload.title.length > 180) return 'Ten truyen qua dai.';
   if (payload.author.length > 120) return 'Tac gia qua dai.';
+  if (isDataImageValue(payload.cover)) return 'Anh bia phai duoc upload len storage, khong luu base64 trong database.';
+  if (payload.cover && !isCoverImageValue(payload.cover)) return 'Anh bia phai la URL/path hop le.';
   if (approvalStatus === 'pending') {
     if (payload.description.length < 20) return 'Mo ta can it nhat 20 ky tu truoc khi gui duyet.';
     if (!payload.categories.length) return 'Vui long chon it nhat mot the loai.';
@@ -1539,6 +1629,10 @@ async function handle(req, res) {
   const pathname = url.pathname;
 
   try {
+    if (!checkRateLimit(req, pathname)) {
+      return send(res, 429, { message: 'Qua nhieu request. Vui long thu lai sau.' });
+    }
+
     if (req.method === 'GET' && pathname === '/api/health') {
       return send(res, 200, { ok: true, app: 'Đậu Đỏ Truyện API', time: now() });
     }
@@ -1557,6 +1651,24 @@ async function handle(req, res) {
     return await dataStore.withLock(async () => {
     const db = ensureDbShape(await dataStore.loadDb());
     const viewer = getAuthUser(req, db);
+
+    if (req.method === 'POST' && pathname === '/api/uploads/cover') {
+      const user = requireUser(req, res, db);
+      if (!user) return;
+      const upload = await parseMultipartRequest(req);
+      const file = upload.files.find(item => item.fieldname === 'file') || upload.files[0];
+      const validationError = validateUploadedImage(file);
+      if (validationError) return badRequest(res, validationError);
+      const storyId = String(upload.fields.storyId || upload.fields.story_id || 'draft').trim();
+      const uploaded = await storage.uploadCoverImage(file, { storyId, userId: user.id });
+      return send(res, 201, {
+        path: uploaded.path,
+        url: uploaded.url,
+        cover: uploaded.url,
+        size: file.data.length,
+        mimeType: file.mimeType
+      });
+    }
 
     if (req.method === 'GET' && pathname === '/api/supabase/stories') {
       return send(res, 200, db.stories.slice().sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0)));
@@ -1827,14 +1939,7 @@ async function handle(req, res) {
       story.views += 1;
       db.viewEvents.push({ id: uid('view'), storyId: story.id, chapterId: chapter.id, userId: viewer?.id || null, createdAt: now() });
       if (viewer) {
-        const existing = db.history.find(item => item.userId === viewer.id && item.storyId === story.id);
-        if (existing) {
-          existing.chapterId = chapter.id;
-          existing.chapterNumber = chapter.number;
-          existing.updatedAt = now();
-        } else {
-          db.history.push({ id: uid('his'), userId: viewer.id, storyId: story.id, chapterId: chapter.id, chapterNumber: chapter.number, updatedAt: now() });
-        }
+        upsertReadingProgress(db, { userId: viewer.id, storyId: story.id, chapterId: chapter.id, chapterNumber: chapter.number });
       }
       await persistDb(db);
       return send(res, 200, { story: enrichStory(db, story, viewer && viewer.id, viewer?.role === 'admin'), chapter: payloadChapter, unlocked });
@@ -2003,9 +2108,10 @@ async function handle(req, res) {
           return badRequest(res, error.message);
         }
       }
-      user.seeds -= price;
+      const balanceBefore = Number(user.seeds || 0);
+      user.seeds = balanceBefore - price;
       db.purchases.push({ id: uid('pur'), userId: user.id, storyId: story.id, chapterId: null, combo: true, price, createdAt: now() });
-      db.transactions.push({ id: uid('txn'), userId: user.id, storyId: story.id, chapterId: null, price, type: 'purchase', amount: -price, note: `Mua combo ${story.title}`, createdAt: now() });
+      db.transactions.push({ id: uid('txn'), userId: user.id, storyId: story.id, chapterId: null, price, type: 'purchase', amount: -price, balanceBefore, balanceAfter: user.seeds, refType: 'combo', refId: story.id, note: `Mua combo ${story.title}`, createdAt: now() });
       createNotification(db, user.id, {
         type: 'purchase',
         title: 'Đã mở khóa combo',
@@ -2038,6 +2144,28 @@ async function handle(req, res) {
         })
         .filter(item => item.story && item.chapter);
       return send(res, 200, { bookmarks, follows, history });
+    }
+
+    if (req.method === 'POST' && pathname === '/api/reading-progress') {
+      const user = requireUser(req, res, db);
+      if (!user) return;
+      const body = await parseBody(req);
+      const story = db.stories.find(item => item.id === body.storyId || item.slug === body.storyId);
+      if (!story) return notFound(res);
+      const chapter = db.chapters.find(item => item.id === body.chapterId || (item.storyId === story.id && item.number === Number(body.chapterNumber)));
+      if (!chapter) return notFound(res);
+      const progressPercent = body.progressPercent === undefined ? null : clampNumber(body.progressPercent, 0, 100, null);
+      const lastPosition = body.lastPosition === undefined ? null : Math.max(0, Number(body.lastPosition) || 0);
+      const progress = upsertReadingProgress(db, {
+        userId: user.id,
+        storyId: story.id,
+        chapterId: chapter.id,
+        chapterNumber: chapter.number,
+        progressPercent,
+        lastPosition
+      });
+      await persistDb(db);
+      return send(res, 200, { progress });
     }
 
     if (req.method === 'GET' && pathname === '/api/wallet/packages') {
@@ -2152,8 +2280,16 @@ async function handle(req, res) {
           return badRequest(res, error.message);
         }
       }
-      user.seeds += seeds;
-      db.transactions.push({ id: uid('txn'), userId: user.id, type: 'topup', amount: seeds, note: `Nạp ${seeds} Đậu`, createdAt: now() });
+      const idempotencyKey = String(body.idempotencyKey || body.providerOrderId || `${user.id}:${body.packageId}:mock`).slice(0, 160);
+      let order = db.paymentOrders.find(item => item.idempotencyKey === idempotencyKey);
+      if (order?.status === 'paid') return send(res, 200, { user: safeUser(user), balance: user.seeds, order });
+      order ||= { id: uid('pay'), userId: user.id, provider: 'mock', providerOrderId: idempotencyKey, amountVnd: 0, coins: seeds, status: 'pending', idempotencyKey, createdAt: now(), metadata: { packageId: body.packageId } };
+      order.status = 'paid';
+      order.paidAt = order.paidAt || now();
+      if (!db.paymentOrders.includes(order)) db.paymentOrders.push(order);
+      const balanceBefore = Number(user.seeds || 0);
+      user.seeds = balanceBefore + seeds;
+      db.transactions.push({ id: uid('txn'), userId: user.id, type: 'topup', amount: seeds, balanceBefore, balanceAfter: user.seeds, refType: 'payment_order', refId: order.id, note: `Nạp ${seeds} Đậu`, createdAt: now() });
       createNotification(db, user.id, {
         type: 'wallet',
         title: 'Nạp Đậu thành công',
@@ -2161,7 +2297,32 @@ async function handle(req, res) {
         link: '/wallet'
       });
       await persistDb(db);
-      return send(res, 200, { user: safeUser(user), balance: user.seeds });
+      return send(res, 200, { user: safeUser(user), balance: user.seeds, order });
+    }
+
+    if (req.method === 'POST' && pathname === '/api/payments/webhook') {
+      const body = await parseBody(req);
+      const provider = String(body.provider || 'mock').slice(0, 40);
+      const providerOrderId = String(body.providerOrderId || body.provider_order_id || '').trim();
+      if (!providerOrderId) return badRequest(res, 'providerOrderId is required.');
+      const order = db.paymentOrders.find(item => item.provider === provider && item.providerOrderId === providerOrderId);
+      if (!order) return notFound(res);
+      if (order.status === 'paid') return send(res, 200, { ok: true, order });
+      if (String(body.status || '') !== 'paid') {
+        order.status = ['failed', 'expired', 'refunded'].includes(body.status) ? body.status : 'failed';
+        await persistDb(db);
+        return send(res, 200, { ok: true, order });
+      }
+      const user = db.users.find(item => item.id === order.userId);
+      if (!user) return notFound(res);
+      const balanceBefore = Number(user.seeds || 0);
+      user.seeds = balanceBefore + Number(order.coins || 0);
+      user.updatedAt = now();
+      order.status = 'paid';
+      order.paidAt = now();
+      db.transactions.push({ id: uid('txn'), userId: user.id, type: 'topup', amount: Number(order.coins || 0), balanceBefore, balanceAfter: user.seeds, refType: 'payment_order', refId: order.id, note: `Payment ${providerOrderId}`, createdAt: now() });
+      await persistDb(db);
+      return send(res, 200, { ok: true, order });
     }
 
     const unlockParams = match(pathname, '/api/chapters/:id/unlock');
@@ -2189,9 +2350,10 @@ async function handle(req, res) {
           return badRequest(res, error.message);
         }
       }
-      user.seeds -= chapter.price;
+      const balanceBefore = Number(user.seeds || 0);
+      user.seeds = balanceBefore - chapter.price;
       db.purchases.push({ id: uid('pur'), userId: user.id, storyId: chapter.storyId, chapterId: chapter.id, price: chapter.price, createdAt: now() });
-      db.transactions.push({ id: uid('txn'), userId: user.id, storyId: chapter.storyId, chapterId: chapter.id, price: chapter.price, type: 'purchase', amount: -chapter.price, note: `Mở khóa ${chapter.title}`, createdAt: now() });
+      db.transactions.push({ id: uid('txn'), userId: user.id, storyId: chapter.storyId, chapterId: chapter.id, price: chapter.price, type: 'purchase', amount: -chapter.price, balanceBefore, balanceAfter: user.seeds, refType: 'chapter_purchase', refId: chapter.id, note: `Mở khóa ${chapter.title}`, createdAt: now() });
       const story = db.stories.find(item => item.id === chapter.storyId);
       createNotification(db, user.id, {
         type: 'purchase',
@@ -2256,6 +2418,7 @@ async function handle(req, res) {
         author: payload.author,
         translator: payload.translator,
         cover: payload.cover,
+        coverPath: payload.coverPath,
         coverPosition: payload.coverPosition,
         shortDescription: payload.shortDescription,
         description: payload.description,
@@ -2317,11 +2480,15 @@ async function handle(req, res) {
       const payload = normalizeAuthorStoryInput(body, user, story);
       const inputError = validateAuthorStoryPayload(payload, approvalStatus);
       if (inputError) return badRequest(res, inputError);
+      if (story.coverPath && payload.coverPath && story.coverPath !== payload.coverPath) {
+        await storage.deleteImage(story.coverPath).catch(error => console.warn(`Could not delete old cover ${story.coverPath}: ${error.message}`));
+      }
       Object.assign(story, {
         title: payload.title,
         author: payload.author,
         translator: payload.translator,
         cover: payload.cover,
+        coverPath: payload.coverPath,
         coverPosition: payload.coverPosition,
         shortDescription: payload.shortDescription,
         description: payload.description,
@@ -2749,13 +2916,18 @@ async function handle(req, res) {
       const amount = Number(body.amount);
       if (!Number.isFinite(amount) || amount === 0) return badRequest(res, 'So Dau dieu chinh khong hop le.');
       const before = adminUserSummary(db, target);
-      target.seeds = Math.max(0, Number(target.seeds || 0) + amount);
+      const balanceBefore = Number(target.seeds || 0);
+      target.seeds = Math.max(0, balanceBefore + amount);
       target.updatedAt = now();
       const transaction = {
         id: uid('txn'),
         userId: target.id,
         type: 'admin_adjustment',
         amount,
+        balanceBefore,
+        balanceAfter: target.seeds,
+        refType: 'admin_user',
+        refId: target.id,
         seeds: Math.abs(amount),
         status: 'success',
         method: 'admin',

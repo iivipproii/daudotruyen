@@ -230,8 +230,8 @@ test('account profile endpoint validates and persists profile fields', async () 
     headers,
     body: JSON.stringify({ avatar: avatarDataUrl })
   });
-  assert.equal(avatarOnly.response.status, 200);
-  assert.equal(avatarOnly.data.profile.avatar, avatarDataUrl);
+  assert.equal(avatarOnly.response.status, 400);
+  assert.match(avatarOnly.data.message, /base64/i);
 });
 
 test('account preferences endpoint whitelists keys and persists values', async () => {
@@ -367,6 +367,88 @@ test('premium chapter returns preview when not unlocked', async () => {
   assert.equal(response.status, 200);
   assert.equal(data.unlocked, null);
   assert.match(data.chapter.content, /Đoạn xem trước/);
+});
+
+test('cover upload validates image size and stories reject base64 covers', async () => {
+  const token = await loginToken('user@example.com');
+  const headers = { Authorization: `Bearer ${token}` };
+  const tooLarge = new FormData();
+  tooLarge.append('file', new Blob([Buffer.alloc(501 * 1024)], { type: 'image/webp' }), 'cover.webp');
+  const rejected = await request('/api/uploads/cover', { method: 'POST', headers, body: tooLarge });
+  assert.equal(rejected.response.status, 400);
+
+  const body = new FormData();
+  body.append('file', new Blob([Buffer.from('webp')], { type: 'image/webp' }), 'cover.webp');
+  const uploaded = await request('/api/uploads/cover', { method: 'POST', headers, body });
+  assert.equal(uploaded.response.status, 201);
+  assert.ok(uploaded.data.url);
+  assert.ok(!uploaded.data.url.startsWith('data:image/'));
+
+  const story = await request('/api/author/stories', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ title: 'Cover URL Story', description: 'Draft story', cover: uploaded.data.url, approvalStatus: 'draft' })
+  });
+  assert.equal(story.response.status, 201);
+  assert.equal(story.data.story.cover, uploaded.data.url);
+
+  const base64 = await request('/api/author/stories', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ title: 'Base64 Cover Story', description: 'Draft story', cover: 'data:image/png;base64,iVBORw0KGgo=', approvalStatus: 'draft' })
+  });
+  assert.equal(base64.response.status, 400);
+});
+
+test('reading progress is upserted per user and story', async () => {
+  const token = await loginToken('user@example.com');
+  const headers = { Authorization: `Bearer ${token}` };
+  await request('/api/stories/dau-pha-thuong-khung/chapters/1', { headers });
+  await request('/api/stories/dau-pha-thuong-khung/chapters/2', { headers });
+  const rows = readTestDb().history.filter(item => item.userId === 'u_user' && item.storyId === 's1');
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].chapterId, 'c_s1_2');
+});
+
+test('unlocking a VIP chapter is idempotent and writes ledger fields', async () => {
+  const user = await registerUser('vip-idempotent@example.com', 'VIP Idempotent');
+  const headers = { Authorization: `Bearer ${user.token}` };
+  const db = readTestDb();
+  db.users.find(item => item.id === user.user.id).seeds = 30;
+  writeTestDb(db);
+
+  const first = await request('/api/chapters/c_s1_5/unlock', { method: 'POST', headers });
+  const second = await request('/api/chapters/c_s1_5/unlock', { method: 'POST', headers });
+  assert.equal(first.response.status, 200);
+  assert.equal(second.response.status, 200);
+
+  const after = readTestDb();
+  const purchases = after.purchases.filter(item => item.userId === user.user.id && item.chapterId === 'c_s1_5');
+  const txns = after.transactions.filter(item => item.userId === user.user.id && item.chapterId === 'c_s1_5' && item.type === 'purchase');
+  assert.equal(purchases.length, 1);
+  assert.equal(txns.length, 1);
+  assert.equal(after.users.find(item => item.id === user.user.id).seeds, 22);
+  assert.equal(txns[0].balanceBefore, 30);
+  assert.equal(txns[0].balanceAfter, 22);
+});
+
+test('mock topup is idempotent and admin adjustment writes audit log', async () => {
+  const user = await registerUser('wallet-idempotent@example.com', 'Wallet Idempotent');
+  const headers = { Authorization: `Bearer ${user.token}` };
+  const first = await request('/api/wallet/topup', { method: 'POST', headers, body: JSON.stringify({ packageId: 'seed-20', idempotencyKey: 'idem-1' }) });
+  const second = await request('/api/wallet/topup', { method: 'POST', headers, body: JSON.stringify({ packageId: 'seed-20', idempotencyKey: 'idem-1' }) });
+  assert.equal(first.response.status, 200);
+  assert.equal(second.response.status, 200);
+  assert.equal(second.data.balance, first.data.balance);
+
+  const adminToken = await loginToken();
+  const adjust = await request(`/api/admin/users/${user.user.id}/adjust-balance`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({ amount: 5, reason: 'ledger test' })
+  });
+  assert.equal(adjust.response.status, 200);
+  assert.ok(readTestDb().adminLogs.some(item => item.action === 'adjust_balance' && item.entityId === user.user.id));
 });
 
 test('rankings use view events for periods and story totals for all time', async () => {

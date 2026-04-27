@@ -6,6 +6,7 @@ This project is a reconstructed full-stack reading app based on the exported `we
 
 - Frontend: React + Vite + React Router + plain CSS
 - Backend: Node.js HTTP server with Supabase persistence
+- Storage: Supabase Storage through `backend/src/services/storage.js`
 - Auth: local HMAC token for development
 - Features: story browsing, story detail, paid chapters via xu, bookmarks, follows, reading history, wallet, AI tools, admin dashboard
 
@@ -42,6 +43,10 @@ SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=<service-role-key>
 JWT_SECRET=<long-random-secret>
 FRONTEND_ORIGIN=http://localhost:5173,https://daudotruyen.vercel.app,https://daudo-truyen.vercel.app
+DATA_STORE=supabase
+STORAGE_PROVIDER=supabase
+SUPABASE_COVER_BUCKET=story-covers
+PUBLIC_STORAGE_BASE_URL=
 ```
 
 `SUPABASE_SERVICE_ROLE_KEY` is server-only. Never expose it through Vite or frontend env files.
@@ -94,8 +99,9 @@ npm run reset-db
 
 1. Create a Supabase project.
 2. Open Supabase SQL Editor and run `supabase/schema.sql`.
-3. Set backend env vars: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `JWT_SECRET`, and `FRONTEND_ORIGIN`.
-4. Import existing JSON data:
+3. Confirm the public storage bucket `story-covers` exists. The schema inserts it automatically when the Supabase `storage` schema is available.
+4. Set backend env vars: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `JWT_SECRET`, `FRONTEND_ORIGIN`, `DATA_STORE=supabase`, `STORAGE_PROVIDER=supabase`, and `SUPABASE_COVER_BUCKET=story-covers`.
+5. Import existing JSON data:
 
 ```bash
 cd backend
@@ -108,15 +114,29 @@ The migration reads `backend/data/db.json` when present, upserts rows idempotent
 
 - `POST /api/auth/login`
 - `POST /api/auth/register`
+- `POST /api/uploads/cover` (multipart image upload; JPG/PNG/WEBP, original max 10MB, compressed max 500KB)
 - `GET /api/stories`
 - `GET /api/stories/:slug`
 - `GET /api/stories/:slug/chapters/:number`
 - `POST /api/stories/:id/bookmark`
 - `POST /api/stories/:id/follow`
 - `GET /api/me/library`
+- `POST /api/reading-progress` (upserts one row per user/story)
 - `GET /api/wallet/transactions`
 - `POST /api/wallet/topup`
+- `POST /api/payments/webhook`
 - `POST /api/chapters/:id/unlock`
+
+## Production data model
+
+`backend/data/db.json` is no longer a production source of truth. Production runs against PostgreSQL/Supabase with:
+
+- `stories.cover_url` / `stories.cover_path` and `users.avatar_url`; base64 images are rejected by backend validation.
+- `reading_progress` with `unique(user_id, story_id)` so reading only updates the last state for a story.
+- `user_wallets`, `payment_orders`, `coin_transactions`, and `chapter_purchases`; chapter unlock uses a transaction/RPC path and `unique(user_id, chapter_id)` to avoid double charging.
+- `admin_audit_logs` for production audit trails. The legacy in-app admin log response is still kept compatible for the current UI.
+
+The frontend author cover uploader compresses selected covers client-side to WebP around 1100px wide and uploads the compressed file before saving the story. The database only receives the returned URL/path.
 
 ## Admin CMS API
 
@@ -189,6 +209,9 @@ JWT_SECRET=<long-random-secret>
 FRONTEND_ORIGIN=https://daudotruyen.vercel.app,https://daudo-truyen.vercel.app
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=<service-role-key>
+DATA_STORE=supabase
+STORAGE_PROVIDER=supabase
+SUPABASE_COVER_BUCKET=story-covers
 ```
 
 `backend/src/server.js` already accepts a comma-separated `FRONTEND_ORIGIN`, so you can allow both the current public Vercel domain and the legacy hyphenated domain during cutover.
