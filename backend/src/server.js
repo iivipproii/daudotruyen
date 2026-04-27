@@ -352,6 +352,14 @@ function storySummary(story) {
     rating: story.rating,
     ratingCount: story.ratingCount,
     approvalStatus: story.approvalStatus || 'approved',
+    featured: Boolean(story.featured),
+    hot: Boolean(story.hot),
+    recommended: Boolean(story.recommended),
+    banner: Boolean(story.banner),
+    isFeatured: Boolean(story.featured),
+    isHot: Boolean(story.hot),
+    isRecommended: Boolean(story.recommended),
+    isBanner: Boolean(story.banner),
     follows: story.follows,
     categories: story.categories,
     tags: story.tags,
@@ -2114,6 +2122,9 @@ async function handle(req, res) {
       const ageRating = url.searchParams.get('ageRating') || '';
       const sort = url.searchParams.get('sort') || 'updated';
       const featured = url.searchParams.get('featured') === 'true';
+      const hot = url.searchParams.get('hot') === 'true' || url.searchParams.get('isHot') === 'true';
+      const recommended = url.searchParams.get('recommended') === 'true' || url.searchParams.get('isRecommended') === 'true';
+      const banner = url.searchParams.get('banner') === 'true' || url.searchParams.get('isBanner') === 'true';
       const limit = clampNumber(url.searchParams.get('limit'), 1, 100, 100);
       let items = db.stories.filter(isPublicStory).map(story => enrichStory(db, story, viewer && viewer.id));
       if (q) items = items.filter(story => [story.title, story.author, story.description, ...story.categories].join(' ').toLowerCase().includes(q));
@@ -2122,6 +2133,9 @@ async function handle(req, res) {
       if (premium) items = items.filter(story => String(story.premium) === premium);
       if (ageRating) items = items.filter(story => story.ageRating === ageRating);
       if (featured) items = items.filter(story => story.featured);
+      if (hot) items = items.filter(story => story.hot);
+      if (recommended) items = items.filter(story => story.recommended);
+      if (banner) items = items.filter(story => story.banner);
       items.sort((a, b) => {
         if (sort === 'views') return b.views - a.views;
         if (sort === 'rating') return b.rating - a.rating;

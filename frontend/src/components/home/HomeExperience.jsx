@@ -137,19 +137,23 @@ function buildHomeSlices(sourceStories = mockStories) {
   const byUpdated = stories.slice().sort(sortByDate('updatedAt'));
   const completed = stories.filter(story => story.status === 'completed');
   const featured = stories
-    .filter(story => story.featured && isDisplaySafeStory(story))
+    .filter(story => (story.featured || story.isFeatured) && isDisplaySafeStory(story))
     .concat(byRating.filter(isDisplaySafeStory))
     .filter((story, index, list) => list.findIndex(item => item.id === story.id) === index);
+  const hot = stories.filter(story => story.hot || story.isHot);
+  const recommended = stories.filter(story => story.recommended || story.isRecommended);
+  const banner = stories.filter(story => story.banner || story.isBanner);
 
   return {
     all: stories,
-    hero: featured.slice(0, 5),
-    hot: byViews.slice(0, 8),
+    hero: (banner.length ? banner : featured).slice(0, 5),
+    hot: (hot.length ? hot : byViews).slice(0, 12),
     trending: byRating.slice(0, 8),
     updated: byUpdated.slice(0, 8),
     completed: (completed.length ? completed : byRating).slice(0, 8),
     newLaunch: stories.slice().sort(sortByDate('createdAt')).slice(0, 8),
     editorPicks: featured.slice(0, 8),
+    recommended: (recommended.length ? recommended : featured).slice(0, 8),
     personalized: byRating.filter(story => story.categories?.some(category => ['Ngôn tình', 'Đô thị', 'Chữa lành', 'Trinh thám'].includes(category))).slice(0, 8),
     ranking: byViews.slice(0, 10),
     categories: uniqueCategoriesFrom(stories)
@@ -743,10 +747,13 @@ export function ProductionHome({ apiClient, currentUser }) {
 
     async function loadHome() {
       setLoading(true);
-      const [created, updated, featured, views, completed, categories] = await Promise.all([
+      const [created, updated, featured, hot, recommended, banner, views, completed, categories] = await Promise.all([
         fetchSafe(apiClient, '/stories?sort=created&limit=20'),
         fetchSafe(apiClient, '/stories?sort=updated&limit=20'),
         fetchSafe(apiClient, '/stories?featured=true&sort=rating&limit=20'),
+        fetchSafe(apiClient, '/stories?hot=true&sort=updated&limit=24'),
+        fetchSafe(apiClient, '/stories?recommended=true&sort=updated&limit=20'),
+        fetchSafe(apiClient, '/stories?banner=true&sort=updated&limit=10'),
         fetchSafe(apiClient, '/stories?sort=views&limit=20'),
         fetchSafe(apiClient, '/stories?status=completed&sort=updated&limit=20'),
         fetchSafe(apiClient, '/categories')
@@ -757,6 +764,9 @@ export function ProductionHome({ apiClient, currentUser }) {
       const merged = normalizeStories([
         ...(created?.stories || []),
         ...(featured?.stories || []),
+        ...(hot?.stories || []),
+        ...(recommended?.stories || []),
+        ...(banner?.stories || []),
         ...(views?.stories || []),
         ...(updated?.stories || []),
         ...(completed?.stories || [])
@@ -809,6 +819,9 @@ export function ProductionHome({ apiClient, currentUser }) {
       <ContinueReadingSection user={currentUser} items={continueItems} />
       <StorySection kicker="Hot" title="Truyện hot" subtitle="Những bộ truyện có lượng đọc và theo dõi nổi bật trong cộng đồng." to="/danh-sach?sort=views">
         <StoryGrid stories={homeData.hot} />
+      </StorySection>
+      <StorySection kicker="Recommend" title="Đề cử" subtitle="Truyện được admin chọn để đề xuất trên trang chủ." to="/danh-sach?recommended=true">
+        <StoryGrid stories={homeData.recommended} />
       </StorySection>
       <StorySection kicker="Trending" title="Đang thịnh hành" subtitle="Các tác phẩm tăng nhiệt nhanh nhờ đánh giá tốt và tương tác cao." to="/xep-hang">
         <StoryGrid stories={homeData.trending} />
