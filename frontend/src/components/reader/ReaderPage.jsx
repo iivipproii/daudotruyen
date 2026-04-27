@@ -144,6 +144,47 @@ function loadSettings() {
   }
 }
 
+function hasHtmlContent(value = '') {
+  return /<\/?[a-z][\s\S]*>/i.test(String(value || ''));
+}
+
+function sanitizeReaderHtml(value = '') {
+  if (typeof window === 'undefined' || typeof DOMParser === 'undefined') return '';
+  try {
+    const document = new DOMParser().parseFromString(String(value || ''), 'text/html');
+    document.querySelectorAll('script, style, iframe, object, embed, form, input, button, textarea, select, meta, link').forEach(node => node.remove());
+    document.querySelectorAll('*').forEach(node => {
+      [...node.attributes].forEach(attribute => {
+        const name = attribute.name.toLowerCase();
+        const rawValue = String(attribute.value || '').trim();
+        if (name.startsWith('on') || name === 'style' || rawValue.toLowerCase().startsWith('javascript:')) {
+          node.removeAttribute(attribute.name);
+        }
+      });
+      if (node.tagName === 'A') {
+        node.setAttribute('target', '_blank');
+        node.setAttribute('rel', 'noopener noreferrer');
+      }
+      if (node.tagName === 'IMG') {
+        node.setAttribute('loading', 'lazy');
+        node.setAttribute('decoding', 'async');
+      }
+    });
+    return document.body.innerHTML;
+  } catch {
+    return '';
+  }
+}
+
+function readerProgressKeys(story, chapter) {
+  const storyKey = story?.slug || story?.id || 'unknown';
+  const chapterKey = chapter?.id || chapter?.number || 'unknown';
+  return {
+    story: `daudo_reader_progress:${storyKey}`,
+    chapter: `daudo_reader_progress:${storyKey}:${chapterKey}`
+  };
+}
+
 function mockChapterComments(chapterId) {
   return [
     { id: `${chapterId}-cc1`, userName: 'Bạn đọc ẩn danh', body: 'Đoạn này mở nút khá tốt.', likes: 7, replies: [] },
@@ -157,6 +198,9 @@ export function ReaderPage({ apiClient, user, updateUser }) {
   const articleRef = useRef(null);
   const touchStartRef = useRef(null);
   const autoScrollRef = useRef(null);
+  const saveProgressRef = useRef(null);
+  const progressRef = useRef(0);
+  const restoredRef = useRef('');
   const [payload, setPayload] = useState(null);
   const [chapters, setChapters] = useState([]);
   const [settings, setSettings] = useState(loadSettings);
@@ -172,6 +216,11 @@ export function ReaderPage({ apiClient, user, updateUser }) {
   const [comments, setComments] = useState([]);
   const [reportTarget, setReportTarget] = useState(null);
   const [unlocked, setUnlocked] = useState(true);
+
+  useEffect(() => {
+    document.body.classList.add('reader-route-active');
+    return () => document.body.classList.remove('reader-route-active');
+  }, []);
 
   async function loadReader() {
     setLoading(true);
@@ -206,7 +255,8 @@ export function ReaderPage({ apiClient, user, updateUser }) {
   useEffect(() => {
     loadReader();
     setProgress(0);
-    window.scrollTo({ top: 0, behavior: 'auto' });
+    progressRef.current = 0;
+    restoredRef.current = '';
   }, [slug, number]);
 
   useEffect(() => {
@@ -225,25 +275,71 @@ export function ReaderPage({ apiClient, user, updateUser }) {
 
   useEffect(() => {
     let lastY = window.scrollY;
+    let ticking = false;
     const onScroll = () => {
+      if (ticking) return;
+      ticking = true;
+      window.requestAnimationFrame(() => {
+        ticking = false;
       const doc = document.documentElement;
       const max = Math.max(1, doc.scrollHeight - window.innerHeight);
       const nextProgress = Math.min(100, Math.max(0, Math.round((window.scrollY / max) * 100)));
-      setProgress(nextProgress);
+        if (Math.abs(nextProgress - progressRef.current) >= 1) {
+          progressRef.current = nextProgress;
+          setProgress(nextProgress);
+        }
       setToolbarHidden(window.scrollY > lastY && window.scrollY > 140);
       lastY = window.scrollY;
       if (payload?.story && payload?.chapter) {
-        localStorage.setItem(`daudo_reader_progress:${payload.story.slug}`, JSON.stringify({
-          chapterNumber: payload.chapter.number,
+          if (saveProgressRef.current) window.clearTimeout(saveProgressRef.current);
+          saveProgressRef.current = window.setTimeout(() => {
+            const keys = readerProgressKeys(payload.story, payload.chapter);
+            const progressPayload = {
+              storyId: payload.story.id,
+              chapterId: payload.chapter.id,
+              chapterNumber: payload.chapter.number,
+              scrollY: Math.max(0, Math.round(window.scrollY)),
+              percent: nextProgress,
           progress: nextProgress,
-          updatedAt: new Date().toISOString()
-        }));
+              updatedAt: new Date().toISOString()
+            };
+            localStorage.setItem(keys.story, JSON.stringify(progressPayload));
+            localStorage.setItem(keys.chapter, JSON.stringify(progressPayload));
+          }, 180);
       }
+      });
     };
     window.addEventListener('scroll', onScroll, { passive: true });
     onScroll();
-    return () => window.removeEventListener('scroll', onScroll);
+    return () => {
+      window.removeEventListener('scroll', onScroll);
+      if (saveProgressRef.current) window.clearTimeout(saveProgressRef.current);
+    };
   }, [payload?.story?.slug, payload?.chapter?.number]);
+
+  useEffect(() => {
+    if (!payload?.story || !payload?.chapter || loading) return;
+    const keys = readerProgressKeys(payload.story, payload.chapter);
+    const restoreKey = keys.chapter;
+    if (restoredRef.current === restoreKey) return;
+    restoredRef.current = restoreKey;
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        let saved = null;
+        try {
+          saved = JSON.parse(localStorage.getItem(keys.chapter) || localStorage.getItem(keys.story) || 'null');
+        } catch {
+          saved = null;
+        }
+        const shouldRestore = saved && Number(saved.chapterNumber) === Number(payload.chapter.number);
+        const max = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+        const savedY = Number(saved?.scrollY || 0);
+        const fallbackY = Math.round(max * (Number(saved?.percent ?? saved?.progress ?? 0) / 100));
+        const targetY = Math.min(max, Math.max(0, shouldRestore ? savedY || fallbackY : 0));
+        window.scrollTo({ top: targetY, behavior: 'auto' });
+      });
+    });
+  }, [payload?.story?.slug, payload?.chapter?.number, loading]);
 
   useEffect(() => {
     const onKeyDown = event => {
@@ -383,8 +479,12 @@ export function ReaderPage({ apiClient, user, updateUser }) {
   if (loading) return <ReaderLoading />;
   if (!payload) return <div className="rp-empty">Không tìm thấy chương.</div>;
 
-  const { story, chapter } = payload;
-  const contentLines = String(chapter.content || '').split('\n');
+  const story = payload.story;
+  const chapter = payload.chapter;
+  const rawContent = String(unlocked ? chapter.content || '' : chapter.preview || chapter.content || '');
+  const isHtmlContent = hasHtmlContent(rawContent);
+  const sanitizedHtml = isHtmlContent ? sanitizeReaderHtml(rawContent) : '';
+  const contentLines = isHtmlContent ? [] : rawContent.split('\n');
   const readerDescription = `Đọc ${chapter.title} của ${story.title} trên Đậu Đỏ Truyện. Tùy chỉnh cỡ chữ, nền đọc, bookmark và chuyển chương nhanh.`;
   const readerSchema = [
     {
@@ -466,7 +566,10 @@ export function ReaderPage({ apiClient, user, updateUser }) {
           )}
 
           <div className="rp-content">
-            {contentLines.map((line, index) => line.trim() ? <p key={index}>{line}</p> : <br key={index} />)}
+            {sanitizedHtml
+              ? <div className="rp-html-content" dangerouslySetInnerHTML={{ __html: sanitizedHtml }} />
+              : contentLines.map((line, index) => line.trim() ? <p key={index}>{line}</p> : <br key={index} />)}
+            {!rawContent.trim() && <div className="rp-empty">Chương này chưa có nội dung để hiển thị.</div>}
           </div>
 
           <nav className="rp-bottom-nav">
