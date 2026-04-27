@@ -28,6 +28,7 @@ import { AuthorDashboard } from './components/author/AuthorDashboard.jsx';
 import { AdminDashboard as AdminCMSDashboard, NotificationPage as CMSNotificationPage } from './components/admin/AdminCMS.jsx';
 import { PageSeo } from './components/shared/Seo.jsx';
 import { AUTHOR_CATEGORIES } from './data/storyCategories.js';
+import { canPostStory, isAdmin, normalizeRole } from './lib/permissions.js';
 
 const API_BASE = (() => {
   const configured = String(import.meta.env.VITE_API_URL || '').trim();
@@ -41,6 +42,10 @@ const AuthContext = createContext(null);
 const ThemeContext = createContext(null);
 const STORY_CATEGORIES = AUTHOR_CATEGORIES;
 const PUBLISH_STORY_CATEGORIES = AUTHOR_CATEGORIES;
+
+function normalizeSessionUser(user) {
+  return user ? { ...user, role: normalizeRole(user.role) } : null;
+}
 
 async function api(path, options = {}) {
   const token = localStorage.getItem('daudo_token');
@@ -91,7 +96,7 @@ function AuthProvider({ children }) {
       return;
     }
     api('/auth/me')
-      .then(data => setUser(data.user))
+      .then(data => setUser(normalizeSessionUser(data.user)))
       .catch(() => localStorage.removeItem('daudo_token'))
       .finally(() => setLoading(false));
   }, []);
@@ -102,8 +107,9 @@ function AuthProvider({ children }) {
     async login(identifier, password) {
       const data = await api('/auth/login', { method: 'POST', body: JSON.stringify({ identifier, password }) });
       localStorage.setItem('daudo_token', data.token);
-      setUser(data.user);
-      return data.user;
+      const nextUser = normalizeSessionUser(data.user);
+      setUser(nextUser);
+      return nextUser;
     },
     async register(payloadOrName, username, email, password) {
       const payload = typeof payloadOrName === 'object'
@@ -111,15 +117,16 @@ function AuthProvider({ children }) {
         : { name: payloadOrName, username, email, password };
       const data = await api('/auth/register', { method: 'POST', body: JSON.stringify(payload) });
       localStorage.setItem('daudo_token', data.token);
-      setUser(data.user);
-      return data.user;
+      const nextUser = normalizeSessionUser(data.user);
+      setUser(nextUser);
+      return nextUser;
     },
     logout() {
       localStorage.removeItem('daudo_token');
       setUser(null);
     },
     updateUser(nextUser) {
-      setUser(nextUser);
+      setUser(normalizeSessionUser(nextUser));
     }
   }), [user, loading]);
 
@@ -161,19 +168,19 @@ function App() {
               <Route path="/notifications" element={<Protected><NotificationsRoute /></Protected>} />
               <Route path="/thong-bao" element={<Protected><NotificationsRoute /></Protected>} />
               <Route path="/ai-tools" element={<AiTools />} />
-              <Route path="/author" element={<Protected><AuthorRoute /></Protected>} />
-              <Route path="/author/stories" element={<Protected><AuthorRoute /></Protected>} />
-              <Route path="/author/stories/new" element={<Protected><AuthorRoute /></Protected>} />
-              <Route path="/author/stories/:id/edit" element={<Protected><AuthorRoute /></Protected>} />
-              <Route path="/author/stories/:id/preview" element={<Protected><AuthorRoute /></Protected>} />
-              <Route path="/author/stories/:id/chapters" element={<Protected><AuthorRoute /></Protected>} />
-              <Route path="/author/stories/:id/chapters/new" element={<Protected><AuthorRoute /></Protected>} />
-              <Route path="/author/stories/:id/chapters/bulk" element={<Protected><AuthorRoute /></Protected>} />
-              <Route path="/author/chapters" element={<Protected><AuthorRoute /></Protected>} />
-              <Route path="/author/revenue" element={<Protected><AuthorRoute /></Protected>} />
-              <Route path="/author/promotions" element={<Protected><AuthorRoute /></Protected>} />
-              <Route path="/dang-truyen" element={<Protected><Navigate to="/author/stories/new" replace /></Protected>} />
-              <Route path="/dang-truyen/them-nhieu-chuong" element={<Protected><AuthorRoute /></Protected>} />
+              <Route path="/author" element={<Protected author><AuthorRoute /></Protected>} />
+              <Route path="/author/stories" element={<Protected author><AuthorRoute /></Protected>} />
+              <Route path="/author/stories/new" element={<Protected author><AuthorRoute /></Protected>} />
+              <Route path="/author/stories/:id/edit" element={<Protected author><AuthorRoute /></Protected>} />
+              <Route path="/author/stories/:id/preview" element={<Protected author><AuthorRoute /></Protected>} />
+              <Route path="/author/stories/:id/chapters" element={<Protected author><AuthorRoute /></Protected>} />
+              <Route path="/author/stories/:id/chapters/new" element={<Protected author><AuthorRoute /></Protected>} />
+              <Route path="/author/stories/:id/chapters/bulk" element={<Protected author><AuthorRoute /></Protected>} />
+              <Route path="/author/chapters" element={<Protected author><AuthorRoute /></Protected>} />
+              <Route path="/author/revenue" element={<Protected author><AuthorRoute /></Protected>} />
+              <Route path="/author/promotions" element={<Protected author><AuthorRoute /></Protected>} />
+              <Route path="/dang-truyen" element={<Protected author><Navigate to="/author/stories/new" replace /></Protected>} />
+              <Route path="/dang-truyen/them-nhieu-chuong" element={<Protected author><AuthorRoute /></Protected>} />
               <Route path="/admin" element={<Protected admin><AdminRoute /></Protected>} />
               <Route path="/quan-tri-vien" element={<Protected admin><AdminRoute /></Protected>} />
               <Route path="/admin/users" element={<Protected admin><AdminRoute /></Protected>} />
@@ -526,8 +533,8 @@ function PublicHeader() {
         {user ? (
           <>
             <Link to="/ho-so" className="pill">🌱 {user.seeds} Đậu</Link>
-            {user.role === 'admin' && <Link to="/dang-truyen" className="pill admin-pill">Đăng truyện</Link>}
-            {user.role === 'admin' && <Link to="/admin" className="pill admin-pill">Admin</Link>}
+            {canPostStory(user.role) && <Link to="/dang-truyen" className="pill admin-pill">Đăng truyện</Link>}
+            {isAdmin(user.role) && <Link to="/admin" className="pill admin-pill">Admin</Link>}
             <button onClick={logout} className="ghost">Thoát</button>
           </>
         ) : (
@@ -732,12 +739,13 @@ function PublicHeaderEnhanced() {
   const profileMenuItems = [
     { icon: '◉', label: 'Hồ sơ cá nhân', to: '/settings#profile' },
     { icon: '▰', label: 'Tủ truyện', to: '/bookmarks' },
-    { icon: '◒', label: 'Đăng truyện mới', to: '/dang-truyen', adminOnly: true },
-    { icon: '▣', label: 'Quản lý truyện', to: '/admin', adminOnly: true },
+    { icon: '◒', label: 'Đăng truyện mới', to: '/dang-truyen', authorOnly: true },
+    { icon: '▣', label: 'Quản lý truyện', to: '/author/stories', authorOnly: true },
+    { icon: '▣', label: 'Quản lý Mod', to: '/admin/users', adminOnly: true },
     { icon: '▭', label: 'Ví của tôi', to: '/vi-hat' },
     { icon: '♜', label: 'Bảng xếp hạng', to: '/xep-hang' },
     { icon: '□', label: 'Mời bạn bè', to: '/ho-so' }
-  ].filter(item => !item.adminOnly || user?.role === 'admin');
+  ].filter(item => (!item.adminOnly || isAdmin(user?.role)) && (!item.authorOnly || canPostStory(user?.role)));
 
   const handleEnterSearch = event => {
     if (event.key !== 'Enter') return;
@@ -916,11 +924,12 @@ function PublishShell({ children }) {
   );
 }
 
-function Protected({ children, admin = false }) {
+function Protected({ children, admin = false, author = false }) {
   const { user, loading } = useAuth();
   if (loading) return <Loader />;
   if (!user) return <Navigate to="/dang-nhap" replace />;
-  if (admin && user.role !== 'admin') return <Navigate to="/" replace />;
+  if (admin && !isAdmin(user.role)) return <Navigate to="/" replace />;
+  if (author && !canPostStory(user.role)) return <Navigate to="/" replace />;
   return children;
 }
 

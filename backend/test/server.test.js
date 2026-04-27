@@ -52,6 +52,16 @@ async function registerUser(email, name = 'Author Test User', username = usernam
   return register.data;
 }
 
+async function registerMod(email, name = 'Mod Test User', username = usernameFromEmail(email)) {
+  const registered = await registerUser(email, name, username);
+  const db = readTestDb();
+  const user = db.users.find(item => item.id === registered.user.id);
+  user.role = 'mod';
+  writeTestDb(db);
+  registered.user.role = 'mod';
+  return registered;
+}
+
 function readTestDb() {
   return getDataStoreSnapshot();
 }
@@ -472,8 +482,15 @@ test('premium chapter returns preview when not unlocked', async () => {
 });
 
 test('cover upload validates image size and stories reject base64 covers', async () => {
-  const token = await loginToken('bandoc.daudotruyen@gmail.com');
-  const headers = { Authorization: `Bearer ${token}` };
+  const userToken = await loginToken('bandoc.daudotruyen@gmail.com');
+  const userHeaders = { Authorization: `Bearer ${userToken}` };
+  const forbiddenBody = new FormData();
+  forbiddenBody.append('file', new Blob([Buffer.from('webp')], { type: 'image/webp' }), 'cover.webp');
+  const forbiddenUpload = await request('/api/uploads/cover', { method: 'POST', headers: userHeaders, body: forbiddenBody });
+  assert.equal(forbiddenUpload.response.status, 403);
+
+  const mod = await registerMod('cover.mod@gmail.com', 'Cover Mod');
+  const headers = { Authorization: `Bearer ${mod.token}` };
   const tooLarge = new FormData();
   tooLarge.append('file', new Blob([Buffer.alloc(501 * 1024)], { type: 'image/webp' }), 'cover.webp');
   const rejected = await request('/api/uploads/cover', { method: 'POST', headers, body: tooLarge });
@@ -725,6 +742,85 @@ test('admin can lock and unlock a user, blocking protected APIs and login while 
     body: JSON.stringify({ email: 'bandoc.daudotruyen@gmail.com', password: '123456' })
   });
   assert.equal(loginAgain.response.status, 200);
+});
+
+test('only admin can set and remove mod role', async () => {
+  const target = await registerUser('role.target@gmail.com', 'Role Target');
+  const regular = await registerUser('role.regular@gmail.com', 'Role Regular');
+  const mod = await registerMod('role.mod@gmail.com', 'Role Mod');
+  const adminHeaders = { Authorization: `Bearer ${await loginToken()}` };
+
+  const userAttempt = await request(`/api/admin/users/${target.user.id}/role`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${regular.token}` },
+    body: JSON.stringify({ role: 'mod' })
+  });
+  assert.equal(userAttempt.response.status, 403);
+
+  const modAttempt = await request(`/api/admin/users/${target.user.id}/role`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${mod.token}` },
+    body: JSON.stringify({ role: 'mod' })
+  });
+  assert.equal(modAttempt.response.status, 403);
+
+  const invalid = await request(`/api/admin/users/${target.user.id}/role`, {
+    method: 'PATCH',
+    headers: adminHeaders,
+    body: JSON.stringify({ role: 'admin' })
+  });
+  assert.equal(invalid.response.status, 400);
+
+  const missing = await request('/api/admin/users/missing-user/role', {
+    method: 'PATCH',
+    headers: adminHeaders,
+    body: JSON.stringify({ role: 'mod' })
+  });
+  assert.equal(missing.response.status, 404);
+
+  const setMod = await request(`/api/admin/users/${target.user.id}/role`, {
+    method: 'PATCH',
+    headers: adminHeaders,
+    body: JSON.stringify({ role: 'mod' })
+  });
+  assert.equal(setMod.response.status, 200);
+  assert.equal(setMod.data.user.role, 'mod');
+
+  const refreshedModToken = await loginToken('role.target@gmail.com');
+  const modHeaders = { Authorization: `Bearer ${refreshedModToken}` };
+  const canCreate = await request('/api/author/stories', {
+    method: 'POST',
+    headers: modHeaders,
+    body: JSON.stringify({ title: 'Role Managed Mod Story', description: 'Mod can now create stories.', categories: ['Role'], approvalStatus: 'draft' })
+  });
+  assert.equal(canCreate.response.status, 201);
+
+  const removeMod = await request(`/api/admin/users/${target.user.id}/role`, {
+    method: 'PATCH',
+    headers: adminHeaders,
+    body: JSON.stringify({ role: 'user' })
+  });
+  assert.equal(removeMod.response.status, 200);
+  assert.equal(removeMod.data.user.role, 'user');
+
+  const oldTokenBlocked = await request('/api/author/stories', {
+    method: 'POST',
+    headers: modHeaders,
+    body: JSON.stringify({ title: 'Removed Mod Story', description: 'Old token should be invalid after role change.', categories: ['Role'], approvalStatus: 'draft' })
+  });
+  assert.equal(oldTokenBlocked.response.status, 401);
+});
+
+test('last admin cannot be demoted', async () => {
+  resetDataStore(createSeedDb());
+  const adminHeaders = { Authorization: `Bearer ${await loginToken()}` };
+  const attempt = await request('/api/admin/users/u_admin/role', {
+    method: 'PATCH',
+    headers: adminHeaders,
+    body: JSON.stringify({ role: 'user' })
+  });
+  assert.equal(attempt.response.status, 400);
+  assert.equal(readTestDb().users.find(item => item.id === 'u_admin').role, 'admin');
 });
 
 test('admin balance adjustment persists user balance, transaction, and audit log', async () => {
@@ -1277,8 +1373,30 @@ test('author APIs require authentication', async () => {
   assert.equal(response.status, 401);
 });
 
+test('user and invalid roles cannot use author APIs', async () => {
+  const regular = await registerUser('regular.author.block@gmail.com', 'Regular Block');
+  const regularHeaders = { Authorization: `Bearer ${regular.token}` };
+  const blocked = await request('/api/author/stories', {
+    method: 'POST',
+    headers: regularHeaders,
+    body: JSON.stringify({ title: 'Blocked User Story', description: 'Should be forbidden.', categories: ['Blocked'], approvalStatus: 'draft' })
+  });
+  assert.equal(blocked.response.status, 403);
+
+  const invalid = await registerUser('invalid.role.block@gmail.com', 'Invalid Role Block');
+  const db = readTestDb();
+  db.users.find(item => item.id === invalid.user.id).role = 'superuser';
+  writeTestDb(db);
+  const invalidRole = await request('/api/author/stories', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${invalid.token}` },
+    body: JSON.stringify({ title: 'Invalid Role Story', description: 'Should also be forbidden.', categories: ['Blocked'], approvalStatus: 'draft' })
+  });
+  assert.equal(invalidRole.response.status, 403);
+});
+
 test('author can create draft and pending stories with ownerId', async () => {
-  const author = await registerUser('author.create@gmail.com', 'Author Create');
+  const author = await registerMod('author.create@gmail.com', 'Author Create');
   const headers = { Authorization: `Bearer ${author.token}` };
 
   const draft = await request('/api/author/stories', {
@@ -1313,8 +1431,8 @@ test('author can create draft and pending stories with ownerId', async () => {
 });
 
 test('author cannot edit another owner story or chapter', async () => {
-  const owner = await registerUser('owner.author@gmail.com', 'Owner Author');
-  const intruder = await registerUser('intruder.author@gmail.com', 'Intruder Author');
+  const owner = await registerMod('owner.author@gmail.com', 'Owner Author');
+  const intruder = await registerMod('intruder.author@gmail.com', 'Intruder Author');
   const ownerHeaders = { Authorization: `Bearer ${owner.token}` };
   const intruderHeaders = { Authorization: `Bearer ${intruder.token}` };
 
@@ -1357,7 +1475,7 @@ test('author cannot edit another owner story or chapter', async () => {
 });
 
 test('admin approval publishes author story to public listing', async () => {
-  const author = await registerUser('approval.author@gmail.com', 'Approval Author');
+  const author = await registerMod('approval.author@gmail.com', 'Approval Author');
   const authorHeaders = { Authorization: `Bearer ${author.token}` };
   const adminToken = await loginToken();
   const adminHeaders = { Authorization: `Bearer ${adminToken}` };
@@ -1394,7 +1512,7 @@ test('admin approval publishes author story to public listing', async () => {
 });
 
 test('author can add single and bulk chapters before story approval', async () => {
-  const author = await registerUser('pending.chapter.author@gmail.com', 'Pending Chapter Author');
+  const author = await registerMod('pending.chapter.author@gmail.com', 'Pending Chapter Author');
   const authorHeaders = { Authorization: `Bearer ${author.token}` };
   const adminHeaders = { Authorization: `Bearer ${await loginToken()}` };
   const title = 'Pending Story With Ready Chapters';
@@ -1489,7 +1607,7 @@ test('author can add single and bulk chapters before story approval', async () =
 });
 
 test('draft rejected and hidden author stories are not public', async () => {
-  const author = await registerUser('visibility.author@gmail.com', 'Visibility Author');
+  const author = await registerMod('visibility.author@gmail.com', 'Visibility Author');
   const headers = { Authorization: `Bearer ${author.token}` };
   const adminHeaders = { Authorization: `Bearer ${await loginToken()}` };
 
@@ -1531,8 +1649,8 @@ test('draft rejected and hidden author stories are not public', async () => {
 });
 
 test('author revenue only includes owned stories', async () => {
-  const first = await registerUser('revenue.author.a@gmail.com', 'Revenue Author A');
-  const second = await registerUser('revenue.author.b@gmail.com', 'Revenue Author B');
+  const first = await registerMod('revenue.author.a@gmail.com', 'Revenue Author A');
+  const second = await registerMod('revenue.author.b@gmail.com', 'Revenue Author B');
   const firstHeaders = { Authorization: `Bearer ${first.token}` };
   const secondHeaders = { Authorization: `Bearer ${second.token}` };
 
@@ -1568,7 +1686,7 @@ test('author revenue only includes owned stories', async () => {
 });
 
 test('promotion purchase deducts wallet and creates transaction', async () => {
-  const author = await registerUser('promotion.author@gmail.com', 'Promotion Author');
+  const author = await registerMod('promotion.author@gmail.com', 'Promotion Author');
   const headers = { Authorization: `Bearer ${author.token}` };
   const story = await request('/api/author/stories', {
     method: 'POST',

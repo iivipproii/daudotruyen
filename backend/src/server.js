@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const mammoth = require('mammoth');
 const dataStore = require('./db');
 const storage = require('./services/storage');
+const { normalizeRole, isAdmin, canPostStory } = require('./permissions');
 
 const PORT = Number(process.env.PORT || 4000);
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
@@ -69,6 +70,7 @@ function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
 function safeUser(user) {
   if (!user) return null;
   const { passwordHash, salt, ...safe } = user;
+  safe.role = normalizeRole(safe.role);
   safe.username = normalizeUsername(safe.username || safe.email || safe.name || safe.id);
   return safe;
 }
@@ -232,6 +234,7 @@ function getAuthUser(req, db) {
   const user = db.users.find(user => user.id === payload.id);
   if (!user || user.status === 'deactivated' || user.status === 'locked') return null;
   if (Number(payload.tokenVersion || 0) !== Number(user.tokenVersion || 0)) return null;
+  user.role = normalizeRole(user.role);
   return user;
 }
 
@@ -244,7 +247,17 @@ function requireUser(req, res, db) {
 function requireAdmin(req, res, db) {
   const user = requireUser(req, res, db);
   if (!user) return null;
-  if (user.role !== 'admin') {
+  if (!isAdmin(user.role)) {
+    forbidden(res);
+    return null;
+  }
+  return user;
+}
+
+function requireStoryPublisher(req, res, db) {
+  const user = requireUser(req, res, db);
+  if (!user) return null;
+  if (!canPostStory(user.role)) {
     forbidden(res);
     return null;
   }
@@ -371,7 +384,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const VALID_STORY_APPROVAL_STATUSES = ['draft', 'pending', 'approved', 'rejected'];
 const VALID_CHAPTER_STATUSES = ['draft', 'pending', 'reviewing', 'approved', 'published', 'rejected', 'hidden', 'scheduled'];
 const VALID_ADMIN_USER_STATUSES = ['active', 'locked'];
-const VALID_ADMIN_USER_ROLES = ['reader', 'user', 'author', 'admin'];
+const VALID_ADMIN_USER_ROLES = ['user', 'mod', 'admin'];
+const VALID_MOD_MANAGEMENT_ROLES = ['user', 'mod'];
 const VALID_REPORT_STATUSES = ['open', 'reviewing', 'resolved', 'rejected'];
 const VALID_COMMENT_STATUSES = ['visible', 'hidden', 'deleted'];
 const VALID_TRANSACTION_TYPES = ['topup', 'purchase', 'bonus', 'admin_adjustment', 'refund', 'promotion', 'withdrawal', 'author_payout'];
@@ -967,6 +981,7 @@ function ensureDbShape(db) {
   assignMissingUsernames(db.users);
   db.users.forEach(user => {
     if (!user.status) user.status = 'active';
+    user.role = normalizeRole(user.role);
     user.tokenVersion = Number(user.tokenVersion || 0);
     user.notificationPreferences = normalizeNotificationPreferences(user.notificationPreferences || user.preferences);
     user.preferences = normalizeAccountPreferences(user.preferences, user.notificationPreferences);
@@ -1060,13 +1075,10 @@ function matchesSearch(values, query) {
 }
 
 function normalizeStoredRole(role) {
-  const value = String(role || '').trim();
+  const value = String(role || '').trim().toLowerCase();
   if (value === 'reader') return 'user';
-  return ['user', 'author', 'admin'].includes(value) ? value : null;
-}
-
-function roleForAdmin(role) {
-  return role === 'user' ? 'reader' : role || 'reader';
+  if (value === 'author') return 'mod';
+  return VALID_ADMIN_USER_ROLES.includes(value) ? value : null;
 }
 
 function adminUserSummary(db, user) {
@@ -1078,7 +1090,7 @@ function adminUserSummary(db, user) {
   }).length;
   return {
     ...safe,
-    role: roleForAdmin(safe.role),
+    role: normalizeRole(safe.role),
     status: safe.status || 'active',
     coins: Number(safe.seeds || 0),
     stories: storyCount,
@@ -1089,6 +1101,22 @@ function adminUserSummary(db, user) {
     lastActiveAt: safe.lastActiveAt || safe.updatedAt || safe.createdAt || null,
     note: safe.note || ''
   };
+}
+
+function adminCount(db) {
+  return db.users.filter(user => normalizeRole(user.role) === 'admin' && user.status !== 'deactivated').length;
+}
+
+function canChangeUserRole(db, admin, target, nextRole) {
+  const currentRole = normalizeRole(target.role);
+  const normalizedNextRole = normalizeRole(nextRole);
+  if (currentRole === 'admin' && normalizedNextRole !== 'admin' && adminCount(db) <= 1) {
+    return { ok: false, message: 'Khong the ha quyen admin cuoi cung cua he thong.' };
+  }
+  if (target.id === admin.id && currentRole === 'admin' && normalizedNextRole !== 'admin' && adminCount(db) <= 1) {
+    return { ok: false, message: 'Khong the tu ha quyen admin cuoi cung.' };
+  }
+  return { ok: true };
 }
 
 function adminStorySummary(db, story, viewerId) {
@@ -1433,7 +1461,9 @@ function getStoryOwnerId(story) {
 
 function canEditStory(user, story) {
   if (!user || !story) return false;
-  return user.role === 'admin' || getStoryOwnerId(story) === user.id;
+  const role = normalizeRole(user.role);
+  if (role === 'admin') return true;
+  return canPostStory(role) && getStoryOwnerId(story) === user.id;
 }
 
 function canEditChapter(db, user, chapter) {
@@ -1726,7 +1756,7 @@ async function handle(req, res) {
     const viewer = getAuthUser(req, db);
 
     if (req.method === 'POST' && pathname === '/api/uploads/cover') {
-      const user = requireUser(req, res, db);
+      const user = requireStoryPublisher(req, res, db);
       if (!user) return;
       const upload = await parseMultipartRequest(req);
       const file = upload.files.find(item => item.fieldname === 'file') || upload.files[0];
@@ -2466,7 +2496,7 @@ async function handle(req, res) {
     }
 
     if (req.method === 'GET' && pathname === '/api/author/stats') {
-      const user = requireUser(req, res, db);
+      const user = requireStoryPublisher(req, res, db);
       if (!user) return;
       const stories = db.stories.filter(story => getStoryOwnerId(story) === user.id);
       const storyIds = new Set(stories.map(story => story.id));
@@ -2490,7 +2520,7 @@ async function handle(req, res) {
     }
 
     if (req.method === 'GET' && pathname === '/api/author/stories') {
-      const user = requireUser(req, res, db);
+      const user = requireStoryPublisher(req, res, db);
       if (!user) return;
       const stories = db.stories
         .filter(story => getStoryOwnerId(story) === user.id)
@@ -2500,7 +2530,7 @@ async function handle(req, res) {
     }
 
     if (req.method === 'POST' && pathname === '/api/author/stories') {
-      const user = requireUser(req, res, db);
+      const user = requireStoryPublisher(req, res, db);
       if (!user) return;
       const body = await parseBody(req);
       const approvalStatus = authorStoryApprovalStatus(body, 'draft');
@@ -2544,17 +2574,13 @@ async function handle(req, res) {
         createdAt: timestamp
       };
       db.stories.unshift(story);
-      if (user.role === 'user') {
-        user.role = 'author';
-        user.updatedAt = timestamp;
-      }
       await persistDb(db);
       return send(res, 201, { story: authorStorySummary(db, story, user.id), user: safeUser(user) });
     }
 
     const authorStoryParams = match(pathname, '/api/author/stories/:id');
     if (authorStoryParams && req.method === 'GET') {
-      const user = requireUser(req, res, db);
+      const user = requireStoryPublisher(req, res, db);
       if (!user) return;
       const story = db.stories.find(item => item.id === authorStoryParams.id);
       if (!story) return notFound(res);
@@ -2567,7 +2593,7 @@ async function handle(req, res) {
     }
 
     if (authorStoryParams && req.method === 'PUT') {
-      const user = requireUser(req, res, db);
+      const user = requireStoryPublisher(req, res, db);
       if (!user) return;
       const story = db.stories.find(item => item.id === authorStoryParams.id);
       if (!story) return notFound(res);
@@ -2617,7 +2643,7 @@ async function handle(req, res) {
     }
 
     if (authorStoryParams && req.method === 'DELETE') {
-      const user = requireUser(req, res, db);
+      const user = requireStoryPublisher(req, res, db);
       if (!user) return;
       const index = db.stories.findIndex(item => item.id === authorStoryParams.id);
       if (index === -1) return notFound(res);
@@ -2638,7 +2664,7 @@ async function handle(req, res) {
     }
 
     if (req.method === 'GET' && pathname === '/api/author/chapters') {
-      const user = requireUser(req, res, db);
+      const user = requireStoryPublisher(req, res, db);
       if (!user) return;
       const storyId = String(url.searchParams.get('storyId') || '').trim();
       let storyIds;
@@ -2659,7 +2685,7 @@ async function handle(req, res) {
 
     const authorStoryImportParams = match(pathname, '/api/author/stories/:id/chapters/import');
     if (authorStoryImportParams && req.method === 'POST') {
-      const user = requireUser(req, res, db);
+      const user = requireStoryPublisher(req, res, db);
       if (!user) return;
       const story = db.stories.find(item => item.id === authorStoryImportParams.id);
       if (!story) return notFound(res);
@@ -2693,7 +2719,7 @@ async function handle(req, res) {
 
     const authorStoryBulkParams = match(pathname, '/api/author/stories/:id/chapters/bulk');
     if (authorStoryBulkParams && req.method === 'POST') {
-      const user = requireUser(req, res, db);
+      const user = requireStoryPublisher(req, res, db);
       if (!user) return;
       const story = db.stories.find(item => item.id === authorStoryBulkParams.id);
       if (!story) return notFound(res);
@@ -2777,7 +2803,7 @@ async function handle(req, res) {
 
     const authorStoryChaptersParams = match(pathname, '/api/author/stories/:id/chapters');
     if (authorStoryChaptersParams && req.method === 'POST') {
-      const user = requireUser(req, res, db);
+      const user = requireStoryPublisher(req, res, db);
       if (!user) return;
       const story = db.stories.find(item => item.id === authorStoryChaptersParams.id);
       if (!story) return notFound(res);
@@ -2821,7 +2847,7 @@ async function handle(req, res) {
 
     const authorChapterParams = match(pathname, '/api/author/chapters/:id');
     if (authorChapterParams && req.method === 'PUT') {
-      const user = requireUser(req, res, db);
+      const user = requireStoryPublisher(req, res, db);
       if (!user) return;
       const chapter = db.chapters.find(item => item.id === authorChapterParams.id);
       if (!chapter) return notFound(res);
@@ -2870,7 +2896,7 @@ async function handle(req, res) {
     }
 
     if (authorChapterParams && req.method === 'DELETE') {
-      const user = requireUser(req, res, db);
+      const user = requireStoryPublisher(req, res, db);
       if (!user) return;
       const index = db.chapters.findIndex(item => item.id === authorChapterParams.id);
       if (index === -1) return notFound(res);
@@ -2887,13 +2913,13 @@ async function handle(req, res) {
     }
 
     if (req.method === 'GET' && pathname === '/api/author/revenue') {
-      const user = requireUser(req, res, db);
+      const user = requireStoryPublisher(req, res, db);
       if (!user) return;
       return send(res, 200, { revenue: authorRevenueData(db, user.id) });
     }
 
     if (req.method === 'GET' && pathname === '/api/author/promotions') {
-      const user = requireUser(req, res, db);
+      const user = requireStoryPublisher(req, res, db);
       if (!user) return;
       const promotions = db.promotions
         .filter(promotion => promotion.ownerId === user.id)
@@ -2903,7 +2929,7 @@ async function handle(req, res) {
     }
 
     if (req.method === 'POST' && pathname === '/api/author/promotions') {
-      const user = requireUser(req, res, db);
+      const user = requireStoryPublisher(req, res, db);
       if (!user) return;
       const body = await parseBody(req);
       const story = db.stories.find(item => item.id === body.storyId);
@@ -2988,9 +3014,12 @@ async function handle(req, res) {
         target.status = body.status;
       }
       if (body.role !== undefined) {
-        if (!VALID_ADMIN_USER_ROLES.includes(body.role)) return badRequest(res, 'Vai tro user khong hop le.');
+        if (!VALID_MOD_MANAGEMENT_ROLES.includes(body.role)) return badRequest(res, 'Vai tro user khong hop le.');
         const nextRole = normalizeStoredRole(body.role);
-        if (!nextRole) return badRequest(res, 'Vai tro user khong hop le.');
+        if (!VALID_MOD_MANAGEMENT_ROLES.includes(nextRole)) return badRequest(res, 'Vai tro user khong hop le.');
+        const roleCheck = canChangeUserRole(db, admin, target, nextRole);
+        if (!roleCheck.ok) return badRequest(res, roleCheck.message);
+        if (normalizeRole(target.role) !== nextRole) target.tokenVersion = Number(target.tokenVersion || 0) + 1;
         target.role = nextRole;
       }
       if (body.note !== undefined) target.note = String(body.note || '').slice(0, 500);
@@ -3000,6 +3029,29 @@ async function handle(req, res) {
         ? (after.status === 'locked' ? 'lock_user' : 'unlock_user')
         : before.role !== after.role ? 'change_role' : 'update_user';
       logAdminAction(db, admin, action, 'user', target.id, before, after, body.note || '');
+      await persistDb(db);
+      return send(res, 200, { user: after });
+    }
+
+    const adminUserRoleParams = match(pathname, '/api/admin/users/:id/role');
+    if (adminUserRoleParams && req.method === 'PATCH') {
+      const admin = requireAdmin(req, res, db);
+      if (!admin) return;
+      const target = db.users.find(item => item.id === adminUserRoleParams.id);
+      if (!target) return notFound(res);
+      const body = await parseBody(req);
+      const nextRole = normalizeStoredRole(body.role);
+      if (!VALID_MOD_MANAGEMENT_ROLES.includes(nextRole)) return badRequest(res, 'Vai tro moi chi duoc la user hoac mod.');
+      const roleCheck = canChangeUserRole(db, admin, target, nextRole);
+      if (!roleCheck.ok) return badRequest(res, roleCheck.message);
+      const before = adminUserSummary(db, target);
+      if (normalizeRole(target.role) !== nextRole) {
+        target.role = nextRole;
+        target.tokenVersion = Number(target.tokenVersion || 0) + 1;
+        target.updatedAt = now();
+      }
+      const after = adminUserSummary(db, target);
+      logAdminAction(db, admin, 'change_role', 'user', target.id, before, after, '');
       await persistDb(db);
       return send(res, 200, { user: after });
     }

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
+import { normalizeRole } from '../../lib/permissions.js';
 
 const ADMIN_PAGE_LIMIT = 100;
 
@@ -69,10 +70,6 @@ function emptyAdminState() {
 
 function asArray(value) {
   return Array.isArray(value) ? value : [];
-}
-
-function normalizeRole(role) {
-  return role === 'user' ? 'reader' : role || 'reader';
 }
 
 function normalizeUser(user = {}) {
@@ -176,9 +173,8 @@ function formatVnd(value = 0) {
 
 function roleLabel(role) {
   return {
-    reader: 'Độc giả',
     user: 'Độc giả',
-    author: 'Tác giả',
+    mod: 'Mod',
     admin: 'Admin'
   }[role] || role || 'Độc giả';
 }
@@ -366,6 +362,10 @@ export function AdminDashboard({ apiClient, user }) {
       () => apiClient(`/admin/users/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
       'Đã cập nhật người dùng.'
     ),
+    updateUserRole: (id, role) => runMutation(
+      () => apiClient(`/admin/users/${id}/role`, { method: 'PATCH', body: JSON.stringify({ role }) }),
+      role === 'mod' ? 'Đã set Mod.' : 'Đã gỡ Mod.'
+    ),
     adjustBalance: (id, payload) => runMutation(
       () => apiClient(`/admin/users/${id}/adjust-balance`, { method: 'POST', body: JSON.stringify(payload) }),
       'Đã điều chỉnh số dư Đậu.'
@@ -472,7 +472,7 @@ export function AdminDashboard({ apiClient, user }) {
 
       {activeView === 'overview' && <OverviewTab state={state} />}
       {activeView === 'users' && (
-        <UsersTab users={state.users} currentUser={user} onOpenUser={setUserDetail} onUpdate={actions.updateUser} onAdjust={actions.adjustBalance} onConfirm={setConfirm} />
+        <UsersTab users={state.users} currentUser={user} onOpenUser={setUserDetail} onUpdateUser={actions.updateUser} onUpdateRole={actions.updateUserRole} onAdjust={actions.adjustBalance} onConfirm={setConfirm} />
       )}
       {activeView === 'stories' && (
         <StoriesTab stories={state.stories} taxonomy={state.taxonomy} onSave={actions.saveStory} onStatus={actions.updateStoryStatus} onFlags={actions.updateStoryFlags} onDelete={actions.deleteStory} onConfirm={setConfirm} />
@@ -493,6 +493,7 @@ export function AdminDashboard({ apiClient, user }) {
           currentUser={user}
           onClose={() => setUserDetail(null)}
           onSave={patch => actions.updateUser(userDetail.id, patch)}
+          onRole={role => actions.updateUserRole(userDetail.id, role)}
           onAdjust={payload => actions.adjustBalance(userDetail.id, payload)}
         />
       )}
@@ -579,7 +580,7 @@ function MiniPanel({ title, items }) {
   );
 }
 
-function UsersTab({ users, currentUser, onOpenUser, onUpdate, onAdjust, onConfirm }) {
+function UsersTab({ users, currentUser, onOpenUser, onUpdateUser, onUpdateRole, onAdjust, onConfirm }) {
   const [query, setQuery] = useState('');
   const [role, setRole] = useState('all');
   const [status, setStatus] = useState('all');
@@ -597,8 +598,8 @@ function UsersTab({ users, currentUser, onOpenUser, onUpdate, onAdjust, onConfir
         <input value={query} onChange={event => setQuery(event.target.value)} placeholder="Tìm tên, email, ghi chú..." />
         <select value={role} onChange={event => setRole(event.target.value)}>
           <option value="all">Tất cả vai trò</option>
-          <option value="reader">Độc giả</option>
-          <option value="author">Tác giả</option>
+          <option value="user">Độc giả</option>
+          <option value="mod">Mod</option>
           <option value="admin">Admin</option>
         </select>
         <select value={status} onChange={event => setStatus(event.target.value)}>
@@ -625,11 +626,13 @@ function UsersTab({ users, currentUser, onOpenUser, onUpdate, onAdjust, onConfir
                   onClick={() => onConfirm({
                     title: item.status === 'locked' ? 'Mở khóa user?' : 'Khóa user?',
                     text: item.status === 'locked' ? item.email : 'User bị khóa sẽ không đăng nhập hoặc gọi protected API được.',
-                    action: () => onUpdate(item.id, { status: item.status === 'locked' ? 'active' : 'locked' })
+                    action: () => onUpdateUser(item.id, { status: item.status === 'locked' ? 'active' : 'locked' })
                   })}
                 >
                   {item.status === 'locked' ? 'Mở khóa' : 'Khóa'}
                 </button>
+                {item.role === 'user' && <button type="button" onClick={() => onUpdateRole(item.id, 'mod')}>Set Mod</button>}
+                {item.role === 'mod' && <button type="button" onClick={() => onUpdateRole(item.id, 'user')}>Gỡ Mod</button>}
                 <button type="button" onClick={() => onAdjust(item.id, { amount: 10, reason: 'Admin bonus nhanh' })}>+10 Đậu</button>
               </div>
             </td>
@@ -653,8 +656,7 @@ function UserCell({ user }) {
   );
 }
 
-function UserModal({ user, currentUser, onClose, onSave, onAdjust }) {
-  const [role, setRole] = useState(user.role);
+function UserModal({ user, currentUser, onClose, onSave, onRole, onAdjust }) {
   const [status, setStatus] = useState(user.status);
   const [note, setNote] = useState(user.note || '');
   const [amount, setAmount] = useState('');
@@ -670,11 +672,15 @@ function UserModal({ user, currentUser, onClose, onSave, onAdjust }) {
         <p><span>Báo cáo liên quan</span><strong>{formatNumber(user.reports)}</strong></p>
         <p><span>Hoạt động cuối</span><strong>{formatDate(user.lastActiveAt)}</strong></p>
       </div>
-      <form className="cms-form" onSubmit={event => { event.preventDefault(); onSave({ role, status, note }); }}>
-        <label>Vai trò<select value={role} onChange={event => setRole(event.target.value)}><option value="reader">Độc giả</option><option value="author">Tác giả</option><option value="admin">Admin</option></select></label>
+      <form className="cms-form" onSubmit={event => { event.preventDefault(); onSave({ status, note }); }}>
+        <label>Vai trò<input value={roleLabel(user.role)} readOnly /></label>
         <label>Trạng thái<select value={status} disabled={user.id === currentUser?.id} onChange={event => setStatus(event.target.value)}><option value="active">Hoạt động</option><option value="locked">Đã khóa</option></select></label>
         <label className="wide">Ghi chú<textarea value={note} onChange={event => setNote(event.target.value)} placeholder="Ghi chú nội bộ..." /></label>
-        <div className="cms-modal-actions"><button type="submit">Lưu user</button></div>
+        <div className="cms-modal-actions">
+          {user.role === 'user' && <button type="button" onClick={() => onRole('mod')}>Set Mod</button>}
+          {user.role === 'mod' && <button type="button" onClick={() => onRole('user')}>Gỡ Mod</button>}
+          <button type="submit">Lưu user</button>
+        </div>
       </form>
       <form className="cms-form" onSubmit={event => { event.preventDefault(); onAdjust({ amount: Number(amount), reason }); setAmount(''); setReason(''); }}>
         <label>Số Đậu<input type="number" value={amount} onChange={event => setAmount(event.target.value)} placeholder="VD: 50 hoặc -10" /></label>
@@ -1137,8 +1143,8 @@ function AdminNotificationsTab({ notifications, users, onSend }) {
         <form className="cms-form" onSubmit={event => { event.preventDefault(); onSend(form); setForm({ title: '', body: '', type: 'system', targetRole: 'all', targetUserId: '' }); }}>
           <label>Tiêu đề<input value={form.title} onChange={event => set('title', event.target.value)} required /></label>
           <label>Type<select value={form.type} onChange={event => set('type', event.target.value)}><option value="system">System</option><option value="promo">Promo</option><option value="wallet">Wallet</option></select></label>
-          <label>Target<select value={form.targetRole} onChange={event => set('targetRole', event.target.value)}><option value="all">Tất cả</option><option value="reader">Độc giả</option><option value="author">Tác giả</option><option value="admin">Admin</option><option value="user">User cụ thể</option></select></label>
-          {form.targetRole === 'user' && <label>User<select value={form.targetUserId} onChange={event => set('targetUserId', event.target.value)}><option value="">Chọn user</option>{users.map(item => <option key={item.id} value={item.id}>{item.name} · {item.email}</option>)}</select></label>}
+          <label>Target<select value={form.targetRole} onChange={event => set('targetRole', event.target.value)}><option value="all">Tất cả</option><option value="user">Độc giả</option><option value="mod">Mod</option><option value="admin">Admin</option><option value="specific">User cụ thể</option></select></label>
+          {form.targetRole === 'specific' && <label>User<select value={form.targetUserId} onChange={event => set('targetUserId', event.target.value)}><option value="">Chọn user</option>{users.map(item => <option key={item.id} value={item.id}>{item.name} · {item.email}</option>)}</select></label>}
           <label className="wide">Nội dung<textarea value={form.body} onChange={event => set('body', event.target.value)} required /></label>
           <div className="cms-modal-actions"><button type="submit">Gửi thông báo</button></div>
         </form>

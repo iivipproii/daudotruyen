@@ -5,7 +5,7 @@ create table if not exists public.users (
   email text not null unique,
   password_hash text,
   salt text,
-  role text not null default 'user' check (role in ('reader', 'user', 'author', 'admin')),
+  role text not null default 'user' check (role in ('user', 'mod', 'admin')),
   status text not null default 'active' check (status in ('active', 'locked', 'deactivated')),
   seeds numeric not null default 0,
   token_version integer not null default 0,
@@ -28,6 +28,23 @@ create table if not exists public.users (
   updated_at timestamptz,
   extra jsonb not null default '{}'::jsonb
 );
+
+alter table public.users
+  alter column role set default 'user';
+
+alter table public.users
+  drop constraint if exists users_role_check;
+
+update public.users
+set role = case
+  when role = 'admin' then 'admin'
+  when role in ('mod', 'author') then 'mod'
+  else 'user'
+end
+where role is null or role not in ('user', 'mod', 'admin');
+
+alter table public.users
+  add constraint users_role_check check (role in ('user', 'mod', 'admin'));
 
 create table if not exists public.stories (
   id text primary key,
