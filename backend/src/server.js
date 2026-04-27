@@ -361,6 +361,7 @@ function storySummary(story) {
     hidden: story.hidden,
     rejectionReason: story.rejectionReason || '',
     chapterCountEstimate: story.chapterCountEstimate,
+    createdAt: story.createdAt,
     updatedAt: story.updatedAt,
     chapterCount: story.chapterCount,
     latestChapter: story.latestChapter,
@@ -2070,6 +2071,7 @@ async function handle(req, res) {
       const ageRating = url.searchParams.get('ageRating') || '';
       const sort = url.searchParams.get('sort') || 'updated';
       const featured = url.searchParams.get('featured') === 'true';
+      const limit = clampNumber(url.searchParams.get('limit'), 1, 100, 100);
       let items = db.stories.filter(isPublicStory).map(story => enrichStory(db, story, viewer && viewer.id));
       if (q) items = items.filter(story => [story.title, story.author, story.description, ...story.categories].join(' ').toLowerCase().includes(q));
       if (category) items = items.filter(story => story.categories.includes(category));
@@ -2082,9 +2084,14 @@ async function handle(req, res) {
         if (sort === 'rating') return b.rating - a.rating;
         if (sort === 'follows') return b.follows - a.follows;
         if (sort === 'chapters') return b.chapterCount - a.chapterCount;
-        return new Date(b.updatedAt) - new Date(a.updatedAt);
+        if (sort === 'created' || sort === 'new') {
+          return new Date(b.createdAt || b.updatedAt || 0) - new Date(a.createdAt || a.updatedAt || 0);
+        }
+        return new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0);
       });
-      return send(res, 200, { stories: items.map(storySummary) });
+      return send(res, 200, { stories: items.slice(0, limit).map(storySummary) }, {
+        'Cache-Control': 'no-store, max-age=0'
+      });
     }
 
     if (req.method === 'GET' && pathname === '/api/rankings') {
@@ -3531,7 +3538,7 @@ async function handle(req, res) {
       const slug = slugify(body.slug || body.title);
       if (db.stories.some(story => story.slug === slug)) return badRequest(res, 'Slug da ton tai.');
       requestPerf.mark('validate');
-      const approvalStatus = VALID_STORY_APPROVAL_STATUSES.includes(body.approvalStatus) ? body.approvalStatus : 'pending';
+      const approvalStatus = VALID_STORY_APPROVAL_STATUSES.includes(body.approvalStatus) ? body.approvalStatus : 'approved';
       const timestamp = now();
       const story = {
         id: uid('story'),

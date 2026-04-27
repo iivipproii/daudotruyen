@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://daudotruyen.vn/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>
-  <url><loc>https://daudotruyen.vn/danh-sach</loc><changefreq>daily</changefreq><priority>0.9</priority></url>
-  <url><loc>https://daudotruyen.vn/xep-hang</loc><changefreq>daily</changefreq><priority>0.9</priority></url>
-  <url><loc>https://daudotruyen.vn/truyen-ngan</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
-  <url><loc>https://daudotruyen.vn/login</loc><changefreq>monthly</changefreq><priority>0.4</priority></url>
-  <url><loc>https://daudotruyen.vn/register</loc><changefreq>monthly</changefreq><priority>0.4</priority></url>
-  <url><loc>https://daudotruyen.vn/author</loc><changefreq>weekly</changefreq><priority>0.5</priority></url>
+  <url><loc>https://daudotruyen.vercel.app/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>
+  <url><loc>https://daudotruyen.vercel.app/danh-sach</loc><changefreq>daily</changefreq><priority>0.9</priority></url>
+  <url><loc>https://daudotruyen.vercel.app/xep-hang</loc><changefreq>daily</changefreq><priority>0.9</priority></url>
+  <url><loc>https://daudotruyen.vercel.app/truyen-ngan</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://daudotruyen.vercel.app/login</loc><changefreq>monthly</changefreq><priority>0.4</priority></url>
+  <url><loc>https://daudotruyen.vercel.app/register</loc><changefreq>monthly</changefreq><priority>0.4</priority></url>
+  <url><loc>https://daudotruyen.vercel.app/author</loc><changefreq>weekly</changefreq><priority>0.5</priority></url>
 </urlset>

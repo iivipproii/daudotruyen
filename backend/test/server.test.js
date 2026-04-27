@@ -1374,6 +1374,37 @@ test('hidden stories stay out of public listing', async () => {
   assert.equal(list.data.stories.length, 0);
 });
 
+test('admin-created story is public and appears first in newest listing without redeploy', async () => {
+  const token = await loginToken();
+  const title = 'Newest Admin Published Story';
+  const create = await request('/api/admin/stories', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({
+      title,
+      author: 'Admin Author',
+      description: 'Story should be public immediately after admin creates it.',
+      categories: ['Newest']
+    })
+  });
+
+  assert.equal(create.response.status, 201);
+  assert.equal(create.data.story.approvalStatus, 'approved');
+  assert.equal(create.data.story.hidden, false);
+  assert.ok(create.data.story.slug);
+
+  const newest = await request('/api/stories?sort=created&limit=1');
+  assert.equal(newest.response.status, 200);
+  assert.equal(newest.response.headers.get('cache-control'), 'no-store, max-age=0');
+  assert.equal(newest.data.stories[0].id, create.data.story.id);
+  assert.equal(newest.data.stories[0].title, title);
+  assert.ok(newest.data.stories[0].createdAt);
+
+  const detail = await request(`/api/stories/${create.data.story.slug}`);
+  assert.equal(detail.response.status, 200);
+  assert.equal(detail.data.story.id, create.data.story.id);
+});
+
 test('author APIs require authentication', async () => {
   const { response } = await request('/api/author/stats');
   assert.equal(response.status, 401);

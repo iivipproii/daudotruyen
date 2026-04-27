@@ -72,7 +72,7 @@ async function api(path, options = {}) {
   let response;
   let data = {};
   try {
-    response = await fetch(url, { ...options, headers });
+    response = await fetch(url, { cache: 'no-store', ...options, headers });
     const text = await response.text();
     data = text ? JSON.parse(text) : {};
     if (!response.ok) {

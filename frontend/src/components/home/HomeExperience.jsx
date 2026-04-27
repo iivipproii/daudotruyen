@@ -743,17 +743,19 @@ export function ProductionHome({ apiClient, currentUser }) {
 
     async function loadHome() {
       setLoading(true);
-      const [updated, featured, views, completed, categories] = await Promise.all([
-        fetchSafe(apiClient, '/stories?sort=updated'),
-        fetchSafe(apiClient, '/stories?featured=true&sort=rating'),
-        fetchSafe(apiClient, '/stories?sort=views'),
-        fetchSafe(apiClient, '/stories?status=completed&sort=updated'),
+      const [created, updated, featured, views, completed, categories] = await Promise.all([
+        fetchSafe(apiClient, '/stories?sort=created&limit=20'),
+        fetchSafe(apiClient, '/stories?sort=updated&limit=20'),
+        fetchSafe(apiClient, '/stories?featured=true&sort=rating&limit=20'),
+        fetchSafe(apiClient, '/stories?sort=views&limit=20'),
+        fetchSafe(apiClient, '/stories?status=completed&sort=updated&limit=20'),
         fetchSafe(apiClient, '/categories')
       ]);
 
       if (!alive) return;
 
       const merged = normalizeStories([
+        ...(created?.stories || []),
         ...(featured?.stories || []),
         ...(views?.stories || []),
         ...(updated?.stories || []),
