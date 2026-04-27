@@ -121,6 +121,7 @@ const TABLES = {
       chapterPrice: 'chapter_price',
       vipFromChapter: 'vip_from_chapter',
       comboPrice: 'combo_price',
+      deletedAt: 'deleted_at',
       createdAt: 'created_at',
       updatedAt: 'updated_at'
     }

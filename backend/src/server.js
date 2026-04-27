@@ -1027,6 +1027,17 @@ function ensureDbShape(db) {
   db.stories.forEach(story => {
     if (!story.approvalStatus) story.approvalStatus = story.hidden ? 'pending' : 'approved';
     if (!VALID_STORY_APPROVAL_STATUSES.includes(story.approvalStatus)) story.approvalStatus = story.hidden ? 'pending' : 'approved';
+    story.status ||= 'ongoing';
+    story.rejectionReason ||= '';
+    story.categories ||= [];
+    story.tags ||= [];
+    story.featured = Boolean(story.featured);
+    story.hot = Boolean(story.hot);
+    story.recommended = Boolean(story.recommended);
+    story.banner = Boolean(story.banner);
+    story.hidden = Boolean(story.hidden);
+    story.views = Number(story.views || 0);
+    story.chapterCountEstimate = Number(story.chapterCountEstimate || 0);
     if (!story.ownerId) {
       const admin = db.users.find(user => user.role === 'admin');
       if (admin) story.ownerId = admin.id;
@@ -1159,8 +1170,40 @@ function canChangeUserRole(db, admin, target, nextRole) {
 function adminStorySummary(db, story, viewerId) {
   const owner = db.users.find(user => user.id === getStoryOwnerId(story));
   const allChapters = db.chapters.filter(chapter => chapter.storyId === story.id);
+  const enriched = enrichStory(db, story, viewerId, true);
+  const chapterCount = allChapters.length || Number(story.chapterCountEstimate || 0);
   return {
-    ...enrichStory(db, story, viewerId, true),
+    ...enriched,
+    id: story.id,
+    title: story.title,
+    slug: story.slug,
+    author: story.author || '',
+    description: story.description || '',
+    coverUrl: story.cover || story.coverUrl || '',
+    genres: story.categories || [],
+    tags: story.tags || [],
+    status: story.approvalStatus || 'pending',
+    storyStatus: story.status || 'ongoing',
+    rejectReason: story.rejectionReason || '',
+    isPublic: !story.hidden && (story.approvalStatus || 'approved') === 'approved',
+    isFeatured: Boolean(story.featured),
+    isHot: Boolean(story.hot),
+    isRecommended: Boolean(story.recommended),
+    isBanner: Boolean(story.banner),
+    views: Number(story.views || 0),
+    chaptersCount: chapterCount,
+    createdAt: story.createdAt || '',
+    updatedAt: story.updatedAt || story.createdAt || '',
+    deletedAt: story.deletedAt || null,
+    cover: story.cover || story.coverUrl || '',
+    approvalStatus: story.approvalStatus || 'pending',
+    hidden: Boolean(story.hidden),
+    featured: Boolean(story.featured),
+    hot: Boolean(story.hot),
+    recommended: Boolean(story.recommended),
+    banner: Boolean(story.banner),
+    categories: story.categories || [],
+    chapterCount,
     owner: safeUser(owner),
     ownerName: owner?.name || '',
     publishStatus: story.hidden ? 'hidden' : isPublicStory(story) ? 'published' : story.approvalStatus || 'pending',
@@ -3581,6 +3624,61 @@ async function handle(req, res) {
       return send(res, 201, { story: adminStorySummary(db, story, admin.id) });
     }
 
+    const adminStoryApproveParams = match(pathname, '/api/admin/stories/:id/approve');
+    if (adminStoryApproveParams && req.method === 'PATCH') {
+      const admin = requireAdmin(req, res, db);
+      if (!admin) return;
+      const story = db.stories.find(item => item.id === adminStoryApproveParams.id);
+      if (!story) return notFound(res);
+      const before = adminStorySummary(db, story, admin.id);
+      story.approvalStatus = 'approved';
+      story.hidden = false;
+      story.rejectionReason = '';
+      story.updatedAt = now();
+      const after = adminStorySummary(db, story, admin.id);
+      logAdminAction(db, admin, 'approve_story', 'story', story.id, before, after, '');
+      await persistDb(db, { prune: false, only: ['stories', 'adminLogs'], relationStoryIds: [story.id] });
+      return send(res, 200, { story: after });
+    }
+
+    const adminStoryRejectParams = match(pathname, '/api/admin/stories/:id/reject');
+    if (adminStoryRejectParams && req.method === 'PATCH') {
+      const admin = requireAdmin(req, res, db);
+      if (!admin) return;
+      const story = db.stories.find(item => item.id === adminStoryRejectParams.id);
+      if (!story) return notFound(res);
+      const body = await parseBody(req);
+      const rejectReason = String(body.rejectReason || body.rejectionReason || '').trim();
+      if (!rejectReason) return badRequest(res, 'Ly do tu choi la bat buoc.');
+      const before = adminStorySummary(db, story, admin.id);
+      story.approvalStatus = 'rejected';
+      story.hidden = true;
+      story.rejectionReason = rejectReason.slice(0, 500);
+      story.updatedAt = now();
+      const after = adminStorySummary(db, story, admin.id);
+      logAdminAction(db, admin, 'reject_story', 'story', story.id, before, after, story.rejectionReason);
+      await persistDb(db, { prune: false, only: ['stories', 'adminLogs'], relationStoryIds: [story.id] });
+      return send(res, 200, { story: after });
+    }
+
+    const adminStoryVisibilityParams = match(pathname, '/api/admin/stories/:id/visibility');
+    if (adminStoryVisibilityParams && req.method === 'PATCH') {
+      const admin = requireAdmin(req, res, db);
+      if (!admin) return;
+      const story = db.stories.find(item => item.id === adminStoryVisibilityParams.id);
+      if (!story) return notFound(res);
+      const body = await parseBody(req);
+      if (body.isPublic === undefined && body.hidden === undefined) return badRequest(res, 'Thieu isPublic.');
+      const before = adminStorySummary(db, story, admin.id);
+      story.hidden = body.isPublic !== undefined ? !Boolean(body.isPublic) : Boolean(body.hidden);
+      if (!story.hidden && story.approvalStatus !== 'approved') story.approvalStatus = 'approved';
+      story.updatedAt = now();
+      const after = adminStorySummary(db, story, admin.id);
+      logAdminAction(db, admin, story.hidden ? 'hide_story' : 'show_story', 'story', story.id, before, after, '');
+      await persistDb(db, { prune: false, only: ['stories', 'adminLogs'], relationStoryIds: [story.id] });
+      return send(res, 200, { story: after });
+    }
+
     const adminStoryStatusParams = match(pathname, '/api/admin/stories/:id/status');
     if (adminStoryStatusParams && req.method === 'PATCH') {
       const admin = requireAdmin(req, res, db);
@@ -3626,6 +3724,10 @@ async function handle(req, res) {
       const body = await parseBody(req);
       requestPerf.mark('validate');
       const before = adminStorySummary(db, story, admin.id);
+      if (body.isFeatured !== undefined) story.featured = Boolean(body.isFeatured);
+      if (body.isHot !== undefined) story.hot = Boolean(body.isHot);
+      if (body.isRecommended !== undefined) story.recommended = Boolean(body.isRecommended);
+      if (body.isBanner !== undefined) story.banner = Boolean(body.isBanner);
       ['featured', 'hot', 'recommended', 'banner'].forEach(key => {
         if (body[key] !== undefined) story[key] = Boolean(body[key]);
       });

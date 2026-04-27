@@ -78,6 +78,7 @@ create table if not exists public.stories (
   chapter_price numeric not null default 0,
   vip_from_chapter numeric not null default 0,
   combo_price numeric not null default 0,
+  deleted_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz,
   extra jsonb not null default '{}'::jsonb
