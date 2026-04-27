@@ -783,6 +783,8 @@ export function AccountSettings({ user, updateUser, logout, theme, toggleTheme, 
   const [savingLogoutAll, setSavingLogoutAll] = useState(false);
   const [avatarReading, setAvatarReading] = useState(false);
   const [draggingAvatar, setDraggingAvatar] = useState(false);
+  const [selectedAvatarFile, setSelectedAvatarFile] = useState(null);
+  const [avatarPreviewUrl, setAvatarPreviewUrl] = useState('');
   const [messages, setMessages] = useState({});
 
   function setMessage(section, type, text) {
@@ -805,6 +807,8 @@ export function AccountSettings({ user, updateUser, logout, theme, toggleTheme, 
       const normalizedProfile = normalizeSettingsProfile(profileData, user);
       setProfile(normalizedProfile);
       setSavedProfile(normalizedProfile);
+      setSelectedAvatarFile(null);
+      setAvatarPreviewUrl('');
       const nextPrefs = { ...defaultSettingsPreferences(theme), ...(preferenceData.preferences || {}) };
       setPrefs(nextPrefs);
       if (!syncedThemeRef.current && ['light', 'dark'].includes(nextPrefs.theme) && nextPrefs.theme !== theme) {
@@ -832,6 +836,10 @@ export function AccountSettings({ user, updateUser, logout, theme, toggleTheme, 
     return () => clearTimeout(timer);
   }, [location.hash, initialLoading]);
 
+  useEffect(() => () => {
+    if (avatarPreviewUrl) URL.revokeObjectURL(avatarPreviewUrl);
+  }, [avatarPreviewUrl]);
+
   function patchProfile(next) {
     setProfile(current => ({ ...current, ...next }));
   }
@@ -848,33 +856,25 @@ export function AccountSettings({ user, updateUser, logout, theme, toggleTheme, 
     setPasswordVisible(current => ({ ...current, [key]: !current[key] }));
   }
 
-  async function handleAvatarFile(file) {
+  function handleAvatarFile(file) {
     const validationError = validateAvatarFile(file);
     if (validationError) {
       setMessage('avatar', 'error', validationError);
       if (avatarInputRef.current) avatarInputRef.current.value = '';
       return;
     }
-    setMessage('avatar', 'warning', 'Đang tải ảnh lên storage...');
     setAvatarReading(true);
-    setSavingAvatar(true);
     try {
-      const body = new FormData();
-      body.append('avatar', file);
-      const result = await apiClient('/me/avatar', {
-        method: 'POST',
-        body
-      });
-      const normalizedProfile = normalizeSettingsProfile(result, result.user || user);
-      setProfile(normalizedProfile);
-      setSavedProfile(normalizedProfile);
-      if (result.user) updateUser?.(result.user);
-      setMessage('avatar', 'success', 'Đã tải lên và lưu ảnh đại diện.');
+      if (avatarPreviewUrl) URL.revokeObjectURL(avatarPreviewUrl);
+      const previewUrl = URL.createObjectURL(file);
+      setSelectedAvatarFile(file);
+      setAvatarPreviewUrl(previewUrl);
+      setMessage('avatar', 'warning', 'Ảnh mới đang ở chế độ xem trước. Bấm Lưu ảnh đại diện để upload và lưu.');
     } catch (err) {
-      setMessage('avatar', 'error', err.message || 'Không tải được ảnh.');
+      setSelectedAvatarFile(null);
+      setMessage('avatar', 'error', err.message || 'Không tạo được preview ảnh.');
     } finally {
       setAvatarReading(false);
-      setSavingAvatar(false);
       if (avatarInputRef.current) avatarInputRef.current.value = '';
     }
   }
@@ -889,9 +889,34 @@ export function AccountSettings({ user, updateUser, logout, theme, toggleTheme, 
     handleAvatarFile(event.dataTransfer.files?.[0]);
   }
 
-  function clearAvatar() {
-    patchProfile({ avatar: '' });
-    setMessage('avatar', 'warning', 'Ảnh đại diện đã được đặt về mặc định. Bấm lưu để cập nhật.');
+  async function clearAvatar() {
+    if (!user) {
+      setMessage('avatar', 'error', 'Vui lòng đăng nhập để xóa ảnh đại diện.');
+      return;
+    }
+    if (!profile.avatar && !selectedAvatarFile) {
+      setMessage('avatar', 'success', 'Tài khoản đang dùng ảnh mặc định.');
+      return;
+    }
+    if (profile.avatar && !window.confirm('Xóa ảnh đại diện hiện tại?')) return;
+    setSavingAvatar(true);
+    setMessage('avatar', '', '');
+    try {
+      const result = await apiClient('/me/avatar', { method: 'DELETE' });
+      if (avatarPreviewUrl) URL.revokeObjectURL(avatarPreviewUrl);
+      setSelectedAvatarFile(null);
+      setAvatarPreviewUrl('');
+      const normalizedProfile = normalizeSettingsProfile(result, result.user || user);
+      setProfile(normalizedProfile);
+      setSavedProfile(normalizedProfile);
+      if (result.user) updateUser?.(result.user);
+      setMessage('avatar', 'success', 'Đã xóa ảnh đại diện. Tải lại trang vẫn dùng ảnh mặc định.');
+    } catch (err) {
+      setMessage('avatar', 'error', err.message || 'Không xóa được ảnh đại diện.');
+    } finally {
+      setSavingAvatar(false);
+      if (avatarInputRef.current) avatarInputRef.current.value = '';
+    }
   }
 
   async function saveProfile(event) {
@@ -922,22 +947,38 @@ export function AccountSettings({ user, updateUser, logout, theme, toggleTheme, 
 
   async function saveAvatar(event) {
     event.preventDefault();
+    if (!user) {
+      setMessage('avatar', 'error', 'Vui lòng đăng nhập để lưu ảnh đại diện.');
+      return;
+    }
+    if (!selectedAvatarFile) {
+      setMessage('avatar', 'warning', 'Vui lòng chọn ảnh mới trước khi lưu.');
+      return;
+    }
+    const validationError = validateAvatarFile(selectedAvatarFile);
+    if (validationError) {
+      setMessage('avatar', 'error', validationError);
+      return;
+    }
     setSavingAvatar(true);
-    setMessage('avatar', '', '');
+    setMessage('avatar', 'warning', 'Đang upload ảnh lên storage...');
     try {
-      const result = await apiClient('/me/profile', {
-        method: 'PATCH',
-        body: JSON.stringify({ avatar: profile.avatar || '' })
-      });
+      const body = new FormData();
+      body.append('avatar', selectedAvatarFile);
+      const result = await apiClient('/me/avatar', { method: 'POST', body });
       const normalizedProfile = normalizeSettingsProfile(result, result.user || user);
+      if (avatarPreviewUrl) URL.revokeObjectURL(avatarPreviewUrl);
+      setSelectedAvatarFile(null);
+      setAvatarPreviewUrl('');
       setProfile(normalizedProfile);
       setSavedProfile(normalizedProfile);
       if (result.user) updateUser?.(result.user);
-      setMessage('avatar', 'success', 'Đã lưu ảnh đại diện.');
+      setMessage('avatar', 'success', 'Đã upload và lưu ảnh đại diện. Refresh hoặc đăng nhập lại avatar vẫn còn.');
     } catch (err) {
-      setMessage('avatar', 'error', err.message || 'Không lưu được ảnh đại diện.');
+      setMessage('avatar', 'error', err.message || 'Không upload hoặc lưu được ảnh đại diện.');
     } finally {
       setSavingAvatar(false);
+      if (avatarInputRef.current) avatarInputRef.current.value = '';
     }
   }
 
@@ -1092,13 +1133,13 @@ export function AccountSettings({ user, updateUser, logout, theme, toggleTheme, 
             onDrop={handleAvatarDrop}
           >
             <img
-              src={profile.avatar || '/images/logo.png'}
+              src={avatarPreviewUrl || profile.avatar || '/images/logo.png'}
               alt="Ảnh đại diện hiện tại"
               onError={event => { event.currentTarget.src = '/images/logo.png'; }}
             />
             <input ref={avatarInputRef} hidden type="file" accept={avatarAccept} onChange={handleAvatarInput} />
             <div>
-              <strong>{avatarReading ? 'Đang tải ảnh...' : 'Kéo thả ảnh vào đây'}</strong>
+              <strong>{avatarReading ? 'Đang đọc ảnh...' : selectedAvatarFile ? selectedAvatarFile.name : 'Kéo thả ảnh vào đây'}</strong>
               <small>PNG, JPG hoặc WEBP, tối đa 2MB.</small>
             </div>
           </div>
@@ -1106,7 +1147,7 @@ export function AccountSettings({ user, updateUser, logout, theme, toggleTheme, 
             <button type="button" onClick={() => avatarInputRef.current?.click()} disabled={avatarReading || savingAvatar}>Đổi ảnh</button>
             <button type="button" className="ghost" onClick={clearAvatar} disabled={avatarReading || savingAvatar}>Xóa ảnh</button>
           </div>
-          <button type="submit" disabled={avatarReading || savingAvatar}>{savingAvatar ? 'Đang lưu...' : 'Lưu ảnh đại diện'}</button>
+          <button type="submit" disabled={avatarReading || savingAvatar || !selectedAvatarFile}>{savingAvatar ? 'Đang lưu...' : 'Lưu ảnh đại diện'}</button>
         </form>
 
         <form className="acct-panel acct-settings-section acct-settings-form" onSubmit={saveProfile}>

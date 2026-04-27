@@ -1852,9 +1852,13 @@ async function handle(req, res) {
       const validationError = validateAvatarImage(file);
       if (validationError) return badRequest(res, validationError);
       const uploaded = await storage.uploadAvatarImage(file, { userId: user.id });
+      const previousAvatar = user.avatar;
       user.avatar = uploaded.url;
       user.updatedAt = now();
       await persistDb(db);
+      if (previousAvatar && previousAvatar !== uploaded.url) {
+        storage.deleteImageByUrl(previousAvatar).catch(error => console.warn(`Could not delete old avatar: ${error.message}`));
+      }
       return send(res, 201, {
         avatar: uploaded.url,
         profile: profileResponse(user),
@@ -1862,6 +1866,19 @@ async function handle(req, res) {
         size: file.data.length,
         mimeType: file.mimeType
       });
+    }
+
+    if (req.method === 'DELETE' && pathname === '/api/me/avatar') {
+      const user = requireUser(req, res, db);
+      if (!user) return;
+      const previousAvatar = user.avatar;
+      user.avatar = '';
+      user.updatedAt = now();
+      await persistDb(db);
+      if (previousAvatar) {
+        storage.deleteImageByUrl(previousAvatar).catch(error => console.warn(`Could not delete avatar: ${error.message}`));
+      }
+      return send(res, 200, { avatar: '', profile: profileResponse(user), user: safeUser(user) });
     }
 
     if (req.method === 'PATCH' && pathname === '/api/me/profile') {

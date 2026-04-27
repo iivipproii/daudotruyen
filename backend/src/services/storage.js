@@ -89,6 +89,34 @@ async function deleteImage(path) {
   if (result.error) throw new Error(result.error.message);
 }
 
+function pathFromPublicUrl(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  if (!/^https?:\/\//i.test(text)) return text.replace(/^\/+/, '');
+  try {
+    const parsed = new URL(text);
+    const marker = `/storage/v1/object/public/${COVER_BUCKET}/`;
+    const markerIndex = parsed.pathname.indexOf(marker);
+    if (markerIndex !== -1) {
+      return decodeURIComponent(parsed.pathname.slice(markerIndex + marker.length));
+    }
+    const publicBase = PUBLIC_BASE_URL ? new URL(PUBLIC_BASE_URL) : null;
+    if (publicBase && parsed.origin === publicBase.origin && parsed.pathname.startsWith(publicBase.pathname.replace(/\/+$/, '') + '/')) {
+      return decodeURIComponent(parsed.pathname.slice(publicBase.pathname.replace(/\/+$/, '').length + 1));
+    }
+    if (STORAGE_PROVIDER === 'vercel-blob') return text;
+  } catch {
+    return '';
+  }
+  return '';
+}
+
+async function deleteImageByUrl(url) {
+  const path = pathFromPublicUrl(url);
+  if (!path) return;
+  await deleteImage(path);
+}
+
 function getPublicUrl(path) {
   if (!path) return '';
   if (/^https?:\/\//i.test(path) || path.startsWith('/')) return path;
@@ -104,6 +132,7 @@ module.exports = {
   uploadCoverImage,
   uploadAvatarImage,
   deleteImage,
+  deleteImageByUrl,
   getPublicUrl,
   COVER_BUCKET
 };

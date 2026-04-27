@@ -344,6 +344,12 @@ test('avatar upload stores only a storage URL on the user profile', async () => 
   assert.equal(user.avatar, uploaded.data.profile.avatar);
   assert.match(user.avatar, /^https?:\/\//);
   assert.ok(!user.avatar.startsWith('data:image/'));
+
+  const removed = await request('/api/me/avatar', { method: 'DELETE', headers });
+  assert.equal(removed.response.status, 200);
+  assert.equal(removed.data.profile.avatar, '');
+  assert.equal(removed.data.user.avatar, '');
+  assert.equal(readTestDb().users.find(item => item.id === 'u_user').avatar, '');
 });
 
 test('account preferences endpoint whitelists keys and persists values', async () => {
