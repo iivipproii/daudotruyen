@@ -401,7 +401,12 @@ export function AuthorDashboard({ user, apiClient }) {
     const result = form.id
       ? await apiClient(`/author/stories/${form.id}`, { method: 'PUT', body: JSON.stringify(payload) })
       : await apiClient('/author/stories', { method: 'POST', body: JSON.stringify(payload) });
-    await loadAuthorData();
+    setState(current => ({
+      ...current,
+      stories: current.stories.some(item => item.id === result.story.id)
+        ? current.stories.map(item => item.id === result.story.id ? result.story : item)
+        : [result.story, ...current.stories]
+    }));
     setToast(mode === 'submit' ? 'Đã gửi truyện chờ admin duyệt.' : 'Đã lưu nháp truyện.');
     return result.story;
   }
@@ -414,11 +419,11 @@ export function AuthorDashboard({ user, apiClient }) {
       setToast('Đã cập nhật trong dữ liệu mẫu.');
       return;
     }
-    await apiClient(`/author/stories/${id}`, {
+    const result = await apiClient(`/author/stories/${id}`, {
       method: 'PUT',
       body: JSON.stringify({ ...buildStoryPayload(normalizeStoryForForm(story), story.approvalStatus || 'draft'), ...patch })
     });
-    await loadAuthorData();
+    setState(current => ({ ...current, stories: current.stories.map(item => item.id === id ? result.story : item) }));
     setToast('Đã cập nhật truyện.');
   }
 
@@ -463,7 +468,15 @@ export function AuthorDashboard({ user, apiClient }) {
     const result = form.id
       ? await apiClient(`/author/chapters/${form.id}`, { method: 'PUT', body: JSON.stringify(payload) })
       : await apiClient(`/author/stories/${payload.storyId}/chapters`, { method: 'POST', body: JSON.stringify(payload) });
-    await loadAuthorData();
+    setState(current => ({
+      ...current,
+      chapters: current.chapters.some(item => item.id === result.chapter.id)
+        ? current.chapters.map(item => item.id === result.chapter.id ? result.chapter : item)
+        : [result.chapter, ...current.chapters],
+      stories: result.story
+        ? current.stories.map(item => item.id === result.story.id ? result.story : item)
+        : current.stories
+    }));
     setToast(status === 'published' ? 'Đã đăng chương.' : status === 'pending' ? 'Đã gửi chương chờ duyệt.' : status === 'scheduled' ? 'Đã lên lịch chương.' : 'Đã lưu nháp chương.');
     return result.chapter;
   }
@@ -497,7 +510,13 @@ export function AuthorDashboard({ user, apiClient }) {
       method: 'POST',
       body: JSON.stringify(payload)
     });
-    await loadAuthorData();
+    setState(current => ({
+      ...current,
+      chapters: [...(result.chapters || []), ...current.chapters],
+      stories: result.story
+        ? current.stories.map(item => item.id === result.story.id ? result.story : item)
+        : current.stories
+    }));
     setToast(`Đã lưu ${result.created || 0} chương.`);
     return result;
   }

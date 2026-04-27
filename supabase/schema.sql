@@ -364,7 +364,13 @@ create table if not exists public.newsletters (
 );
 
 create index if not exists stories_public_idx on public.stories(hidden, approval_status, updated_at desc);
+create index if not exists stories_approval_created_idx on public.stories(approval_status, created_at desc);
+create index if not exists stories_status_created_idx on public.stories(status, created_at desc);
+create index if not exists stories_owner_updated_idx on public.stories(owner_id, updated_at desc);
 create index if not exists chapters_story_number_idx on public.chapters(story_id, number);
+create index if not exists chapters_story_created_idx on public.chapters(story_id, created_at desc);
+create index if not exists chapters_status_created_idx on public.chapters(status, created_at desc);
+create index if not exists users_role_idx on public.users(role);
 create index if not exists comments_story_idx on public.comments(story_id, created_at desc);
 create index if not exists coin_transactions_user_idx on public.coin_transactions(user_id, created_at desc);
 create index if not exists notifications_user_idx on public.notifications(user_id, read, created_at desc);

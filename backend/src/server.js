@@ -24,12 +24,48 @@ function now() {
   return new Date().toISOString();
 }
 
+function createPerf(label) {
+  const start = process.hrtime.bigint();
+  const marks = [];
+  let last = start;
+  return {
+    mark(name) {
+      const current = process.hrtime.bigint();
+      marks.push([name, Number(current - last) / 1e6]);
+      last = current;
+    },
+    log(extra = '') {
+      const total = Number(process.hrtime.bigint() - start) / 1e6;
+      const parts = marks.map(([name, ms]) => `${name}=${Math.round(ms)}ms`);
+      parts.push(`total=${Math.round(total)}ms`);
+      console.info(`[${label}] ${parts.join(' ')}${extra ? ` ${extra}` : ''}`);
+    }
+  };
+}
+
+function perfLabel(method, pathname) {
+  if (method === 'POST' && pathname === '/api/author/stories') return 'story:create';
+  if (method === 'POST' && pathname === '/api/admin/stories') return 'story:admin-create';
+  if (method === 'PATCH' && /^\/api\/admin\/stories\/[^/]+\/status$/.test(pathname)) return 'story:moderate';
+  if (method === 'PATCH' && /^\/api\/admin\/stories\/[^/]+\/flags$/.test(pathname)) return 'story:flags';
+  if (method === 'PUT' && /^\/api\/author\/stories\/[^/]+$/.test(pathname)) return 'story:author-update';
+  if (method === 'PUT' && /^\/api\/admin\/stories\/[^/]+$/.test(pathname)) return 'story:admin-update';
+  if (method === 'POST' && /^\/api\/author\/stories\/[^/]+\/chapters$/.test(pathname)) return 'chapter:create';
+  if (method === 'POST' && /^\/api\/author\/stories\/[^/]+\/chapters\/bulk$/.test(pathname)) return 'chapter:bulk-create';
+  if (method === 'PUT' && /^\/api\/author\/chapters\/[^/]+$/.test(pathname)) return 'chapter:author-update';
+  if (method === 'POST' && /^\/api\/admin\/stories\/[^/]+\/chapters$/.test(pathname)) return 'chapter:admin-create';
+  if (method === 'PATCH' && /^\/api\/admin\/chapters\/[^/]+\/status$/.test(pathname)) return 'chapter:moderate';
+  if (method === 'PUT' && /^\/api\/admin\/chapters\/[^/]+$/.test(pathname)) return 'chapter:admin-update';
+  if (method === 'POST' && pathname === '/api/uploads/cover') return 'cover:upload';
+  return `${method} ${pathname}`;
+}
+
 function uid(prefix = 'id') {
   return `${prefix}_${crypto.randomBytes(8).toString('hex')}`;
 }
 
-async function persistDb(db) {
-  await dataStore.saveDb(ensureDbShape(db));
+async function persistDb(db, options = {}) {
+  await dataStore.saveDb(ensureDbShape(db), options);
 }
 
 function base64url(input) {
@@ -1751,19 +1787,25 @@ async function handle(req, res) {
       }
     }
 
-    return await dataStore.withLock(async () => {
+    const runDbRequest = async () => {
+    const requestPerf = createPerf(perfLabel(req.method, pathname));
     const db = ensureDbShape(await dataStore.loadDb());
+    requestPerf.mark('loadDb');
     const viewer = getAuthUser(req, db);
 
     if (req.method === 'POST' && pathname === '/api/uploads/cover') {
       const user = requireStoryPublisher(req, res, db);
       if (!user) return;
+      requestPerf.mark('auth');
       const upload = await parseMultipartRequest(req);
       const file = upload.files.find(item => item.fieldname === 'file') || upload.files[0];
       const validationError = validateUploadedImage(file);
       if (validationError) return badRequest(res, validationError);
+      requestPerf.mark('validate');
       const storyId = String(upload.fields.storyId || upload.fields.story_id || 'draft').trim();
       const uploaded = await storage.uploadCoverImage(file, { storyId, userId: user.id });
+      requestPerf.mark('upload');
+      requestPerf.log();
       return send(res, 201, {
         path: uploaded.path,
         url: uploaded.url,
@@ -2549,11 +2591,13 @@ async function handle(req, res) {
     if (req.method === 'POST' && pathname === '/api/author/stories') {
       const user = requireStoryPublisher(req, res, db);
       if (!user) return;
+      requestPerf.mark('auth');
       const body = await parseBody(req);
       const approvalStatus = authorStoryApprovalStatus(body, 'draft');
       const payload = normalizeAuthorStoryInput(body, user);
       const inputError = validateAuthorStoryPayload(payload, approvalStatus);
       if (inputError) return badRequest(res, inputError);
+      requestPerf.mark('validate');
       const timestamp = now();
       const story = {
         id: uid('story'),
@@ -2591,7 +2635,9 @@ async function handle(req, res) {
         createdAt: timestamp
       };
       db.stories.unshift(story);
-      await persistDb(db);
+      await persistDb(db, { prune: false, only: ['stories'], relationStoryIds: [story.id] });
+      requestPerf.mark('db');
+      requestPerf.log();
       return send(res, 201, { story: authorStorySummary(db, story, user.id), user: safeUser(user) });
     }
 
@@ -2612,6 +2658,7 @@ async function handle(req, res) {
     if (authorStoryParams && req.method === 'PUT') {
       const user = requireStoryPublisher(req, res, db);
       if (!user) return;
+      requestPerf.mark('auth');
       const story = db.stories.find(item => item.id === authorStoryParams.id);
       if (!story) return notFound(res);
       if (!canEditStory(user, story)) return forbidden(res);
@@ -2621,6 +2668,7 @@ async function handle(req, res) {
       const payload = normalizeAuthorStoryInput(body, user, story);
       const inputError = validateAuthorStoryPayload(payload, approvalStatus);
       if (inputError) return badRequest(res, inputError);
+      requestPerf.mark('validate');
       if (story.coverPath && payload.coverPath && story.coverPath !== payload.coverPath) {
         await storage.deleteImage(story.coverPath).catch(error => console.warn(`Could not delete old cover ${story.coverPath}: ${error.message}`));
       }
@@ -2655,7 +2703,9 @@ async function handle(req, res) {
         story.hidden = true;
       }
       if (approvalStatus === 'pending') story.rejectionReason = '';
-      await persistDb(db);
+      await persistDb(db, { prune: false, only: ['stories'], relationStoryIds: [story.id] });
+      requestPerf.mark('db');
+      requestPerf.log();
       return send(res, 200, { story: authorStorySummary(db, story, user.id), user: safeUser(user) });
     }
 
@@ -2738,6 +2788,7 @@ async function handle(req, res) {
     if (authorStoryBulkParams && req.method === 'POST') {
       const user = requireStoryPublisher(req, res, db);
       if (!user) return;
+      requestPerf.mark('auth');
       const story = db.stories.find(item => item.id === authorStoryBulkParams.id);
       if (!story) return notFound(res);
       if (!canEditStory(user, story)) return forbidden(res);
@@ -2751,6 +2802,7 @@ async function handle(req, res) {
       const isPremium = access === 'inherit' ? inheritedPremium : access === 'vip' || access === 'paid';
       const price = isPremium ? parsePositiveNumber(body.price ?? story.chapterPrice ?? story.price, 0) : 0;
       if (isPremium && price <= 0) return badRequest(res, 'Gia chuong VIP phai lon hon 0.');
+      requestPerf.mark('validate');
       const renumber = body.renumber !== false;
       let cursor = parsePositiveNumber(body.startNumber, nextChapterNumber(db, story.id));
       const batchId = uid('batch');
@@ -2808,7 +2860,9 @@ async function handle(req, res) {
       db.chapters.push(...createdChapters);
       refreshStoryChapterMetadata(db, story);
       createdChapters.forEach(chapter => notifyChapterPublished(db, story, chapter, user.id));
-      await persistDb(db);
+      await persistDb(db, { prune: false, only: ['stories', 'chapters', 'notifications'] });
+      requestPerf.mark('db');
+      requestPerf.log(`created=${createdChapters.length} skipped=${skipped}`);
       return send(res, 201, {
         created: createdChapters.length,
         skipped,
@@ -2822,6 +2876,7 @@ async function handle(req, res) {
     if (authorStoryChaptersParams && req.method === 'POST') {
       const user = requireStoryPublisher(req, res, db);
       if (!user) return;
+      requestPerf.mark('auth');
       const story = db.stories.find(item => item.id === authorStoryChaptersParams.id);
       if (!story) return notFound(res);
       if (!canEditStory(user, story)) return forbidden(res);
@@ -2837,6 +2892,7 @@ async function handle(req, res) {
       const isPremium = Boolean(body.isPremium ?? body.access === 'vip');
       const price = parsePositiveNumber(body.price ?? body.chapterPrice, 0);
       if (isPremium && price <= 0) return badRequest(res, 'Gia chuong VIP phai lon hon 0.');
+      requestPerf.mark('validate');
       const timestamp = now();
       const chapter = {
         id: uid('chap'),
@@ -2858,7 +2914,9 @@ async function handle(req, res) {
       db.chapters.push(chapter);
       refreshStoryChapterMetadata(db, story);
       notifyChapterPublished(db, story, chapter, user.id);
-      await persistDb(db);
+      await persistDb(db, { prune: false, only: ['stories', 'chapters', 'notifications'] });
+      requestPerf.mark('db');
+      requestPerf.log();
       return send(res, 201, { chapter: authorChapterSummary(db, chapter), story: authorStorySummary(db, story, user.id) });
     }
 
@@ -2866,6 +2924,7 @@ async function handle(req, res) {
     if (authorChapterParams && req.method === 'PUT') {
       const user = requireStoryPublisher(req, res, db);
       if (!user) return;
+      requestPerf.mark('auth');
       const chapter = db.chapters.find(item => item.id === authorChapterParams.id);
       if (!chapter) return notFound(res);
       if (!canEditChapter(db, user, chapter)) return forbidden(res);
@@ -2889,6 +2948,7 @@ async function handle(req, res) {
       if ((body.isPremium !== undefined || body.access !== undefined || body.price !== undefined) && nextIsPremium && parsePositiveNumber(body.price ?? chapter.price, 0) <= 0) {
         return badRequest(res, 'Gia chuong VIP phai lon hon 0.');
       }
+      requestPerf.mark('validate');
       ['title', 'content', 'preview'].forEach(key => {
         if (body[key] !== undefined) chapter[key] = String(body[key]).trim();
       });
@@ -2908,7 +2968,9 @@ async function handle(req, res) {
         refreshStoryChapterMetadata(db, oldStory);
       }
       if (!wasPublic) notifyChapterPublished(db, targetStory, chapter, user.id);
-      await persistDb(db);
+      await persistDb(db, { prune: false, only: ['stories', 'chapters', 'notifications'] });
+      requestPerf.mark('db');
+      requestPerf.log();
       return send(res, 200, { chapter: authorChapterSummary(db, chapter), story: authorStorySummary(db, targetStory, user.id) });
     }
 
@@ -3462,11 +3524,13 @@ async function handle(req, res) {
     if (req.method === 'POST' && pathname === '/api/admin/stories') {
       const admin = requireAdmin(req, res, db);
       if (!admin) return;
+      requestPerf.mark('auth');
       const body = await parseBody(req);
       const inputError = validateStoryInput(body);
       if (inputError) return badRequest(res, inputError);
       const slug = slugify(body.slug || body.title);
       if (db.stories.some(story => story.slug === slug)) return badRequest(res, 'Slug da ton tai.');
+      requestPerf.mark('validate');
       const approvalStatus = VALID_STORY_APPROVAL_STATUSES.includes(body.approvalStatus) ? body.approvalStatus : 'pending';
       const timestamp = now();
       const story = {
@@ -3504,7 +3568,9 @@ async function handle(req, res) {
       db.stories.unshift(story);
       ensureTaxonomy(db);
       logAdminAction(db, admin, 'create_story', 'story', story.id, null, story, '');
-      await persistDb(db);
+      await persistDb(db, { prune: false, only: ['stories', 'adminLogs'], relationStoryIds: [story.id] });
+      requestPerf.mark('db');
+      requestPerf.log();
       return send(res, 201, { story: adminStorySummary(db, story, admin.id) });
     }
 
@@ -3512,9 +3578,11 @@ async function handle(req, res) {
     if (adminStoryStatusParams && req.method === 'PATCH') {
       const admin = requireAdmin(req, res, db);
       if (!admin) return;
+      requestPerf.mark('auth');
       const story = db.stories.find(item => item.id === adminStoryStatusParams.id);
       if (!story) return notFound(res);
       const body = await parseBody(req);
+      requestPerf.mark('validate');
       const before = adminStorySummary(db, story, admin.id);
       if (body.approvalStatus !== undefined) {
         if (!VALID_STORY_APPROVAL_STATUSES.includes(body.approvalStatus)) return badRequest(res, 'Trang thai duyet khong hop le.');
@@ -3535,7 +3603,9 @@ async function handle(req, res) {
       const after = adminStorySummary(db, story, admin.id);
       const action = story.approvalStatus === 'rejected' ? 'reject_story' : story.hidden ? 'hide_story' : story.approvalStatus === 'approved' ? 'approve_story' : 'update_story_status';
       logAdminAction(db, admin, action, 'story', story.id, before, after, story.rejectionReason || '');
-      await persistDb(db);
+      await persistDb(db, { prune: false, only: ['stories', 'adminLogs'], relationStoryIds: [story.id] });
+      requestPerf.mark('db');
+      requestPerf.log();
       return send(res, 200, { story: after });
     }
 
@@ -3543,9 +3613,11 @@ async function handle(req, res) {
     if (adminStoryFlagsParams && req.method === 'PATCH') {
       const admin = requireAdmin(req, res, db);
       if (!admin) return;
+      requestPerf.mark('auth');
       const story = db.stories.find(item => item.id === adminStoryFlagsParams.id);
       if (!story) return notFound(res);
       const body = await parseBody(req);
+      requestPerf.mark('validate');
       const before = adminStorySummary(db, story, admin.id);
       ['featured', 'hot', 'recommended', 'banner'].forEach(key => {
         if (body[key] !== undefined) story[key] = Boolean(body[key]);
@@ -3553,7 +3625,9 @@ async function handle(req, res) {
       story.updatedAt = now();
       const after = adminStorySummary(db, story, admin.id);
       logAdminAction(db, admin, 'update_story_flags', 'story', story.id, before, after, '');
-      await persistDb(db);
+      await persistDb(db, { prune: false, only: ['stories', 'adminLogs'], relationStoryIds: [story.id] });
+      requestPerf.mark('db');
+      requestPerf.log();
       return send(res, 200, { story: after });
     }
 
@@ -3561,6 +3635,7 @@ async function handle(req, res) {
     if (adminStoryParams && req.method === 'PUT') {
       const admin = requireAdmin(req, res, db);
       if (!admin) return;
+      requestPerf.mark('auth');
       const story = db.stories.find(item => item.id === adminStoryParams.id);
       if (!story) return notFound(res);
       const body = await parseBody(req);
@@ -3599,11 +3674,14 @@ async function handle(req, res) {
       if (body.rating !== undefined) story.rating = Number(body.rating);
       if (body.categories !== undefined) story.categories = normalizeCategories(body.categories);
       if (body.tags !== undefined) story.tags = normalizeCategories(body.tags);
+      requestPerf.mark('validate');
       story.updatedAt = now();
       ensureTaxonomy(db);
       const after = adminStorySummary(db, story, admin.id);
       logAdminAction(db, admin, 'update_story', 'story', story.id, before, after, '');
-      await persistDb(db);
+      await persistDb(db, { prune: false, only: ['stories', 'adminLogs'], relationStoryIds: [story.id] });
+      requestPerf.mark('db');
+      requestPerf.log();
       return send(res, 200, { story: after });
     }
 
@@ -3648,6 +3726,7 @@ async function handle(req, res) {
     if (adminChapterParams && req.method === 'POST') {
       const admin = requireAdmin(req, res, db);
       if (!admin) return;
+      requestPerf.mark('auth');
       const story = db.stories.find(item => item.id === adminChapterParams.id);
       if (!story) return notFound(res);
       const body = await parseBody(req);
@@ -3656,6 +3735,7 @@ async function handle(req, res) {
       if (!Number.isFinite(chapterNumber) || chapterNumber <= 0) return badRequest(res, 'So chuong khong hop le.');
       if (chapterNumberExists(db, story.id, chapterNumber)) return badRequest(res, 'So chuong da ton tai trong truyen nay.');
       const status = VALID_CHAPTER_STATUSES.includes(body.status) ? body.status : 'approved';
+      requestPerf.mark('validate');
       const chapter = {
         id: uid('chap'),
         storyId: story.id,
@@ -3678,7 +3758,9 @@ async function handle(req, res) {
       refreshStoryChapterMetadata(db, story);
       notifyChapterPublished(db, story, chapter, admin.id);
       logAdminAction(db, admin, 'create_chapter', 'chapter', chapter.id, null, chapterAdminSummary(db, chapter), '');
-      await persistDb(db);
+      await persistDb(db, { prune: false, only: ['stories', 'chapters', 'notifications', 'adminLogs'] });
+      requestPerf.mark('db');
+      requestPerf.log();
       return send(res, 201, { chapter: chapterAdminSummary(db, chapter) });
     }
 
@@ -3686,10 +3768,12 @@ async function handle(req, res) {
     if (adminChapterStatusParams && req.method === 'PATCH') {
       const admin = requireAdmin(req, res, db);
       if (!admin) return;
+      requestPerf.mark('auth');
       const chapter = db.chapters.find(item => item.id === adminChapterStatusParams.id);
       if (!chapter) return notFound(res);
       const body = await parseBody(req);
       if (!VALID_CHAPTER_STATUSES.includes(body.status)) return badRequest(res, 'Trang thai chuong khong hop le.');
+      requestPerf.mark('validate');
       const before = chapterAdminSummary(db, chapter);
       const wasPublic = isPublicChapter(chapter);
       chapter.status = body.status;
@@ -3716,7 +3800,9 @@ async function handle(req, res) {
       const after = chapterAdminSummary(db, chapter);
       const action = body.status === 'rejected' ? 'reject_chapter' : body.status === 'hidden' ? 'hide_chapter' : ['approved', 'published'].includes(body.status) ? 'approve_chapter' : 'update_chapter_status';
       logAdminAction(db, admin, action, 'chapter', chapter.id, before, after, chapter.rejectionReason || '');
-      await persistDb(db);
+      await persistDb(db, { prune: false, only: ['stories', 'chapters', 'notifications', 'adminLogs'] });
+      requestPerf.mark('db');
+      requestPerf.log();
       return send(res, 200, { chapter: after });
     }
 
@@ -3724,6 +3810,7 @@ async function handle(req, res) {
     if (adminChapterUpdateParams && req.method === 'PUT') {
       const admin = requireAdmin(req, res, db);
       if (!admin) return;
+      requestPerf.mark('auth');
       const chapter = db.chapters.find(item => item.id === adminChapterUpdateParams.id);
       if (!chapter) return notFound(res);
       const body = await parseBody(req);
@@ -3754,12 +3841,15 @@ async function handle(req, res) {
       }
       if (body.password !== undefined) chapter.password = String(body.password || '');
       if (body.content !== undefined) chapter.wordCount = wordCount(chapter.content);
+      requestPerf.mark('validate');
       chapter.updatedAt = now();
       if (story) refreshStoryChapterMetadata(db, story);
       if (!wasPublic && story) notifyChapterPublished(db, story, chapter, admin.id);
       const after = chapterAdminSummary(db, chapter);
       logAdminAction(db, admin, 'update_chapter', 'chapter', chapter.id, before, after, '');
-      await persistDb(db);
+      await persistDb(db, { prune: false, only: ['stories', 'chapters', 'notifications', 'adminLogs'] });
+      requestPerf.mark('db');
+      requestPerf.log();
       return send(res, 200, { chapter: after });
     }
 
@@ -3779,7 +3869,9 @@ async function handle(req, res) {
     }
 
     return notFound(res);
-    });
+    };
+
+    return req.method === 'GET' ? runDbRequest() : dataStore.withLock(runDbRequest);
   } catch (error) {
     console.error(error);
     return send(res, 500, { message: error.message || 'Lỗi máy chủ.' });

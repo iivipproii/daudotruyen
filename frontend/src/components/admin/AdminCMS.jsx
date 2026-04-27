@@ -319,6 +319,39 @@ export function AdminDashboard({ apiClient, user }) {
     setLoading(false);
   }
 
+  async function loadSlices(slices = []) {
+    const loaders = {
+      stats: () => loadDashboard(apiClient),
+      users: () => loadUsers(apiClient),
+      stories: () => loadStories(apiClient),
+      chapters: () => loadChapters(apiClient),
+      reports: () => loadReports(apiClient),
+      transactions: () => loadTransactions(apiClient),
+      comments: () => loadComments(apiClient),
+      taxonomy: () => loadTaxonomy(apiClient),
+      notifications: () => loadNotifications(apiClient),
+      logs: () => loadAdminLogs(apiClient)
+    };
+    const unique = Array.from(new Set(slices)).filter(key => loaders[key]);
+    const results = await Promise.all(unique.map(async key => [key, await loaders[key]()]));
+    setState(current => {
+      const next = { ...current };
+      results.forEach(([key, value]) => {
+        if (key === 'stats') next.stats = value.stats || value || {};
+        if (key === 'users') next.users = asArray(value.users).map(normalizeUser);
+        if (key === 'stories') next.stories = asArray(value.stories).map(normalizeStory);
+        if (key === 'chapters') next.chapters = asArray(value.chapters).map(normalizeChapter);
+        if (key === 'reports') next.reports = asArray(value.reports).map(normalizeReport);
+        if (key === 'transactions') next.transactions = asArray(value.transactions).map(normalizeTransaction);
+        if (key === 'comments') next.comments = asArray(value.comments).map(normalizeComment);
+        if (key === 'taxonomy') next.taxonomy = value.taxonomy || { categories: [], tags: [] };
+        if (key === 'notifications') next.notifications = asArray(value.notifications);
+        if (key === 'logs') next.logs = asArray(value.logs);
+      });
+      return next;
+    });
+  }
+
   useEffect(() => {
     let cancelled = false;
     loadAll().then(() => {
@@ -335,11 +368,13 @@ export function AdminDashboard({ apiClient, user }) {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
-  async function runMutation(task, successMessage) {
+  async function runMutation(task, successMessage, refreshSlices = null) {
+    if (actionBusy) return;
     setActionBusy(true);
     try {
       await task();
-      await loadAll({ silent: true });
+      if (refreshSlices?.length) await loadSlices(refreshSlices);
+      else await loadAll({ silent: true });
       setError('');
       setToast(successMessage);
     } catch (err) {
@@ -374,15 +409,18 @@ export function AdminDashboard({ apiClient, user }) {
       () => story?.id
         ? apiClient(`/admin/stories/${story.id}`, { method: 'PUT', body: JSON.stringify(payload) })
         : apiClient('/admin/stories', { method: 'POST', body: JSON.stringify(payload) }),
-      story?.id ? 'Đã lưu truyện.' : 'Đã tạo truyện.'
+      story?.id ? 'Đã lưu truyện.' : 'Đã tạo truyện.',
+      ['stats', 'stories', 'taxonomy', 'logs']
     ),
     updateStoryStatus: (story, patch) => runMutation(
       () => apiClient(`/admin/stories/${story.id}/status`, { method: 'PATCH', body: JSON.stringify(patch) }),
-      'Đã cập nhật trạng thái truyện.'
+      'Đã cập nhật trạng thái truyện.',
+      ['stats', 'stories', 'logs']
     ),
     updateStoryFlags: (story, patch) => runMutation(
       () => apiClient(`/admin/stories/${story.id}/flags`, { method: 'PATCH', body: JSON.stringify(patch) }),
-      'Đã cập nhật nhãn truyện.'
+      'Đã cập nhật nhãn truyện.',
+      ['stories', 'logs']
     ),
     deleteStory: story => runMutation(
       () => apiClient(`/admin/stories/${story.id}`, { method: 'DELETE' }),
@@ -390,11 +428,13 @@ export function AdminDashboard({ apiClient, user }) {
     ),
     saveChapter: (chapter, payload) => runMutation(
       () => apiClient(`/admin/chapters/${chapter.id}`, { method: 'PUT', body: JSON.stringify(payload) }),
-      'Đã lưu chương.'
+      'Đã lưu chương.',
+      ['stats', 'stories', 'chapters', 'logs']
     ),
     updateChapterStatus: (chapter, payload) => runMutation(
       () => apiClient(`/admin/chapters/${chapter.id}/status`, { method: 'PATCH', body: JSON.stringify(payload) }),
-      'Đã cập nhật trạng thái chương.'
+      'Đã cập nhật trạng thái chương.',
+      ['stats', 'stories', 'chapters', 'logs']
     ),
     deleteChapter: chapter => runMutation(
       () => apiClient(`/admin/chapters/${chapter.id}`, { method: 'DELETE' }),
@@ -475,10 +515,10 @@ export function AdminDashboard({ apiClient, user }) {
         <UsersTab users={state.users} currentUser={user} onOpenUser={setUserDetail} onUpdateUser={actions.updateUser} onUpdateRole={actions.updateUserRole} onAdjust={actions.adjustBalance} onConfirm={setConfirm} />
       )}
       {activeView === 'stories' && (
-        <StoriesTab stories={state.stories} taxonomy={state.taxonomy} onSave={actions.saveStory} onStatus={actions.updateStoryStatus} onFlags={actions.updateStoryFlags} onDelete={actions.deleteStory} onConfirm={setConfirm} />
+        <StoriesTab busy={actionBusy} stories={state.stories} taxonomy={state.taxonomy} onSave={actions.saveStory} onStatus={actions.updateStoryStatus} onFlags={actions.updateStoryFlags} onDelete={actions.deleteStory} onConfirm={setConfirm} />
       )}
       {activeView === 'chapters' && (
-        <ChaptersTab chapters={state.chapters} stories={state.stories} onSave={actions.saveChapter} onStatus={actions.updateChapterStatus} onDelete={actions.deleteChapter} onConfirm={setConfirm} />
+        <ChaptersTab busy={actionBusy} chapters={state.chapters} stories={state.stories} onSave={actions.saveChapter} onStatus={actions.updateChapterStatus} onDelete={actions.deleteChapter} onConfirm={setConfirm} />
       )}
       {activeView === 'reports' && <ReportsTab reports={state.reports} onResolve={actions.resolveReport} />}
       {activeView === 'comments' && <CommentsTab comments={state.comments} stories={state.stories} onUpdate={actions.updateComment} onDelete={actions.deleteComment} onConfirm={setConfirm} />}
@@ -691,7 +731,7 @@ function UserModal({ user, currentUser, onClose, onSave, onRole, onAdjust }) {
   );
 }
 
-function StoriesTab({ stories, taxonomy, onSave, onStatus, onFlags, onDelete, onConfirm }) {
+function StoriesTab({ busy = false, stories, taxonomy, onSave, onStatus, onFlags, onDelete, onConfirm }) {
   const [query, setQuery] = useState('');
   const [approval, setApproval] = useState('all');
   const [hidden, setHidden] = useState('all');
@@ -727,16 +767,16 @@ function StoriesTab({ stories, taxonomy, onSave, onStatus, onFlags, onDelete, on
             <td data-label="Chỉ số">{formatNumber(story.views)} đọc · {formatNumber(story.chapterCount)} chương</td>
             <td data-label="Thao tác">
               <div className="cms-row-actions">
-                <button type="button" onClick={() => onStatus(story, { approvalStatus: 'approved', hidden: false })}>Duyệt</button>
-                <button type="button" onClick={() => setRejecting(story)}>Từ chối</button>
-                <button type="button" onClick={() => onConfirm({ title: story.hidden ? 'Hiện truyện?' : 'Ẩn truyện?', text: story.title, action: () => onStatus(story, { hidden: !story.hidden }) })}>{story.hidden ? 'Hiện' : 'Ẩn'}</button>
-                <button type="button" onClick={() => onFlags(story, { featured: !story.featured })}>{story.featured ? 'Bỏ featured' : 'Featured'}</button>
-                <button type="button" onClick={() => onFlags(story, { hot: !story.hot })}>{story.hot ? 'Bỏ hot' : 'Hot'}</button>
-                <button type="button" onClick={() => onFlags(story, { recommended: !story.recommended })}>Đề cử</button>
-                <button type="button" onClick={() => onFlags(story, { banner: !story.banner })}>Banner</button>
-                <button type="button" onClick={() => setEditing(story)}>Sửa</button>
+                <button type="button" disabled={busy} onClick={() => onStatus(story, { approvalStatus: 'approved', hidden: false })}>{busy ? 'Đang xử lý...' : 'Duyệt'}</button>
+                <button type="button" disabled={busy} onClick={() => setRejecting(story)}>Từ chối</button>
+                <button type="button" disabled={busy} onClick={() => onConfirm({ title: story.hidden ? 'Hiện truyện?' : 'Ẩn truyện?', text: story.title, action: () => onStatus(story, { hidden: !story.hidden }) })}>{story.hidden ? 'Hiện' : 'Ẩn'}</button>
+                <button type="button" disabled={busy} onClick={() => onFlags(story, { featured: !story.featured })}>{story.featured ? 'Bỏ featured' : 'Featured'}</button>
+                <button type="button" disabled={busy} onClick={() => onFlags(story, { hot: !story.hot })}>{story.hot ? 'Bỏ hot' : 'Hot'}</button>
+                <button type="button" disabled={busy} onClick={() => onFlags(story, { recommended: !story.recommended })}>Đề cử</button>
+                <button type="button" disabled={busy} onClick={() => onFlags(story, { banner: !story.banner })}>Banner</button>
+                <button type="button" disabled={busy} onClick={() => setEditing(story)}>Sửa</button>
                 {story.slug && <Link className="cms-link-button" to={`/truyen/${story.slug}`}>Preview</Link>}
-                <button type="button" className="danger" onClick={() => onConfirm({ title: 'Xóa truyện?', text: 'Toàn bộ chương, bình luận, lịch sử liên quan sẽ bị xóa.', action: () => onDelete(story) })}>Xóa</button>
+                <button type="button" className="danger" disabled={busy} onClick={() => onConfirm({ title: 'Xóa truyện?', text: 'Toàn bộ chương, bình luận, lịch sử liên quan sẽ bị xóa.', action: () => onDelete(story) })}>Xóa</button>
               </div>
             </td>
           </tr>
@@ -826,7 +866,7 @@ function StoryFormModal({ story, taxonomy, onClose, onSave }) {
   );
 }
 
-function ChaptersTab({ chapters, stories, onSave, onStatus, onDelete, onConfirm }) {
+function ChaptersTab({ busy = false, chapters, stories, onSave, onStatus, onDelete, onConfirm }) {
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState('all');
   const [storyId, setStoryId] = useState('all');
@@ -863,14 +903,14 @@ function ChaptersTab({ chapters, stories, onSave, onStatus, onDelete, onConfirm 
             <td data-label="Thống kê">{formatNumber(chapter.wordCount)} từ · {formatNumber(chapter.reads)} đọc · {formatNumber(chapter.comments)} bình luận</td>
             <td data-label="Thao tác">
               <div className="cms-row-actions">
-                <button type="button" onClick={() => setPreview(chapter)}>Preview</button>
-                <button type="button" onClick={() => setEditing(chapter)}>Sửa</button>
-                <button type="button" onClick={() => onStatus(chapter, { status: 'reviewing' })}>Reviewing</button>
-                <button type="button" onClick={() => onStatus(chapter, { status: 'approved' })}>Duyệt</button>
-                <button type="button" onClick={() => setRejecting(chapter)}>Từ chối</button>
-                <button type="button" onClick={() => onConfirm({ title: chapter.status === 'hidden' ? 'Hiện chương?' : 'Ẩn chương?', text: chapter.title, action: () => onStatus(chapter, { status: chapter.status === 'hidden' ? 'approved' : 'hidden' }) })}>{chapter.status === 'hidden' ? 'Hiện' : 'Ẩn'}</button>
-                <button type="button" onClick={() => setScheduling(chapter)}>Lên lịch</button>
-                <button type="button" className="danger" onClick={() => onConfirm({ title: 'Xóa chương?', text: `${chapter.storyTitle} - Chương ${chapter.number}`, action: () => onDelete(chapter) })}>Xóa</button>
+                <button type="button" disabled={busy} onClick={() => setPreview(chapter)}>Preview</button>
+                <button type="button" disabled={busy} onClick={() => setEditing(chapter)}>Sửa</button>
+                <button type="button" disabled={busy} onClick={() => onStatus(chapter, { status: 'reviewing' })}>Reviewing</button>
+                <button type="button" disabled={busy} onClick={() => onStatus(chapter, { status: 'approved' })}>{busy ? 'Đang xử lý...' : 'Duyệt'}</button>
+                <button type="button" disabled={busy} onClick={() => setRejecting(chapter)}>Từ chối</button>
+                <button type="button" disabled={busy} onClick={() => onConfirm({ title: chapter.status === 'hidden' ? 'Hiện chương?' : 'Ẩn chương?', text: chapter.title, action: () => onStatus(chapter, { status: chapter.status === 'hidden' ? 'approved' : 'hidden' }) })}>{chapter.status === 'hidden' ? 'Hiện' : 'Ẩn'}</button>
+                <button type="button" disabled={busy} onClick={() => setScheduling(chapter)}>Lên lịch</button>
+                <button type="button" className="danger" disabled={busy} onClick={() => onConfirm({ title: 'Xóa chương?', text: `${chapter.storyTitle} - Chương ${chapter.number}`, action: () => onDelete(chapter) })}>Xóa</button>
               </div>
             </td>
           </tr>

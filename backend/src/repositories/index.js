@@ -674,6 +674,16 @@ async function saveStoryRelations(db, taxonomy) {
   await upsertRows('story_tags', storyTags);
 }
 
+async function deleteStoryRelationsFor(storyIds = []) {
+  const ids = storyIds.filter(Boolean);
+  if (!ids.length) return;
+  const supabase = getSupabase();
+  for (const table of ['story_categories', 'story_tags']) {
+    const result = await supabase.from(table).delete().in('story_id', ids);
+    await assertResult(result, table);
+  }
+}
+
 async function loadSupabaseDb() {
   const pairs = await Promise.all(
     LOAD_DEFS.map(async def => [def.key, (await selectAll(def.table)).map(row => fromRow(row, def))])
@@ -690,6 +700,8 @@ async function saveSupabaseDb(db, options = {}) {
   const shouldPrune = options.prune !== false;
   const nextDb = normalizeSnapshot(db);
   const taxonomy = buildTaxonomy(nextDb);
+  const only = Array.isArray(options.only) ? new Set(options.only) : null;
+  const shouldSave = key => !only || only.has(key);
 
   if (shouldPrune) {
     await pruneRelations(nextDb, taxonomy);
@@ -699,11 +711,17 @@ async function saveSupabaseDb(db, options = {}) {
     }
   }
 
-  await upsertRows(TABLES.users.table, (nextDb.users || []).map(item => toRow(item, TABLES.users)));
-  await saveTaxonomy(taxonomy);
-  await upsertRows(TABLES.stories.table, (nextDb.stories || []).map(item => toRow(item, TABLES.stories)));
-  await saveStoryRelations(nextDb, taxonomy);
+  if (shouldSave(TABLES.users.key)) {
+    await upsertRows(TABLES.users.table, (nextDb.users || []).map(item => toRow(item, TABLES.users)));
+  }
+  if (shouldSave(TABLES.stories.key)) {
+    await saveTaxonomy(taxonomy);
+    await upsertRows(TABLES.stories.table, (nextDb.stories || []).map(item => toRow(item, TABLES.stories)));
+    await deleteStoryRelationsFor(options.relationStoryIds || []);
+    await saveStoryRelations(nextDb, taxonomy);
+  }
   for (const def of UPSERT_ORDER.filter(def => def !== TABLES.users && def !== TABLES.stories)) {
+    if (!shouldSave(def.key)) continue;
     const rows = (nextDb[def.key] || []).map(item => toRow(item, def));
     await upsertRows(def.table, rows);
   }

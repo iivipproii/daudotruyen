@@ -67,6 +67,23 @@ function normalizeStory(story = {}) {
   };
 }
 
+function replacementRatio(value = '') {
+  const text = String(value || '');
+  if (!text) return 0;
+  const replacementCount = (text.match(/\uFFFD/g) || []).length;
+  return replacementCount / text.length;
+}
+
+function hasCorruptText(value, maxRatio = 0) {
+  if (typeof value !== 'string') return false;
+  return replacementRatio(value) > maxRatio;
+}
+
+function isDisplaySafeStory(story = {}) {
+  const textFields = [story.title, story.description, story.author, story.translator, ...(story.categories || [])];
+  return Boolean(story.title && story.slug) && !textFields.some(value => hasCorruptText(value));
+}
+
 function normalizeStories(stories = []) {
   return stories.filter(Boolean).map(normalizeStory);
 }
@@ -112,12 +129,17 @@ function sortByDate(key) {
 }
 
 function buildHomeSlices(sourceStories = mockStories) {
-  const stories = normalizeStories(sourceStories.length ? sourceStories : mockStories);
+  const normalizedStories = normalizeStories(sourceStories.length ? sourceStories : mockStories);
+  const safeStories = normalizedStories.filter(isDisplaySafeStory);
+  const stories = safeStories.length ? safeStories : normalizeStories(mockStories).filter(isDisplaySafeStory);
   const byViews = stories.slice().sort(sortByNumber('views'));
   const byRating = stories.slice().sort(sortByNumber('rating'));
   const byUpdated = stories.slice().sort(sortByDate('updatedAt'));
   const completed = stories.filter(story => story.status === 'completed');
-  const featured = stories.filter(story => story.featured).concat(byRating).filter((story, index, list) => list.findIndex(item => item.id === story.id) === index);
+  const featured = stories
+    .filter(story => story.featured && isDisplaySafeStory(story))
+    .concat(byRating.filter(isDisplaySafeStory))
+    .filter((story, index, list) => list.findIndex(item => item.id === story.id) === index);
 
   return {
     all: stories,
@@ -832,8 +854,12 @@ function HomeLoading() {
 
 export function HeroSlider({ stories }) {
   const [active, setActive] = useState(0);
-  const slides = stories?.length ? stories : mockStories.slice(0, 4);
-  const current = slides[active % slides.length];
+  const slides = normalizeStories(stories?.length ? stories : mockStories.slice(0, 4)).filter(isDisplaySafeStory);
+  const current = slides.length ? slides[active % slides.length] : null;
+
+  useEffect(() => {
+    setActive(0);
+  }, [slides.length]);
 
   useEffect(() => {
     if (slides.length <= 1) return undefined;
@@ -845,6 +871,10 @@ export function HeroSlider({ stories }) {
 
   const goPrev = () => setActive(index => (index - 1 + slides.length) % slides.length);
   const goNext = () => setActive(index => (index + 1) % slides.length);
+
+  if (!current) {
+    return <div className="prod-empty-state">Chưa có truyện nổi bật phù hợp để hiển thị.</div>;
+  }
 
   return (
     <section className="prod-hero-slider" style={{ '--hero-image': `url("${current.banner || current.cover || '/images/hero.jpg'}")` }}>
