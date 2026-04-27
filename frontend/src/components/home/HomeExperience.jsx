@@ -149,7 +149,15 @@ async function fetchSafe(apiClient, path) {
   if (!apiClient) return null;
   try {
     return await apiClient(path);
-  } catch {
+  } catch (error) {
+    console.warn('[HOME_API_FALLBACK]', {
+      path,
+      url: error?.url,
+      status: error?.status,
+      statusText: error?.statusText,
+      message: error?.message,
+      timestamp: new Date().toISOString()
+    });
     return null;
   }
 }

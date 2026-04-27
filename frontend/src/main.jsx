@@ -32,7 +32,13 @@ import { canPostStory, isAdmin, normalizeRole } from './lib/permissions.js';
 
 const API_BASE = (() => {
   const configured = String(import.meta.env.VITE_API_URL || '').trim();
-  if (configured) return configured.replace(/\/+$/, '');
+  if (configured) {
+    const cleanBase = configured.replace(/\/+$/, '');
+    if (import.meta.env.PROD && /^https?:\/\/(?:localhost|127\.0\.0\.1)(?::|\/|$)/i.test(cleanBase)) {
+      throw new Error(`Invalid production VITE_API_URL: ${cleanBase}`);
+    }
+    return cleanBase;
+  }
   if (import.meta.env.PROD) {
     throw new Error('Missing VITE_API_URL for production build.');
   }
@@ -47,16 +53,47 @@ function normalizeSessionUser(user) {
   return user ? { ...user, role: normalizeRole(user.role) } : null;
 }
 
+function buildApiUrl(path) {
+  const cleanPath = String(path || '').startsWith('/') ? String(path || '') : `/${path || ''}`;
+  if (/^https?:\/\//i.test(cleanPath)) return cleanPath;
+  return `${API_BASE}${cleanPath}`;
+}
+
 async function api(path, options = {}) {
   const token = localStorage.getItem('daudo_token');
   const isFormData = options.body instanceof FormData;
-  const headers = { ...(isFormData ? {} : { 'Content-Type': 'application/json' }), ...(options.headers || {}) };
+  const headers = {
+    Accept: 'application/json',
+    ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
+    ...(options.headers || {})
+  };
   if (token) headers.Authorization = `Bearer ${token}`;
-  const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
-  const text = await response.text();
-  const data = text ? JSON.parse(text) : {};
-  if (!response.ok) throw new Error(data.message || 'Có lỗi xảy ra.');
-  return data;
+  const url = buildApiUrl(path);
+  let response;
+  let data = {};
+  try {
+    response = await fetch(url, { ...options, headers });
+    const text = await response.text();
+    data = text ? JSON.parse(text) : {};
+    if (!response.ok) {
+      const error = new Error(data.message || `API request failed: ${response.status} ${response.statusText} ${url}`);
+      error.status = response.status;
+      error.statusText = response.statusText;
+      error.url = url;
+      error.path = path;
+      throw error;
+    }
+    return data;
+  } catch (error) {
+    console.error('[API_ERROR]', {
+      path,
+      url,
+      status: response?.status,
+      statusText: response?.statusText,
+      error
+    });
+    throw error;
+  }
 }
 
 function useAuth() {
