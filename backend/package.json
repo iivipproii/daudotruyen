@@ -19,6 +19,7 @@
   "license": "MIT",
   "dependencies": {
     "@supabase/supabase-js": "^2.105.0",
+    "@vercel/blob": "^2.3.3",
     "dotenv": "^17.4.2",
     "mammoth": "^1.12.0"
   }

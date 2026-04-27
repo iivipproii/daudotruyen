@@ -11,6 +11,7 @@ const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || '*';
 const JSON_LIMIT = 4 * 1024 * 1024;
 const UPLOAD_LIMIT = 10 * 1024 * 1024;
 const COMPRESSED_IMAGE_LIMIT = 500 * 1024;
+const AVATAR_UPLOAD_LIMIT = 2 * 1024 * 1024;
 const IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const rateBuckets = new Map();
 
@@ -102,6 +103,7 @@ function clientIp(req) {
 function rateLimitKey(pathname, req) {
   if (pathname === '/api/auth/login') return { key: `login:${clientIp(req)}`, limit: 100, windowMs: 60 * 1000 };
   if (pathname === '/api/uploads/cover') return { key: `upload:${clientIp(req)}`, limit: 20, windowMs: 60 * 1000 };
+  if (pathname === '/api/me/avatar') return { key: `avatar:${clientIp(req)}`, limit: 20, windowMs: 60 * 1000 };
   if (pathname === '/api/wallet/topup') return { key: `topup:${clientIp(req)}`, limit: 20, windowMs: 60 * 1000 };
   if (/^\/api\/chapters\/[^/]+\/unlock$/.test(pathname)) return { key: `unlock:${clientIp(req)}`, limit: 40, windowMs: 60 * 1000 };
   return null;
@@ -449,11 +451,26 @@ function isProfileImageDataUrl(value) {
 
 function isProfileImageValue(value) {
   if (!value) return true;
-  return isHttpUrl(value) || isLocalAssetPath(value) || isStorageObjectPath(value);
+  return isHttpUrl(value);
 }
 
 function isDataImageValue(value) {
   return /^data:image\/(png|jpeg|jpg|webp);base64,/i.test(String(value || ''));
+}
+
+function isTrustedAvatarUrl(value) {
+  if (!isHttpUrl(value)) return false;
+  try {
+    const parsed = new URL(String(value));
+    const configuredBase = String(process.env.PUBLIC_STORAGE_BASE_URL || '').trim();
+    if (configuredBase && parsed.href.startsWith(configuredBase.replace(/\/+$/, '') + '/')) return true;
+    if (/\.public\.blob\.vercel-storage\.com$/i.test(parsed.hostname)) return true;
+    if (/\.supabase\.co$/i.test(parsed.hostname) && parsed.pathname.includes('/storage/v1/object/public/')) return true;
+    if (process.env.NODE_ENV !== 'production' && parsed.hostname === 'localhost' && parsed.pathname.startsWith('/storage/')) return true;
+    return false;
+  } catch {
+    return false;
+  }
 }
 
 function isCoverImageValue(value) {
@@ -466,6 +483,13 @@ function validateUploadedImage(file) {
   if (!IMAGE_MIME_TYPES.has(file.mimeType)) return 'Chi chap nhan anh JPG, PNG hoac WEBP.';
   if (file.data.length > UPLOAD_LIMIT) return 'File goc toi da 10MB.';
   if (file.data.length > COMPRESSED_IMAGE_LIMIT) return 'Anh sau nen toi da 500KB. Vui long nen anh truoc khi upload.';
+  return '';
+}
+
+function validateAvatarImage(file) {
+  if (!file) return 'Vui long chon file avatar.';
+  if (!IMAGE_MIME_TYPES.has(file.mimeType)) return 'Chi chap nhan avatar PNG, JPG hoac WEBP.';
+  if (file.data.length > AVATAR_UPLOAD_LIMIT) return 'Avatar toi da 2MB.';
   return '';
 }
 
@@ -557,6 +581,7 @@ function validateProfilePayload(body, user, db) {
     const avatar = String(body.avatar || '').trim();
     if (isDataImageValue(avatar)) return { error: 'Avatar phai duoc upload len storage, khong luu base64 trong database.' };
     if (!isProfileImageValue(avatar)) return { error: 'Avatar phải là ảnh PNG, JPG hoặc WEBP hợp lệ.' };
+    if (avatar && !isTrustedAvatarUrl(avatar)) return { error: 'Avatar phai la URL storage hop le.' };
     value.avatar = avatar;
   }
 
@@ -1734,6 +1759,26 @@ async function handle(req, res) {
       const user = requireUser(req, res, db);
       if (!user) return;
       return send(res, 200, { profile: profileResponse(user), user: safeUser(user) });
+    }
+
+    if (req.method === 'POST' && pathname === '/api/me/avatar') {
+      const user = requireUser(req, res, db);
+      if (!user) return;
+      const upload = await parseMultipartRequest(req);
+      const file = upload.files.find(item => item.fieldname === 'avatar');
+      const validationError = validateAvatarImage(file);
+      if (validationError) return badRequest(res, validationError);
+      const uploaded = await storage.uploadAvatarImage(file, { userId: user.id });
+      user.avatar = uploaded.url;
+      user.updatedAt = now();
+      await persistDb(db);
+      return send(res, 201, {
+        avatar: uploaded.url,
+        profile: profileResponse(user),
+        user: safeUser(user),
+        size: file.data.length,
+        mimeType: file.mimeType
+      });
     }
 
     if (req.method === 'PATCH' && pathname === '/api/me/profile') {

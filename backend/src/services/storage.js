@@ -1,9 +1,19 @@
 const crypto = require('crypto');
+const { put, del } = require('@vercel/blob');
 const { getSupabase } = require('../supabase');
 
 const COVER_BUCKET = process.env.SUPABASE_COVER_BUCKET || 'story-covers';
 const PUBLIC_BASE_URL = String(process.env.PUBLIC_STORAGE_BASE_URL || '').replace(/\/+$/, '');
-const STORAGE_PROVIDER = process.env.STORAGE_PROVIDER || (process.env.SUPABASE_URL ? 'supabase' : 'local');
+const STORAGE_PROVIDER = process.env.STORAGE_PROVIDER || (process.env.BLOB_READ_WRITE_TOKEN ? 'vercel-blob' : process.env.SUPABASE_URL ? 'supabase' : 'local');
+const BLOB_TOKEN = process.env.BLOB_READ_WRITE_TOKEN;
+
+if (process.env.NODE_ENV === 'production' && STORAGE_PROVIDER === 'local') {
+  throw new Error('Production storage requires Vercel Blob or Supabase. Set BLOB_READ_WRITE_TOKEN or Supabase storage env vars.');
+}
+
+if (process.env.NODE_ENV === 'production' && STORAGE_PROVIDER === 'vercel-blob' && !BLOB_TOKEN) {
+  throw new Error('BLOB_READ_WRITE_TOKEN must be set when STORAGE_PROVIDER=vercel-blob.');
+}
 
 function extensionForMime(mimeType) {
   if (mimeType === 'image/png') return 'png';
@@ -23,15 +33,33 @@ function storagePathForCover(file, { storyId, userId } = {}) {
   return `covers/${storyPart}/${Date.now()}-${userPart}-${nonce}.${ext}`;
 }
 
-async function uploadCoverImage(file, context = {}) {
-  const path = storagePathForCover(file, context);
+function storagePathForAvatar(file, { userId } = {}) {
+  const userPart = safePathPart(userId || 'anonymous', 'anonymous');
+  const ext = extensionForMime(file.mimeType || file.type);
+  const nonce = crypto.randomBytes(6).toString('hex');
+  return `avatars/${userPart}/${Date.now()}-${nonce}.${ext}`;
+}
+
+async function uploadImage(file, path) {
+  const contentType = file.mimeType || file.type || 'application/octet-stream';
+  const body = file.data || file.buffer;
+
+  if (STORAGE_PROVIDER === 'vercel-blob') {
+    if (!BLOB_TOKEN) throw new Error('BLOB_READ_WRITE_TOKEN is required for Vercel Blob uploads.');
+    const blob = await put(path, body, {
+      access: 'public',
+      contentType,
+      token: BLOB_TOKEN
+    });
+    return { path: blob.pathname || path, url: blob.url };
+  }
 
   if (STORAGE_PROVIDER === 'supabase') {
     const supabase = getSupabase();
     const result = await supabase.storage
       .from(COVER_BUCKET)
-      .upload(path, file.data || file.buffer, {
-        contentType: file.mimeType || file.type || 'application/octet-stream',
+      .upload(path, body, {
+        contentType,
         upsert: false
       });
     if (result.error) throw new Error(result.error.message);
@@ -41,8 +69,22 @@ async function uploadCoverImage(file, context = {}) {
   return { path, url: getPublicUrl(path) };
 }
 
+async function uploadCoverImage(file, context = {}) {
+  return uploadImage(file, storagePathForCover(file, context));
+}
+
+async function uploadAvatarImage(file, context = {}) {
+  return uploadImage(file, storagePathForAvatar(file, context));
+}
+
 async function deleteImage(path) {
-  if (!path || STORAGE_PROVIDER !== 'supabase') return;
+  if (!path) return;
+  if (STORAGE_PROVIDER === 'vercel-blob') {
+    if (!BLOB_TOKEN) throw new Error('BLOB_READ_WRITE_TOKEN is required for Vercel Blob deletes.');
+    await del(path, { token: BLOB_TOKEN });
+    return;
+  }
+  if (STORAGE_PROVIDER !== 'supabase') return;
   const result = await getSupabase().storage.from(COVER_BUCKET).remove([path]);
   if (result.error) throw new Error(result.error.message);
 }
@@ -60,6 +102,7 @@ function getPublicUrl(path) {
 
 module.exports = {
   uploadCoverImage,
+  uploadAvatarImage,
   deleteImage,
   getPublicUrl,
   COVER_BUCKET

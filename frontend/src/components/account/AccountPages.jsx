@@ -655,26 +655,14 @@ const avatarAccept = 'image/png,image/jpeg,image/webp';
 const avatarMaxBytes = 2 * 1024 * 1024;
 
 function isAvatarValue(value) {
-  return Boolean(value) && (/^https?:\/\//i.test(value) || /^data:image\/(png|jpeg|jpg|webp);base64,/i.test(value));
+  return Boolean(value) && /^https?:\/\//i.test(value);
 }
 
-function readAvatarFile(file) {
-  return new Promise((resolve, reject) => {
-    if (!file) return resolve('');
-    if (!avatarFileTypes.has(file.type)) return reject(new Error('File không hợp lệ. Chỉ chấp nhận PNG, JPG hoặc WEBP.'));
-    if (file.size > avatarMaxBytes) return reject(new Error('Ảnh quá lớn. Vui lòng chọn ảnh tối đa 2MB.'));
-    const reader = new FileReader();
-    reader.onload = () => {
-      const value = String(reader.result || '');
-      if (!/^data:image\/(png|jpeg|jpg|webp);base64,/i.test(value)) {
-        reject(new Error('File không hợp lệ. Chỉ chấp nhận PNG, JPG hoặc WEBP.'));
-        return;
-      }
-      resolve(value);
-    };
-    reader.onerror = () => reject(new Error('Không đọc được ảnh. Vui lòng thử ảnh khác.'));
-    reader.readAsDataURL(file);
-  });
+function validateAvatarFile(file) {
+  if (!file) return 'Vui lòng chọn ảnh đại diện.';
+  if (!avatarFileTypes.has(file.type)) return 'File không hợp lệ. Chỉ chấp nhận PNG, JPG hoặc WEBP.';
+  if (file.size > avatarMaxBytes) return 'Ảnh quá lớn. Vui lòng chọn ảnh tối đa 2MB.';
+  return '';
 }
 
 function defaultSettingsProfile(user = {}) {
@@ -849,16 +837,32 @@ export function AccountSettings({ user, updateUser, logout, theme, toggleTheme, 
   }
 
   async function handleAvatarFile(file) {
-    setMessage('avatar', 'warning', 'Đang tải ảnh...');
+    const validationError = validateAvatarFile(file);
+    if (validationError) {
+      setMessage('avatar', 'error', validationError);
+      if (avatarInputRef.current) avatarInputRef.current.value = '';
+      return;
+    }
+    setMessage('avatar', 'warning', 'Đang tải ảnh lên storage...');
     setAvatarReading(true);
+    setSavingAvatar(true);
     try {
-      const avatar = await readAvatarFile(file);
-      patchProfile({ avatar });
-      setMessage('avatar', 'success', 'Ảnh đã sẵn sàng. Bấm lưu để cập nhật ảnh đại diện.');
+      const body = new FormData();
+      body.append('avatar', file);
+      const result = await apiClient('/me/avatar', {
+        method: 'POST',
+        body
+      });
+      const normalizedProfile = normalizeSettingsProfile(result, result.user || user);
+      setProfile(normalizedProfile);
+      setSavedProfile(normalizedProfile);
+      if (result.user) updateUser?.(result.user);
+      setMessage('avatar', 'success', 'Đã tải lên và lưu ảnh đại diện.');
     } catch (err) {
       setMessage('avatar', 'error', err.message || 'Không tải được ảnh.');
     } finally {
       setAvatarReading(false);
+      setSavingAvatar(false);
       if (avatarInputRef.current) avatarInputRef.current.value = '';
     }
   }

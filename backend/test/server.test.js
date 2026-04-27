@@ -189,7 +189,6 @@ test('account profile endpoint validates and persists profile fields', async () 
       gender: 'prefer-not',
       address: 'TP. Hồ Chí Minh',
       website: 'https://daudotruyen.vn',
-      avatar: 'https://example.com/avatar.png',
       cover: 'https://example.com/cover.png',
       bio: 'Hồ sơ test',
       socialLinks: { facebook: 'https://facebook.com/daudo' }
@@ -232,6 +231,42 @@ test('account profile endpoint validates and persists profile fields', async () 
   });
   assert.equal(avatarOnly.response.status, 400);
   assert.match(avatarOnly.data.message, /base64/i);
+
+  const untrustedAvatar = await request('/api/me/profile', {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify({ avatar: 'https://example.com/avatar.png' })
+  });
+  assert.equal(untrustedAvatar.response.status, 400);
+  assert.match(untrustedAvatar.data.message, /storage/i);
+});
+
+test('avatar upload stores only a storage URL on the user profile', async () => {
+  const token = await loginToken('user@example.com');
+  const headers = { Authorization: `Bearer ${token}` };
+
+  const invalidType = new FormData();
+  invalidType.append('avatar', new Blob([Buffer.from('not an image')], { type: 'text/plain' }), 'avatar.txt');
+  const rejected = await request('/api/me/avatar', { method: 'POST', headers, body: invalidType });
+  assert.equal(rejected.response.status, 400);
+
+  const tooLarge = new FormData();
+  tooLarge.append('avatar', new Blob([Buffer.alloc(2 * 1024 * 1024 + 1)], { type: 'image/png' }), 'avatar.png');
+  const rejectedLarge = await request('/api/me/avatar', { method: 'POST', headers, body: tooLarge });
+  assert.equal(rejectedLarge.response.status, 400);
+
+  const body = new FormData();
+  body.append('avatar', new Blob([Buffer.from('png')], { type: 'image/png' }), 'avatar.png');
+  const uploaded = await request('/api/me/avatar', { method: 'POST', headers, body });
+  assert.equal(uploaded.response.status, 201);
+  assert.match(uploaded.data.profile.avatar, /^https?:\/\//);
+  assert.ok(!uploaded.data.profile.avatar.startsWith('data:image/'));
+
+  const db = readTestDb();
+  const user = db.users.find(item => item.id === 'u_user');
+  assert.equal(user.avatar, uploaded.data.profile.avatar);
+  assert.match(user.avatar, /^https?:\/\//);
+  assert.ok(!user.avatar.startsWith('data:image/'));
 });
 
 test('account preferences endpoint whitelists keys and persists values', async () => {
