@@ -1,13 +1,12 @@
 const http = require('http');
-const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const mammoth = require('mammoth');
+const dataStore = require('./db');
 
 const PORT = Number(process.env.PORT || 4000);
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || '*';
-const DB_PATH = path.join(__dirname, '..', 'data', 'db.json');
 const JSON_LIMIT = 4 * 1024 * 1024;
 const UPLOAD_LIMIT = 10 * 1024 * 1024;
 
@@ -19,16 +18,8 @@ function uid(prefix = 'id') {
   return `${prefix}_${crypto.randomBytes(8).toString('hex')}`;
 }
 
-function readDb() {
-  if (!fs.existsSync(DB_PATH)) {
-    fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
-    fs.writeFileSync(DB_PATH, JSON.stringify(createSeedDb(), null, 2));
-  }
-  return ensureDbShape(JSON.parse(fs.readFileSync(DB_PATH, 'utf8')));
-}
-
-function writeDb(db) {
-  fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2));
+async function persistDb(db) {
+  await dataStore.saveDb(ensureDbShape(db));
 }
 
 function base64url(input) {
@@ -1546,14 +1537,30 @@ async function handle(req, res) {
 
   const url = new URL(req.url, `http://${req.headers.host}`);
   const pathname = url.pathname;
-  const db = readDb();
-  const viewer = getAuthUser(req, db);
 
   try {
     if (req.method === 'GET' && pathname === '/api/health') {
       return send(res, 200, { ok: true, app: 'Đậu Đỏ Truyện API', time: now() });
     }
 
+    if (req.method === 'GET' && pathname === '/api/health-db') {
+      try {
+        return send(res, 200, await dataStore.health());
+      } catch (error) {
+        return send(res, 500, {
+          ok: false,
+          message: error.message
+        });
+      }
+    }
+
+    return await dataStore.withLock(async () => {
+    const db = ensureDbShape(await dataStore.loadDb());
+    const viewer = getAuthUser(req, db);
+
+    if (req.method === 'GET' && pathname === '/api/supabase/stories') {
+      return send(res, 200, db.stories.slice().sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0)));
+    }
     if (req.method === 'POST' && pathname === '/api/auth/login') {
       const body = await parseBody(req);
       const email = String(body.email || '').trim().toLowerCase();
@@ -1601,7 +1608,7 @@ async function handle(req, res) {
         body: 'Bạn đã nhận 30 Đậu thưởng đăng ký để bắt đầu đọc truyện trả phí.',
         link: '/wallet'
       });
-      writeDb(db);
+      await persistDb(db);
       return send(res, 201, { token: createToken(user), user: safeUser(user) });
     }
 
@@ -1624,7 +1631,7 @@ async function handle(req, res) {
       const result = validateProfilePayload(body, user, db);
       if (result.error) return badRequest(res, result.error);
       Object.assign(user, result.value, { updatedAt: now() });
-      writeDb(db);
+      await persistDb(db);
       return send(res, 200, { profile: profileResponse(user), user: safeUser(user) });
     }
 
@@ -1633,7 +1640,7 @@ async function handle(req, res) {
       if (!user) return;
       user.notificationPreferences = normalizeNotificationPreferences(user.notificationPreferences || user.preferences);
       user.preferences = normalizeAccountPreferences(user.preferences, user.notificationPreferences);
-      writeDb(db);
+      await persistDb(db);
       return send(res, 200, { preferences: user.preferences, user: safeUser(user) });
     }
 
@@ -1644,7 +1651,7 @@ async function handle(req, res) {
       user.notificationPreferences = normalizeNotificationPreferences(user.notificationPreferences || user.preferences);
       const result = applyPreferencePatch(user, body);
       if (result.error) return badRequest(res, result.error);
-      writeDb(db);
+      await persistDb(db);
       return send(res, 200, { preferences: result.preferences, user: safeUser(user) });
     }
 
@@ -1671,7 +1678,7 @@ async function handle(req, res) {
         body: 'Mật khẩu tài khoản của bạn vừa được cập nhật.',
         link: '/settings#security'
       });
-      writeDb(db);
+      await persistDb(db);
       return send(res, 200, { ok: true, message: 'Đã đổi mật khẩu.' });
     }
 
@@ -1681,7 +1688,7 @@ async function handle(req, res) {
       user.tokenVersion = Number(user.tokenVersion || 0) + 1;
       user.sessionsRevokedAt = now();
       user.updatedAt = now();
-      writeDb(db);
+      await persistDb(db);
       return send(res, 200, { ok: true, message: 'Đã đăng xuất khỏi các thiết bị khác.' });
     }
 
@@ -1696,7 +1703,7 @@ async function handle(req, res) {
       user.deactivatedAt = now();
       user.tokenVersion = Number(user.tokenVersion || 0) + 1;
       user.updatedAt = now();
-      writeDb(db);
+      await persistDb(db);
       return send(res, 200, { ok: true, message: 'Tài khoản đã được vô hiệu hóa.' });
     }
 
@@ -1705,7 +1712,7 @@ async function handle(req, res) {
       if (!user) return;
       user.notificationPreferences = normalizeNotificationPreferences(user.notificationPreferences);
       user.preferences = normalizeAccountPreferences(user.preferences, user.notificationPreferences);
-      writeDb(db);
+      await persistDb(db);
       return send(res, 200, { preferences: user.notificationPreferences });
     }
 
@@ -1720,7 +1727,7 @@ async function handle(req, res) {
         user.notificationPreferences[key] = Boolean(value);
       });
       user.preferences = normalizeAccountPreferences({ ...user.preferences, ...user.notificationPreferences, updatedAt: now() }, user.notificationPreferences);
-      writeDb(db);
+      await persistDb(db);
       return send(res, 200, { preferences: user.notificationPreferences, user: safeUser(user) });
     }
 
@@ -1739,7 +1746,7 @@ async function handle(req, res) {
         existing.active = true;
         existing.updatedAt = now();
         existing.source = String(body.source || existing.source || 'footer').slice(0, 80);
-        writeDb(db);
+        await persistDb(db);
         return send(res, 200, { ok: true, subscribed: true, message: 'Email này đã có trong danh sách nhận thông báo.' });
       }
 
@@ -1752,7 +1759,7 @@ async function handle(req, res) {
         updatedAt: now()
       };
       db.newsletters.unshift(subscription);
-      writeDb(db);
+      await persistDb(db);
       return send(res, 201, { ok: true, subscribed: true, message: 'Đăng ký nhận thông báo thành công.' });
     }
 
@@ -1796,7 +1803,7 @@ async function handle(req, res) {
       if (!isPublicStory(story) && (!viewer || viewer.role !== 'admin')) return notFound(res);
       story.views += 1;
       db.viewEvents.push({ id: uid('view'), storyId: story.id, userId: viewer?.id || null, createdAt: now() });
-      writeDb(db);
+      await persistDb(db);
       const enriched = enrichStory(db, story, viewer && viewer.id, viewer?.role === 'admin');
       const chapters = db.chapters
         .filter(chapter => chapter.storyId === story.id)
@@ -1829,7 +1836,7 @@ async function handle(req, res) {
           db.history.push({ id: uid('his'), userId: viewer.id, storyId: story.id, chapterId: chapter.id, chapterNumber: chapter.number, updatedAt: now() });
         }
       }
-      writeDb(db);
+      await persistDb(db);
       return send(res, 200, { story: enrichStory(db, story, viewer && viewer.id, viewer?.role === 'admin'), chapter: payloadChapter, unlocked });
     }
 
@@ -1843,7 +1850,7 @@ async function handle(req, res) {
       const bookmarked = index === -1;
       if (bookmarked) db.bookmarks.push({ id: uid('bm'), userId: user.id, storyId: story.id, createdAt: now() });
       else db.bookmarks.splice(index, 1);
-      writeDb(db);
+      await persistDb(db);
       return send(res, 200, { bookmarked });
     }
 
@@ -1873,7 +1880,7 @@ async function handle(req, res) {
         db.follows.splice(index, 1);
         story.follows = Math.max(0, story.follows - 1);
       }
-      writeDb(db);
+      await persistDb(db);
       return send(res, 200, { followed, follows: story.follows });
     }
 
@@ -1923,7 +1930,7 @@ async function handle(req, res) {
           chapterId: comment.chapterId
         });
       });
-      writeDb(db);
+      await persistDb(db);
       return send(res, 201, { comment: publicComment(db, comment) });
     }
 
@@ -1947,7 +1954,7 @@ async function handle(req, res) {
       const ratings = db.ratings.filter(item => item.storyId === story.id);
       story.rating = Number((ratings.reduce((sum, item) => sum + item.value, 0) / ratings.length).toFixed(1));
       story.updatedAt = now();
-      writeDb(db);
+      await persistDb(db);
       return send(res, 200, { rating: story.rating, ratingCount: ratings.length, myRating: value });
     }
 
@@ -1962,7 +1969,7 @@ async function handle(req, res) {
       if (reason.length < 4) return badRequest(res, 'Vui lòng nhập lý do báo cáo.');
       const report = { id: uid('rep'), storyId: story.id, userId: user.id, reason: reason.slice(0, 500), status: 'open', createdAt: now() };
       db.reports.push(report);
-      writeDb(db);
+      await persistDb(db);
       return send(res, 201, { report });
     }
 
@@ -1981,6 +1988,21 @@ async function handle(req, res) {
       const price = Math.max(1, Math.max(49, (story.price || 1) * publicChapters.length));
       if (premiumChapters.length === 0) return send(res, 200, { unlocked: true, user: safeUser(user), price: 0 });
       if (user.seeds < price) return badRequest(res, 'Số dư Đậu không đủ để mua combo.');
+      if (dataStore.storeName() === 'supabase') {
+        try {
+          const unlocked = await dataStore.unlockCombo({
+            userId: user.id,
+            storyId: story.id,
+            purchaseId: uid('pur'),
+            transactionId: uid('txn'),
+            notificationId: uid('noti')
+          });
+          const comboPrice = Number(unlocked.result?.price || price);
+          return send(res, 200, { unlocked: true, user: safeUser(unlocked.user), price: comboPrice });
+        } catch (error) {
+          return badRequest(res, error.message);
+        }
+      }
       user.seeds -= price;
       db.purchases.push({ id: uid('pur'), userId: user.id, storyId: story.id, chapterId: null, combo: true, price, createdAt: now() });
       db.transactions.push({ id: uid('txn'), userId: user.id, storyId: story.id, chapterId: null, price, type: 'purchase', amount: -price, note: `Mua combo ${story.title}`, createdAt: now() });
@@ -1991,7 +2013,7 @@ async function handle(req, res) {
         link: storyLink(story),
         storyId: story.id
       });
-      writeDb(db);
+      await persistDb(db);
       return send(res, 200, { unlocked: true, user: safeUser(user), price });
     }
 
@@ -2067,7 +2089,7 @@ async function handle(req, res) {
       const notification = db.notifications.find(item => item.id === notificationReadParams.id && item.userId === user.id);
       if (!notification) return notFound(res);
       notification.read = true;
-      writeDb(db);
+      await persistDb(db);
       return send(res, 200, { notification: notificationResponse(notification), unreadCount: countUnreadNotifications(db, user.id) });
     }
 
@@ -2077,7 +2099,7 @@ async function handle(req, res) {
       db.notifications.forEach(item => {
         if (item.userId === user.id) item.read = true;
       });
-      writeDb(db);
+      await persistDb(db);
       return send(res, 200, { ok: true, unreadCount: 0 });
     }
 
@@ -2088,7 +2110,7 @@ async function handle(req, res) {
       const index = db.notifications.findIndex(item => item.id === notificationParams.id && item.userId === user.id);
       if (index === -1) return notFound(res);
       db.notifications.splice(index, 1);
-      writeDb(db);
+      await persistDb(db);
       return send(res, 200, { ok: true, unreadCount: countUnreadNotifications(db, user.id) });
     }
 
@@ -2113,6 +2135,23 @@ async function handle(req, res) {
       };
       const seeds = packs[body.packageId];
       if (!seeds) return badRequest(res, 'Gói nạp không hợp lệ.');
+      if (dataStore.storeName() === 'supabase') {
+        const note = `Nap ${seeds} Dau`;
+        try {
+          const updatedUser = await dataStore.topupWallet({
+            userId: user.id,
+            amount: seeds,
+            transactionId: uid('txn'),
+            note,
+            notificationId: uid('noti'),
+            notificationTitle: 'Nap Dau thanh cong',
+            notificationMessage: `Tai khoan cua ban vua duoc cong ${seeds} Dau.`
+          });
+          return send(res, 200, { user: safeUser(updatedUser), balance: updatedUser.seeds });
+        } catch (error) {
+          return badRequest(res, error.message);
+        }
+      }
       user.seeds += seeds;
       db.transactions.push({ id: uid('txn'), userId: user.id, type: 'topup', amount: seeds, note: `Nạp ${seeds} Đậu`, createdAt: now() });
       createNotification(db, user.id, {
@@ -2121,7 +2160,7 @@ async function handle(req, res) {
         body: `Tài khoản của bạn vừa được cộng ${seeds} Đậu.`,
         link: '/wallet'
       });
-      writeDb(db);
+      await persistDb(db);
       return send(res, 200, { user: safeUser(user), balance: user.seeds });
     }
 
@@ -2136,6 +2175,20 @@ async function handle(req, res) {
         return send(res, 200, { unlocked: true, user: safeUser(user) });
       }
       if (user.seeds < chapter.price) return badRequest(res, 'Số dư Đậu không đủ. Vui lòng nạp thêm.');
+      if (dataStore.storeName() === 'supabase') {
+        try {
+          const unlocked = await dataStore.unlockChapter({
+            userId: user.id,
+            chapterId: chapter.id,
+            purchaseId: uid('pur'),
+            transactionId: uid('txn'),
+            notificationId: uid('noti')
+          });
+          return send(res, 200, { unlocked: true, user: safeUser(unlocked.user) });
+        } catch (error) {
+          return badRequest(res, error.message);
+        }
+      }
       user.seeds -= chapter.price;
       db.purchases.push({ id: uid('pur'), userId: user.id, storyId: chapter.storyId, chapterId: chapter.id, price: chapter.price, createdAt: now() });
       db.transactions.push({ id: uid('txn'), userId: user.id, storyId: chapter.storyId, chapterId: chapter.id, price: chapter.price, type: 'purchase', amount: -chapter.price, note: `Mở khóa ${chapter.title}`, createdAt: now() });
@@ -2148,7 +2201,7 @@ async function handle(req, res) {
         storyId: chapter.storyId,
         chapterId: chapter.id
       });
-      writeDb(db);
+      await persistDb(db);
       return send(res, 200, { unlocked: true, user: safeUser(user) });
     }
 
@@ -2234,7 +2287,7 @@ async function handle(req, res) {
         user.role = 'author';
         user.updatedAt = timestamp;
       }
-      writeDb(db);
+      await persistDb(db);
       return send(res, 201, { story: authorStorySummary(db, story, user.id), user: safeUser(user) });
     }
 
@@ -2294,7 +2347,7 @@ async function handle(req, res) {
         story.hidden = true;
       }
       if (approvalStatus === 'pending') story.rejectionReason = '';
-      writeDb(db);
+      await persistDb(db);
       return send(res, 200, { story: authorStorySummary(db, story, user.id), user: safeUser(user) });
     }
 
@@ -2315,7 +2368,7 @@ async function handle(req, res) {
       db.reports = db.reports.filter(item => item.storyId !== story.id);
       db.purchases = db.purchases.filter(item => item.storyId !== story.id);
       db.promotions = db.promotions.filter(item => item.storyId !== story.id);
-      writeDb(db);
+      await persistDb(db);
       return send(res, 200, { ok: true });
     }
 
@@ -2447,7 +2500,7 @@ async function handle(req, res) {
       db.chapters.push(...createdChapters);
       refreshStoryChapterMetadata(db, story);
       createdChapters.forEach(chapter => notifyChapterPublished(db, story, chapter, user.id));
-      writeDb(db);
+      await persistDb(db);
       return send(res, 201, {
         created: createdChapters.length,
         skipped,
@@ -2497,7 +2550,7 @@ async function handle(req, res) {
       db.chapters.push(chapter);
       refreshStoryChapterMetadata(db, story);
       notifyChapterPublished(db, story, chapter, user.id);
-      writeDb(db);
+      await persistDb(db);
       return send(res, 201, { chapter: authorChapterSummary(db, chapter), story: authorStorySummary(db, story, user.id) });
     }
 
@@ -2547,7 +2600,7 @@ async function handle(req, res) {
         refreshStoryChapterMetadata(db, oldStory);
       }
       if (!wasPublic) notifyChapterPublished(db, targetStory, chapter, user.id);
-      writeDb(db);
+      await persistDb(db);
       return send(res, 200, { chapter: authorChapterSummary(db, chapter), story: authorStorySummary(db, targetStory, user.id) });
     }
 
@@ -2564,7 +2617,7 @@ async function handle(req, res) {
       db.comments = db.comments.filter(item => item.chapterId !== chapter.id);
       const story = db.stories.find(item => item.id === chapter.storyId);
       refreshStoryChapterMetadata(db, story);
-      writeDb(db);
+      await persistDb(db);
       return send(res, 200, { ok: true });
     }
 
@@ -2630,7 +2683,7 @@ async function handle(req, res) {
         link: '/author/promotions',
         storyId: story.id
       });
-      writeDb(db);
+      await persistDb(db);
       return send(res, 201, { promotion: promotionResponse(db, promotion), balance: user.seeds, user: safeUser(user) });
     }
 
@@ -2682,7 +2735,7 @@ async function handle(req, res) {
         ? (after.status === 'locked' ? 'lock_user' : 'unlock_user')
         : before.role !== after.role ? 'change_role' : 'update_user';
       logAdminAction(db, admin, action, 'user', target.id, before, after, body.note || '');
-      writeDb(db);
+      await persistDb(db);
       return send(res, 200, { user: after });
     }
 
@@ -2719,7 +2772,7 @@ async function handle(req, res) {
       });
       const after = adminUserSummary(db, target);
       logAdminAction(db, admin, 'adjust_balance', 'user', target.id, before, after, transaction.note);
-      writeDb(db);
+      await persistDb(db);
       return send(res, 200, { user: after, transaction: adminTransactionSummary(db, transaction) });
     }
 
@@ -2817,7 +2870,7 @@ async function handle(req, res) {
       report.updatedAt = now();
       const after = adminReportSummary(db, report);
       logAdminAction(db, admin, 'resolve_report', 'report', report.id, before, after, note);
-      writeDb(db);
+      await persistDb(db);
       return send(res, 200, { report: after });
     }
 
@@ -2839,7 +2892,7 @@ async function handle(req, res) {
       report.updatedAt = now();
       const after = adminReportSummary(db, report);
       logAdminAction(db, admin, 'update_report', 'report', report.id, before, after, report.adminNote || '');
-      writeDb(db);
+      await persistDb(db);
       return send(res, 200, { report: after });
     }
 
@@ -2872,7 +2925,7 @@ async function handle(req, res) {
       comment.updatedAt = now();
       const after = adminCommentSummary(db, comment);
       logAdminAction(db, admin, 'update_comment', 'comment', comment.id, before, after, comment.adminNote || '');
-      writeDb(db);
+      await persistDb(db);
       return send(res, 200, { comment: after });
     }
 
@@ -2883,7 +2936,7 @@ async function handle(req, res) {
       if (index === -1) return notFound(res);
       const [comment] = db.comments.splice(index, 1);
       logAdminAction(db, admin, 'delete_comment', 'comment', comment.id, adminCommentSummary(db, comment), null, '');
-      writeDb(db);
+      await persistDb(db);
       return send(res, 200, { ok: true });
     }
 
@@ -2907,7 +2960,7 @@ async function handle(req, res) {
       list.push(item);
       list.sort((a, b) => a.name.localeCompare(b.name, 'vi'));
       logAdminAction(db, admin, 'update_taxonomy', adminTaxonomyPostParams.kind.slice(0, -1), item.id, null, item, 'create');
-      writeDb(db);
+      await persistDb(db);
       return send(res, 201, { item, taxonomy: taxonomyResponse(db) });
     }
 
@@ -2928,7 +2981,7 @@ async function handle(req, res) {
         const before = cloneForLog(item);
         taxonomy[adminTaxonomyItemParams.kind] = list.filter(row => row.id !== item.id);
         logAdminAction(db, admin, 'update_taxonomy', type, item.id, before, null, 'delete');
-        writeDb(db);
+        await persistDb(db);
         return send(res, 200, { ok: true, taxonomy: taxonomyResponse(db) });
       }
 
@@ -2948,7 +3001,7 @@ async function handle(req, res) {
       if (body.color !== undefined) item.color = String(body.color || '').slice(0, 40);
       item.updatedAt = now();
       logAdminAction(db, admin, 'update_taxonomy', type, item.id, before, item, 'update');
-      writeDb(db);
+      await persistDb(db);
       return send(res, 200, { item, taxonomy: taxonomyResponse(db) });
     }
 
@@ -3006,7 +3059,7 @@ async function handle(req, res) {
         actorId: admin.id
       }));
       logAdminAction(db, admin, 'send_notification', 'notification', campaign.id, null, campaign, title);
-      writeDb(db);
+      await persistDb(db);
       return send(res, 201, { notification: campaign });
     }
 
@@ -3023,7 +3076,7 @@ async function handle(req, res) {
       });
       campaign.updatedAt = now();
       logAdminAction(db, admin, 'update_notification', 'notification', campaign.id, before, campaign, campaign.title);
-      writeDb(db);
+      await persistDb(db);
       return send(res, 200, { notification: campaign });
     }
 
@@ -3112,7 +3165,7 @@ async function handle(req, res) {
       db.stories.unshift(story);
       ensureTaxonomy(db);
       logAdminAction(db, admin, 'create_story', 'story', story.id, null, story, '');
-      writeDb(db);
+      await persistDb(db);
       return send(res, 201, { story: adminStorySummary(db, story, admin.id) });
     }
 
@@ -3143,7 +3196,7 @@ async function handle(req, res) {
       const after = adminStorySummary(db, story, admin.id);
       const action = story.approvalStatus === 'rejected' ? 'reject_story' : story.hidden ? 'hide_story' : story.approvalStatus === 'approved' ? 'approve_story' : 'update_story_status';
       logAdminAction(db, admin, action, 'story', story.id, before, after, story.rejectionReason || '');
-      writeDb(db);
+      await persistDb(db);
       return send(res, 200, { story: after });
     }
 
@@ -3161,7 +3214,7 @@ async function handle(req, res) {
       story.updatedAt = now();
       const after = adminStorySummary(db, story, admin.id);
       logAdminAction(db, admin, 'update_story_flags', 'story', story.id, before, after, '');
-      writeDb(db);
+      await persistDb(db);
       return send(res, 200, { story: after });
     }
 
@@ -3211,7 +3264,7 @@ async function handle(req, res) {
       ensureTaxonomy(db);
       const after = adminStorySummary(db, story, admin.id);
       logAdminAction(db, admin, 'update_story', 'story', story.id, before, after, '');
-      writeDb(db);
+      await persistDb(db);
       return send(res, 200, { story: after });
     }
 
@@ -3231,7 +3284,7 @@ async function handle(req, res) {
       db.purchases = db.purchases.filter(item => item.storyId !== adminStoryParams.id);
       db.promotions = db.promotions.filter(item => item.storyId !== adminStoryParams.id);
       logAdminAction(db, admin, 'delete_story', 'story', story.id, story, null, '');
-      writeDb(db);
+      await persistDb(db);
       return send(res, 200, { ok: true });
     }
 
@@ -3286,7 +3339,7 @@ async function handle(req, res) {
       refreshStoryChapterMetadata(db, story);
       notifyChapterPublished(db, story, chapter, admin.id);
       logAdminAction(db, admin, 'create_chapter', 'chapter', chapter.id, null, chapterAdminSummary(db, chapter), '');
-      writeDb(db);
+      await persistDb(db);
       return send(res, 201, { chapter: chapterAdminSummary(db, chapter) });
     }
 
@@ -3324,7 +3377,7 @@ async function handle(req, res) {
       const after = chapterAdminSummary(db, chapter);
       const action = body.status === 'rejected' ? 'reject_chapter' : body.status === 'hidden' ? 'hide_chapter' : ['approved', 'published'].includes(body.status) ? 'approve_chapter' : 'update_chapter_status';
       logAdminAction(db, admin, action, 'chapter', chapter.id, before, after, chapter.rejectionReason || '');
-      writeDb(db);
+      await persistDb(db);
       return send(res, 200, { chapter: after });
     }
 
@@ -3367,7 +3420,7 @@ async function handle(req, res) {
       if (!wasPublic && story) notifyChapterPublished(db, story, chapter, admin.id);
       const after = chapterAdminSummary(db, chapter);
       logAdminAction(db, admin, 'update_chapter', 'chapter', chapter.id, before, after, '');
-      writeDb(db);
+      await persistDb(db);
       return send(res, 200, { chapter: after });
     }
 
@@ -3382,11 +3435,12 @@ async function handle(req, res) {
       const story = db.stories.find(item => item.id === chapter.storyId);
       if (story) refreshStoryChapterMetadata(db, story);
       logAdminAction(db, admin, 'delete_chapter', 'chapter', chapter.id, chapter, null, '');
-      writeDb(db);
+      await persistDb(db);
       return send(res, 200, { ok: true });
     }
 
     return notFound(res);
+    });
   } catch (error) {
     console.error(error);
     return send(res, 500, { message: error.message || 'Lỗi máy chủ.' });
@@ -3537,15 +3591,17 @@ function createSeedDb() {
   };
 }
 
-if (!fs.existsSync(DB_PATH)) {
-  fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
-  fs.writeFileSync(DB_PATH, JSON.stringify(createSeedDb(), null, 2));
-}
-
 if (require.main === module) {
   http.createServer(handle).listen(PORT, () => {
     console.log(`Dau Do Truyen API running at http://localhost:${PORT}`);
   });
 }
 
-module.exports = { createSeedDb, hashPassword, slugify, handle };
+module.exports = {
+  createSeedDb,
+  hashPassword,
+  slugify,
+  handle,
+  resetDataStore: dataStore.reset,
+  getDataStoreSnapshot: dataStore.snapshot
+};

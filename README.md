@@ -5,7 +5,7 @@ This project is a reconstructed full-stack reading app based on the exported `we
 ## Stack
 
 - Frontend: React + Vite + React Router + plain CSS
-- Backend: Node.js HTTP server with JSON persistence
+- Backend: Node.js HTTP server with Supabase persistence
 - Auth: local HMAC token for development
 - Features: story browsing, story detail, paid chapters via xu, bookmarks, follows, reading history, wallet, AI tools, admin dashboard
 
@@ -13,14 +13,18 @@ This project is a reconstructed full-stack reading app based on the exported `we
 
 ```text
 daudo-truyen/
-├── backend/
-│   ├── src/server.js
-│   ├── src/reset-db.js
-│   └── data/db.json
-├── frontend/
-│   ├── public/images/
-│   └── src/main.jsx
-└── README.md
+|-- backend/
+|   |-- src/server.js
+|   |-- src/supabase.js
+|   |-- src/repositories/
+|   |-- src/migrate-json-to-supabase.js
+|   |-- src/reset-db.js
+|   `-- data/db.json   # local seed/migration source only
+|-- frontend/
+|   |-- public/images/
+|   `-- src/main.jsx
+|-- supabase/schema.sql
+`-- README.md
 ```
 
 ## Run backend
@@ -30,6 +34,17 @@ cd backend
 npm install
 npm run dev
 ```
+
+Create `backend/.env` from `backend/.env.example` before running against Supabase:
+
+```text
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=<service-role-key>
+JWT_SECRET=<long-random-secret>
+FRONTEND_ORIGIN=http://localhost:5173,https://daudotruyen.vercel.app,https://daudo-truyen.vercel.app
+```
+
+`SUPABASE_SERVICE_ROLE_KEY` is server-only. Never expose it through Vite or frontend env files.
 
 Default backend URL:
 
@@ -72,6 +87,22 @@ User:  user@example.com / 123456
 cd backend
 npm run reset-db
 ```
+
+`reset-db` only rewrites `backend/data/db.json` for local seed/migration work. Runtime APIs do not read from `db.json`.
+
+## Supabase setup and migration
+
+1. Create a Supabase project.
+2. Open Supabase SQL Editor and run `supabase/schema.sql`.
+3. Set backend env vars: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `JWT_SECRET`, and `FRONTEND_ORIGIN`.
+4. Import existing JSON data:
+
+```bash
+cd backend
+npm run migrate:supabase
+```
+
+The migration reads `backend/data/db.json` when present, upserts rows idempotently, and seeds the bundled admin/user data when the JSON file is absent.
 
 ## Main API
 
@@ -126,9 +157,18 @@ All `/api/admin/*` routes require an authenticated admin token. The Admin CMS at
 - `PATCH /api/admin/notifications/:id`
 - `GET /api/admin/logs?entityType=&entityId=&adminId=&page=&limit=`
 
+## Tests
+
+```bash
+cd backend
+npm test
+```
+
+Backend tests use the in-memory repository (`DATA_STORE=memory`) and do not read or write the production Supabase database or `backend/data/db.json`.
+
 ## Production notes
 
-This repo is ready for local development and demo flows. The JSON database in `backend/data/db.json` is only for demo/prototyping; for production with real users, replace it with a real database, use a standard session/JWT setup, keep `JWT_SECRET` in environment variables, restrict CORS to the deployed frontend origin, add stronger request validation, and connect real payment flows before exposing wallet actions.
+Production runtime requires Supabase env vars and does not fall back to `backend/data/db.json`. The backend keeps local HMAC JWT/password handling, so rotate `JWT_SECRET` carefully, restrict `FRONTEND_ORIGIN` to deployed domains, and keep the service role key only on the backend host.
 
 ## Deploy online
 
@@ -147,6 +187,8 @@ Set these environment variables on the backend host:
 ```text
 JWT_SECRET=<long-random-secret>
 FRONTEND_ORIGIN=https://daudotruyen.vercel.app,https://daudo-truyen.vercel.app
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=<service-role-key>
 ```
 
 `backend/src/server.js` already accepts a comma-separated `FRONTEND_ORIGIN`, so you can allow both the current public Vercel domain and the legacy hyphenated domain during cutover.
@@ -171,4 +213,4 @@ Change that value to the real backend domain before building if the backend is d
 
 The frontend uses React Router with `BrowserRouter`. `frontend/vercel.json` rewrites all routes to `index.html` so direct refreshes on routes such as `/admin`, `/ho-so`, and `/truyen/...` do not return 404 on Vercel.
 
-The current backend stores data in `backend/data/db.json`. For a public launch, use hosting with persistent disk if you keep JSON storage. For production with real users, move the data to PostgreSQL, Supabase, Neon, or another real database.
+The current backend stores runtime data in Supabase. Keep `backend/data/db.json` only as a local export/seed source for `npm run migrate:supabase` or `npm run reset-db`.

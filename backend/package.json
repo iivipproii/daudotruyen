@@ -1,12 +1,13 @@
 {
   "name": "daudo-truyen-backend",
   "version": "1.0.0",
-  "description": "Backend API for Dau Do Truyen - pure Node.js with JSON persistence",
+  "description": "Backend API for Dau Do Truyen with Supabase persistence",
   "main": "src/server.js",
   "scripts": {
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
     "reset-db": "node src/reset-db.js",
+    "migrate:supabase": "node src/migrate-json-to-supabase.js",
     "test": "node --test"
   },
   "keywords": [
@@ -17,6 +18,8 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@supabase/supabase-js": "^2.105.0",
+    "dotenv": "^17.4.2",
     "mammoth": "^1.12.0"
   }
 }

@@ -1,12 +1,16 @@
 const assert = require('assert');
-const fs = require('fs');
 const http = require('http');
-const path = require('path');
 const test = require('node:test');
-const { createSeedDb, handle } = require('../src/server');
 
-const DB_PATH = path.join(__dirname, '..', 'data', 'db.json');
-const BACKUP_PATH = path.join(__dirname, '..', 'data', 'db.test.backup.json');
+process.env.DATA_STORE = 'memory';
+process.env.NODE_ENV = 'test';
+
+const {
+  createSeedDb,
+  handle,
+  resetDataStore,
+  getDataStoreSnapshot
+} = require('../src/server');
 
 let server;
 let baseUrl;
@@ -44,11 +48,11 @@ async function registerUser(email, name = 'Author Test User') {
 }
 
 function readTestDb() {
-  return JSON.parse(fs.readFileSync(DB_PATH, 'utf8'));
+  return getDataStoreSnapshot();
 }
 
 function writeTestDb(db) {
-  fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2));
+  resetDataStore(db);
 }
 
 function daysAgo(days, extraHours = 0) {
@@ -62,8 +66,7 @@ function addViewEvents(db, storyId, count, createdAt) {
 }
 
 test.before(async () => {
-  fs.copyFileSync(DB_PATH, BACKUP_PATH);
-  fs.writeFileSync(DB_PATH, JSON.stringify(createSeedDb(), null, 2));
+  resetDataStore(createSeedDb());
   server = http.createServer(handle);
   await new Promise(resolve => server.listen(0, resolve));
   const { port } = server.address();
@@ -72,8 +75,7 @@ test.before(async () => {
 
 test.after(async () => {
   await new Promise(resolve => server.close(resolve));
-  fs.copyFileSync(BACKUP_PATH, DB_PATH);
-  fs.unlinkSync(BACKUP_PATH);
+  resetDataStore({});
 });
 
 test('health endpoint works', async () => {
@@ -119,7 +121,7 @@ test('newsletter validates and stores subscriber email', async () => {
   });
   assert.equal(duplicate.response.status, 200);
 
-  const db = JSON.parse(fs.readFileSync(DB_PATH, 'utf8'));
+  const db = readTestDb();
   assert.equal(db.newsletters.filter(item => item.email === 'reader-news@example.com').length, 1);
 });
 
