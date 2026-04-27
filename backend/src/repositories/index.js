@@ -97,6 +97,7 @@ const TABLES = {
       ownerId: 'owner_id',
       description: 'description',
       cover: 'cover',
+      coverPath: 'cover_path',
       status: 'status',
       approvalStatus: 'approval_status',
       hidden: 'hidden',

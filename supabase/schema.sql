@@ -53,7 +53,7 @@ create table if not exists public.stories (
   author text,
   owner_id text references public.users(id) on delete set null,
   description text,
-  cover_url text,
+  cover text,
   cover_path text,
   status text,
   approval_status text not null default 'draft' check (approval_status in ('draft', 'pending', 'approved', 'rejected')),
