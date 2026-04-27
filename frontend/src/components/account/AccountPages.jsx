@@ -98,6 +98,13 @@ function emailValid(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
+const usernamePattern = /^[a-z0-9._]{3,30}$/;
+
+function gmailValid(email) {
+  const value = String(email || '').trim().toLowerCase();
+  return emailValid(value) && value.endsWith('@gmail.com');
+}
+
 function mockLibraryData() {
   const stories = mockStories.map(normalizeStory);
   return {
@@ -147,36 +154,49 @@ function chapterBookmarksFrom(library) {
 
 export function LoginPage({ login }) {
   const navigate = useNavigate();
-  const [form, setForm] = useState({ email: 'user@example.com', password: '123456' });
-  const [error, setError] = useState('');
+  const [form, setForm] = useState({ identifier: '', password: '' });
+  const [message, setMessage] = useState(null);
   const [loading, setLoading] = useState(false);
 
   async function submit(event) {
     event.preventDefault();
-    setError('');
-    if (!emailValid(form.email)) return setError('Email không hợp lệ.');
-    if (form.password.length < 6) return setError('Mật khẩu tối thiểu 6 ký tự.');
+    setMessage(null);
+    const identifier = form.identifier.trim().toLowerCase();
+    if (!identifier) return setMessage({ type: 'error', text: 'Vui lòng nhập tên đăng nhập hoặc Gmail.' });
+    if (form.password.length < 6) return setMessage({ type: 'error', text: 'Mật khẩu tối thiểu 6 ký tự.' });
     setLoading(true);
     try {
-      const user = await login(form.email, form.password);
+      const user = await login(identifier, form.password);
       navigate(user.role === 'admin' ? '/admin' : '/account');
     } catch (err) {
-      setError(err.message);
+      setMessage({ type: 'error', text: err.message });
     } finally {
       setLoading(false);
     }
   }
 
+  function socialMessage() {
+    setMessage({ type: 'warning', text: 'Tính năng đăng nhập bằng Google/Facebook/Zalo đang được cấu hình.' });
+  }
+
   return (
     <AuthShell mode="login">
       <div className="acct-auth-card">
-      <AuthHeader title="Đăng nhập" subtitle="Tiếp tục đọc truyện, đồng bộ lịch sử và quản lý Đậu của bạn." />
+        <AuthHeader title="Đăng nhập" subtitle="Tiếp tục đọc truyện, đồng bộ lịch sử và quản lý Đậu của bạn." />
         <form className="acct-auth-form" onSubmit={submit}>
-          <label>Email<input value={form.email} onChange={event => setForm({ ...form, email: event.target.value })} placeholder="you@example.com" /></label>
-          <label>Mật khẩu<span><Link to="/forgot-password">Quên mật khẩu?</Link></span><input type="password" value={form.password} onChange={event => setForm({ ...form, password: event.target.value })} placeholder="Nhập mật khẩu" /></label>
-          {error && <div className="acct-error">{error}</div>}
+          <label>Tên đăng nhập hoặc Gmail<input name="identifier" value={form.identifier} onChange={event => setForm({ ...form, identifier: event.target.value })} placeholder="ten-dang-nhap hoặc tenban@gmail.com" autoComplete="username" /></label>
+          <label>Mật khẩu<span><Link to="/forgot-password">Quên mật khẩu?</Link></span><input name="password" type="password" value={form.password} onChange={event => setForm({ ...form, password: event.target.value })} placeholder="Nhập mật khẩu" autoComplete="current-password" /></label>
+          <AuthMessage message={message} />
           <button type="submit" disabled={loading}>{loading ? 'Đang đăng nhập...' : 'Đăng nhập'}</button>
         </form>
+        <div className="acct-auth-social" aria-label="Đăng nhập bằng cách khác">
+          <span>Đăng nhập bằng cách khác</span>
+          <div>
+            <button type="button" onClick={socialMessage}>Google/Gmail</button>
+            <button type="button" onClick={socialMessage}>Facebook</button>
+            <button type="button" onClick={socialMessage}>Zalo</button>
+          </div>
+        </div>
         <p className="acct-auth-foot">Chưa có tài khoản? <Link to="/register">Đăng ký</Link></p>
       </div>
     </AuthShell>
@@ -185,39 +205,38 @@ export function LoginPage({ login }) {
 
 export function RegisterPage({ register }) {
   const navigate = useNavigate();
-  const [step, setStep] = useState(1);
-  const [form, setForm] = useState({ name: '', email: '', password: '', confirm: '', role: 'reader', agree: false });
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
+  const [form, setForm] = useState({ name: '', username: '', email: '', password: '', confirmPassword: '', agree: false });
+  const [message, setMessage] = useState(null);
   const [loading, setLoading] = useState(false);
 
-  function validateStepOne() {
+  function validate() {
     if (form.name.trim().length < 2) return 'Tên hiển thị cần ít nhất 2 ký tự.';
-    if (!emailValid(form.email)) return 'Email không hợp lệ.';
+    if (!usernamePattern.test(form.username.trim().toLowerCase())) return 'Tên đăng nhập chỉ gồm chữ thường, số, dấu chấm hoặc gạch dưới, từ 3-30 ký tự.';
+    if (!gmailValid(form.email)) return 'Gmail không hợp lệ hoặc không kết thúc bằng @gmail.com.';
     if (form.password.length < 6) return 'Mật khẩu tối thiểu 6 ký tự.';
-    if (form.password !== form.confirm) return 'Xác nhận mật khẩu chưa khớp.';
+    if (form.password !== form.confirmPassword) return 'Xác nhận mật khẩu chưa khớp.';
     if (!form.agree) return 'Bạn cần đồng ý điều khoản sử dụng.';
     return '';
   }
 
   async function submit(event) {
     event.preventDefault();
-    setError('');
-    if (step === 1) {
-      const message = validateStepOne();
-      if (message) return setError(message);
-      setStep(2);
-      return;
-    }
+    setMessage(null);
+    const error = validate();
+    if (error) return setMessage({ type: 'error', text: error });
     setLoading(true);
     try {
-      const user = await register(form.name, form.email, form.password);
-      localStorage.setItem('daudo_role_choice', form.role);
-      setSuccess(`Tạo tài khoản thành công với vai trò ${form.role === 'author' ? 'tác giả' : 'độc giả'}.`);
+      const user = await register({
+        name: form.name.trim(),
+        username: form.username.trim().toLowerCase(),
+        email: form.email.trim().toLowerCase(),
+        password: form.password
+      });
+      setMessage({ type: 'success', text: 'Tạo tài khoản thành công.' });
       setTimeout(() => navigate('/account'), 600);
       return user;
     } catch (err) {
-      setError(err.message);
+      setMessage({ type: 'error', text: err.message });
     } finally {
       setLoading(false);
     }
@@ -227,28 +246,15 @@ export function RegisterPage({ register }) {
     <AuthShell mode="register">
       <div className="acct-auth-card">
         <AuthHeader title="Đăng ký" subtitle="Tạo tài khoản để lưu tủ truyện, nhận thông báo và bắt đầu xuất bản nếu bạn là tác giả." />
-        <div className="acct-stepper"><span className={step === 1 ? 'active' : ''}>1. Thông tin</span><span className={step === 2 ? 'active' : ''}>2. Vai trò</span></div>
         <form className="acct-auth-form" onSubmit={submit}>
-          {step === 1 ? (
-            <>
-              <label>Tên hiển thị<input value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} placeholder="Tên của bạn" /></label>
-              <label>Email<input value={form.email} onChange={event => setForm({ ...form, email: event.target.value })} placeholder="you@example.com" /></label>
-              <label>Mật khẩu<input type="password" value={form.password} onChange={event => setForm({ ...form, password: event.target.value })} placeholder="Tối thiểu 6 ký tự" /></label>
-              <label>Xác nhận mật khẩu<input type="password" value={form.confirm} onChange={event => setForm({ ...form, confirm: event.target.value })} placeholder="Nhập lại mật khẩu" /></label>
-              <label className="acct-check"><input type="checkbox" checked={form.agree} onChange={event => setForm({ ...form, agree: event.target.checked })} /> Tôi đồng ý với <Link to="/dieu-khoan">Điều khoản</Link> và <Link to="/bao-mat">Chính sách bảo mật</Link></label>
-            </>
-          ) : (
-            <div className="acct-role-grid">
-            <button type="button" className={form.role === 'reader' ? 'active' : ''} onClick={() => setForm({ ...form, role: 'reader' })}><b>Độc giả</b><span>Đọc, lưu truyện, bình luận và nạp Đậu.</span></button>
-              <button type="button" className={form.role === 'author' ? 'active' : ''} onClick={() => setForm({ ...form, role: 'author' })}><b>Tác giả</b><span>Chuẩn bị hồ sơ tác giả. Quyền xuất bản thật cần admin duyệt.</span></button>
-            </div>
-          )}
-          {error && <div className="acct-error">{error}</div>}
-          {success && <div className="acct-success">{success}</div>}
-          <div className="acct-form-actions">
-            {step === 2 && <button type="button" onClick={() => setStep(1)}>Quay lại</button>}
-            <button type="submit" disabled={loading}>{step === 1 ? 'Tiếp tục' : loading ? 'Đang tạo...' : 'Tạo tài khoản'}</button>
-          </div>
+          <label>Tên hiển thị<input name="name" value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} placeholder="Tên của bạn" autoComplete="name" /></label>
+          <label>Tên đăng nhập<input name="username" value={form.username} onChange={event => setForm({ ...form, username: event.target.value.toLowerCase() })} placeholder="ten_dang_nhap" autoComplete="username" /></label>
+          <label>Gmail<input name="email" value={form.email} onChange={event => setForm({ ...form, email: event.target.value })} placeholder="tenban@gmail.com" autoComplete="email" /></label>
+          <label>Mật khẩu<input name="password" type="password" value={form.password} onChange={event => setForm({ ...form, password: event.target.value })} placeholder="Tối thiểu 6 ký tự" autoComplete="new-password" /></label>
+          <label>Xác nhận mật khẩu<input name="confirmPassword" type="password" value={form.confirmPassword} onChange={event => setForm({ ...form, confirmPassword: event.target.value })} placeholder="Nhập lại mật khẩu" autoComplete="new-password" /></label>
+          <label className="acct-check"><input name="agree" type="checkbox" checked={form.agree} onChange={event => setForm({ ...form, agree: event.target.checked })} /> Tôi đồng ý với <Link to="/dieu-khoan">Điều khoản</Link> và <Link to="/bao-mat">Chính sách bảo mật</Link></label>
+          <AuthMessage message={message} />
+          <button type="submit" disabled={loading}>{loading ? 'Đang tạo...' : 'Tạo tài khoản'}</button>
         </form>
         <p className="acct-auth-foot">Đã có tài khoản? <Link to="/login">Đăng nhập</Link></p>
       </div>
@@ -264,7 +270,7 @@ export function ForgotPasswordPage() {
   function submit(event) {
     event.preventDefault();
     setError('');
-    if (!emailValid(email)) return setError('Email không hợp lệ.');
+    if (!gmailValid(email)) return setError('Gmail không hợp lệ.');
     setLoading(true);
     window.setTimeout(() => {
       setLoading(false);
@@ -283,7 +289,7 @@ export function ForgotPasswordPage() {
           </div>
         ) : (
           <form className="acct-auth-form" onSubmit={submit}>
-            <label>Email<input value={email} onChange={event => setEmail(event.target.value)} placeholder="you@example.com" /></label>
+            <label>Gmail<input value={email} onChange={event => setEmail(event.target.value)} placeholder="tenban@gmail.com" /></label>
             {error && <div className="acct-error">{error}</div>}
             <button type="submit" disabled={loading}>{loading ? 'Đang gửi...' : 'Gửi hướng dẫn'}</button>
           </form>
@@ -311,6 +317,12 @@ function AuthShell({ children, mode }) {
 
 function AuthHeader({ title, subtitle }) {
   return <div className="acct-auth-head"><h1>{title}</h1><p>{subtitle}</p></div>;
+}
+
+function AuthMessage({ message }) {
+  if (!message?.text) return null;
+  const className = message.type === 'success' ? 'acct-success' : message.type === 'warning' ? 'acct-warning' : 'acct-error';
+  return <div className={className}>{message.text}</div>;
 }
 
 export function ReaderDashboard({ user, apiClient }) {

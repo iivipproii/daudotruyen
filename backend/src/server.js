@@ -69,6 +69,7 @@ function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
 function safeUser(user) {
   if (!user) return null;
   const { passwordHash, salt, ...safe } = user;
+  safe.username = normalizeUsername(safe.username || safe.email || safe.name || safe.id);
   return safe;
 }
 
@@ -319,6 +320,51 @@ function storySummary(story) {
   };
 }
 
+function normalizeUsername(value) {
+  const text = String(value || '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd')
+    .replace(/[^a-z0-9._]+/g, '.')
+    .replace(/[._]{2,}/g, '.')
+    .replace(/^[._]+|[._]+$/g, '')
+    .slice(0, 30);
+  return USERNAME_PATTERN.test(text) ? text : '';
+}
+
+function baseUsernameForUser(user) {
+  const emailLocal = String(user.email || '').split('@')[0];
+  return normalizeUsername(emailLocal) || normalizeUsername(user.name) || 'user';
+}
+
+function assignMissingUsernames(users = []) {
+  const used = new Set();
+  users.forEach(user => {
+    const current = normalizeUsername(user.username);
+    if (current && !used.has(current)) {
+      user.username = current;
+      used.add(current);
+    } else {
+      user.username = '';
+    }
+  });
+  users.forEach(user => {
+    if (user.username) return;
+    const base = baseUsernameForUser(user);
+    let candidate = base;
+    let suffix = 2;
+    while (!USERNAME_PATTERN.test(candidate) || used.has(candidate)) {
+      const ending = `_${suffix}`;
+      candidate = `${base.slice(0, 30 - ending.length)}${ending}`;
+      suffix += 1;
+    }
+    user.username = candidate;
+    used.add(candidate);
+  });
+}
+
 const RANKING_PERIODS = ['day', 'week', 'month', 'year', 'all'];
 const RANKING_METRICS = ['views', 'follows', 'rating', 'comments', 'revenue'];
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -330,6 +376,7 @@ const VALID_REPORT_STATUSES = ['open', 'reviewing', 'resolved', 'rejected'];
 const VALID_COMMENT_STATUSES = ['visible', 'hidden', 'deleted'];
 const VALID_TRANSACTION_TYPES = ['topup', 'purchase', 'bonus', 'admin_adjustment', 'refund', 'promotion', 'withdrawal', 'author_payout'];
 const AUTHOR_CHAPTER_STATUSES = ['draft', 'approved', 'published', 'hidden', 'scheduled'];
+const USERNAME_PATTERN = /^[a-z0-9._]{3,30}$/;
 const PROMOTION_PACKAGES = [
   { id: 'promo-1', title: 'Day top trang chu', days: 3, price: 120, reach: '25.000 luot hien thi', features: ['Gan nhan de xuat', 'Uu tien trong muc hot'] },
   { id: 'promo-2', title: 'Goi tang truong', days: 7, price: 260, reach: '80.000 luot hien thi', features: ['Banner the loai', 'Day top tim kiem', 'Bao cao hieu qua'], featured: true },
@@ -917,6 +964,7 @@ function ensureDbShape(db) {
   db.newsletters ||= [];
   db.viewEvents ||= [];
   db.promotions ||= [];
+  assignMissingUsernames(db.users);
   db.users.forEach(user => {
     if (!user.status) user.status = 'active';
     user.tokenVersion = Number(user.tokenVersion || 0);
@@ -1700,30 +1748,35 @@ async function handle(req, res) {
     }
     if (req.method === 'POST' && pathname === '/api/auth/login') {
       const body = await parseBody(req);
-      const email = String(body.email || '').trim().toLowerCase();
+      const identifier = String(body.identifier || body.email || '').trim().toLowerCase();
       const password = String(body.password || '');
-      const user = db.users.find(item => item.email.toLowerCase() === email);
-      if (!user) return badRequest(res, 'Email hoặc mật khẩu không đúng.');
+      const user = db.users.find(item => item.email.toLowerCase() === identifier || String(item.username || '').toLowerCase() === identifier);
+      if (!user) return badRequest(res, 'Tên đăng nhập/Gmail hoặc mật khẩu không đúng.');
       if (user.status === 'deactivated' || user.status === 'locked') return forbidden(res);
       const check = hashPassword(password, user.salt);
-      if (check.passwordHash !== user.passwordHash) return badRequest(res, 'Email hoặc mật khẩu không đúng.');
+      if (check.passwordHash !== user.passwordHash) return badRequest(res, 'Tên đăng nhập/Gmail hoặc mật khẩu không đúng.');
       return send(res, 200, { token: createToken(user), user: safeUser(user) });
     }
 
     if (req.method === 'POST' && pathname === '/api/auth/register') {
       const body = await parseBody(req);
       const name = String(body.name || '').trim();
+      const username = String(body.username || '').trim().toLowerCase();
       const email = String(body.email || '').trim().toLowerCase();
       const password = String(body.password || '');
-      if (!name || !email || !password) return badRequest(res, 'Vui lòng nhập đủ họ tên, email và mật khẩu.');
+      if (!name || !username || !email || !password) return badRequest(res, 'Vui lòng nhập đủ họ tên, tên đăng nhập, Gmail và mật khẩu.');
+      if (name.length < 2) return badRequest(res, 'Tên hiển thị cần ít nhất 2 ký tự.');
       if (name.length > 80) return badRequest(res, 'Họ tên quá dài.');
-      if (!isEmail(email)) return badRequest(res, 'Email không hợp lệ.');
+      if (!USERNAME_PATTERN.test(username)) return badRequest(res, 'Tên đăng nhập không hợp lệ.');
+      if (!isGmail(email)) return badRequest(res, 'Gmail không hợp lệ.');
       if (password.length < 6) return badRequest(res, 'Mật khẩu cần ít nhất 6 ký tự.');
-      if (db.users.some(user => user.email.toLowerCase() === email)) return badRequest(res, 'Email đã tồn tại.');
+      if (db.users.some(user => String(user.username || '').toLowerCase() === username)) return badRequest(res, 'Tên đăng nhập đã tồn tại.');
+      if (db.users.some(user => user.email.toLowerCase() === email)) return badRequest(res, 'Gmail đã tồn tại.');
       const hashed = hashPassword(password);
       const user = {
         id: uid('user'),
         name,
+        username,
         email,
         role: 'user',
         seeds: 30,
@@ -3673,6 +3726,11 @@ function isEmail(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '').trim());
 }
 
+function isGmail(value) {
+  const email = String(value || '').trim().toLowerCase();
+  return isEmail(email) && email.endsWith('@gmail.com');
+}
+
 function parsePositiveNumber(value, fallback = 0) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
@@ -3780,8 +3838,8 @@ function createSeedDb() {
 
   return {
     users: [
-      { id: 'u_admin', name: 'Quản trị viên', email: 'admin@example.com', role: 'admin', seeds: 999, avatar: '', cover: '', socialLinks: {}, preferences: defaultAccountPreferences(), notificationPreferences: defaultNotificationPreferences(), tokenVersion: 0, createdAt: now(), salt: adminPass.salt, passwordHash: adminPass.passwordHash },
-      { id: 'u_user', name: 'Bạn đọc Đậu Đỏ', email: 'user@example.com', role: 'user', seeds: 80, avatar: '', cover: '', socialLinks: {}, preferences: defaultAccountPreferences(), notificationPreferences: defaultNotificationPreferences(), tokenVersion: 0, createdAt: now(), salt: userPass.salt, passwordHash: userPass.passwordHash }
+      { id: 'u_admin', name: 'Quản trị viên', username: 'quantri', email: 'quantri.daudotruyen@gmail.com', role: 'admin', seeds: 999, avatar: '', cover: '', socialLinks: {}, preferences: defaultAccountPreferences(), notificationPreferences: defaultNotificationPreferences(), tokenVersion: 0, createdAt: now(), salt: adminPass.salt, passwordHash: adminPass.passwordHash },
+      { id: 'u_user', name: 'Bạn đọc Đậu Đỏ', username: 'bandoc', email: 'bandoc.daudotruyen@gmail.com', role: 'user', seeds: 80, avatar: '', cover: '', socialLinks: {}, preferences: defaultAccountPreferences(), notificationPreferences: defaultNotificationPreferences(), tokenVersion: 0, createdAt: now(), salt: userPass.salt, passwordHash: userPass.passwordHash }
     ],
     stories,
     chapters,
@@ -3818,6 +3876,7 @@ module.exports = {
   createSeedDb,
   hashPassword,
   slugify,
+  ensureDbShape,
   handle,
   resetDataStore: dataStore.reset,
   getDataStoreSnapshot: dataStore.snapshot

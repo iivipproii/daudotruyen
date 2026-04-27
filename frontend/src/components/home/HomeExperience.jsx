@@ -1146,7 +1146,7 @@ export function ProductionFooter({ apiClient }) {
                 type="email"
                 value={newsletterEmail}
                 onChange={event => setNewsletterEmail(event.target.value)}
-                placeholder="you@example.com"
+                placeholder="tenban@gmail.com"
                 disabled={newsletterState.loading}
               />
               <button type="submit" disabled={newsletterState.loading}>

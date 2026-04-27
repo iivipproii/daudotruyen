@@ -99,14 +99,17 @@ function AuthProvider({ children }) {
   const value = useMemo(() => ({
     user,
     loading,
-    async login(email, password) {
-      const data = await api('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
+    async login(identifier, password) {
+      const data = await api('/auth/login', { method: 'POST', body: JSON.stringify({ identifier, password }) });
       localStorage.setItem('daudo_token', data.token);
       setUser(data.user);
       return data.user;
     },
-    async register(name, email, password) {
-      const data = await api('/auth/register', { method: 'POST', body: JSON.stringify({ name, email, password }) });
+    async register(payloadOrName, username, email, password) {
+      const payload = typeof payloadOrName === 'object'
+        ? payloadOrName
+        : { name: payloadOrName, username, email, password };
+      const data = await api('/auth/register', { method: 'POST', body: JSON.stringify(payload) });
       localStorage.setItem('daudo_token', data.token);
       setUser(data.user);
       return data.user;
@@ -617,10 +620,10 @@ function PublicHeaderEnhanced() {
       .replace(/[\u0300-\u036f]/g, '');
 
   useEffect(() => {
-    Promise.all([api('/categories'), api('/stories?sort=views')])
+    Promise.all([api('/categories'), api('/supabase/stories')])
       .then(([categoryData, storyData]) => {
         setCategories(categoryData.categories || []);
-        setAllStories(storyData.stories || []);
+        setAllStories(storyData.stories || storyData || []);
       })
       .catch(() => {
         setCategories([]);
@@ -1964,65 +1967,6 @@ function StaticPage({ type }) {
         <Link className="button" to="/">Về trang chủ</Link>
       </div>
     </>
-  );
-}
-
-function Login() {
-  const { login } = useAuth();
-  const navigate = useNavigate();
-  const [form, setForm] = useState({ email: 'user@example.com', password: '123456' });
-  const [error, setError] = useState('');
-  async function submit(event) {
-    event.preventDefault();
-    try {
-      const user = await login(form.email, form.password);
-      navigate(user.role === 'admin' ? '/admin' : '/ho-so');
-    } catch (err) {
-      setError(err.message);
-    }
-  }
-  return <AuthForm title="Đăng nhập" submitLabel="Đăng nhập" form={form} setForm={setForm} onSubmit={submit} error={error} footer={<p>Chưa có tài khoản? <Link to="/dang-ky">Đăng ký</Link></p>} />;
-}
-
-function Register() {
-  const { register } = useAuth();
-  const navigate = useNavigate();
-  const [form, setForm] = useState({ name: '', email: '', password: '' });
-  const [error, setError] = useState('');
-  async function submit(event) {
-    event.preventDefault();
-    try {
-      await register(form.name, form.email, form.password);
-      navigate('/ho-so');
-    } catch (err) {
-      setError(err.message);
-    }
-  }
-  return <AuthForm title="Đăng ký" submitLabel="Tạo tài khoản" form={form} setForm={setForm} onSubmit={submit} error={error} register footer={<p>Đã có tài khoản? <Link to="/dang-nhap">Đăng nhập</Link></p>} />;
-}
-
-
-function AuthForm({ title, submitLabel, form, setForm, onSubmit, error, register = false, footer }) {
-  return (
-    <div className="auth-page">
-      <Link to="/" className="auth-brand"><img src="/images/logo.png" alt="Đậu Đỏ Truyện" /><span>Đậu Đỏ <b>Truyện</b></span></Link>
-      <div className="auth-card readdy-auth">
-        <h1>{register ? 'Tạo tài khoản' : 'Đăng nhập'}</h1>
-        <p className="muted">{register ? 'Tạo tài khoản miễn phí và bắt đầu hành trình đọc truyện.' : 'Chào mừng trở lại! Đăng nhập để tiếp tục đọc truyện.'}</p>
-        <div className="auth-tabs"><Link className={!register ? 'active' : ''} to="/dang-nhap">Đăng nhập</Link><Link className={register ? 'active' : ''} to="/dang-ky">Đăng ký</Link></div>
-        <ErrorBox message={error} />
-        <form onSubmit={onSubmit} className="stack-form auth-stack">
-          {register && <label>Tên người dùng<input placeholder="Tên hiển thị của bạn" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></label>}
-          <label>Email<input placeholder="example@email.com" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} /></label>
-          <label>Mật khẩu <Link to="/dang-nhap">Quên mật khẩu?</Link><input placeholder={register ? 'Tối thiểu 6 ký tự' : 'Nhập mật khẩu'} type="password" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} /></label>
-          {register && <label className="check-row"><input type="checkbox" /> Tôi đồng ý với <b>Điều khoản dịch vụ</b> và <b>Chính sách bảo mật</b></label>}
-          <button className="button auth-submit">{submitLabel}</button>
-        </form>
-        {!register && <><div className="auth-divider"><span>hoặc</span></div><div className="social-login"><button>G Google</button><button>ⓕ Facebook</button></div></>}
-        <div className="auth-footer-line">{footer}</div>
-      </div>
-      <Link to="/" className="auth-back">← Quay về trang chủ</Link>
-    </div>
   );
 }
 

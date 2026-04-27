@@ -449,7 +449,7 @@ export function AdminDashboard({ apiClient, user }) {
           <img src={user?.avatar || '/images/logo.png'} alt={user?.name || 'Admin'} />
           <div>
             <strong>{user?.name || 'Admin'}</strong>
-            <small>{user?.email || 'admin@example.com'}</small>
+            <small>{user?.email || 'quantri.daudotruyen@gmail.com'}</small>
           </div>
         </div>
       </section>

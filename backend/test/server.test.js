@@ -7,6 +7,7 @@ process.env.NODE_ENV = 'test';
 
 const {
   createSeedDb,
+  ensureDbShape,
   handle,
   resetDataStore,
   getDataStoreSnapshot
@@ -29,19 +30,23 @@ function request(pathname, options = {}) {
   });
 }
 
-async function loginToken(email = 'admin@example.com', password = '123456') {
+async function loginToken(identifier = 'quantri', password = '123456') {
   const login = await request('/api/auth/login', {
     method: 'POST',
-    body: JSON.stringify({ email, password })
+    body: JSON.stringify({ identifier, password })
   });
   assert.equal(login.response.status, 200);
   return login.data.token;
 }
 
-async function registerUser(email, name = 'Author Test User') {
+function usernameFromEmail(email) {
+  return String(email).split('@')[0].replace(/[^a-z0-9._]/gi, '.').toLowerCase().slice(0, 30);
+}
+
+async function registerUser(email, name = 'Author Test User', username = usernameFromEmail(email)) {
   const register = await request('/api/auth/register', {
     method: 'POST',
-    body: JSON.stringify({ name, email, password: '123456' })
+    body: JSON.stringify({ name, username, email, password: '123456' })
   });
   assert.equal(register.response.status, 201);
   return register.data;
@@ -94,10 +99,10 @@ test('seed database has enough stories for home sections', () => {
 test('register rejects invalid email', async () => {
   const { response, data } = await request('/api/auth/register', {
     method: 'POST',
-    body: JSON.stringify({ name: 'Test User', email: 'invalid', password: '123456' })
+    body: JSON.stringify({ name: 'Test User', username: 'testuser', email: 'invalid', password: '123456' })
   });
   assert.equal(response.status, 400);
-  assert.match(data.message, /Email/i);
+  assert.match(data.message, /Gmail/i);
 });
 
 test('newsletter validates and stores subscriber email', async () => {
@@ -110,33 +115,95 @@ test('newsletter validates and stores subscriber email', async () => {
 
   const created = await request('/api/newsletter', {
     method: 'POST',
-    body: JSON.stringify({ email: 'reader-news@example.com', source: 'footer' })
+    body: JSON.stringify({ email: 'reader.news@gmail.com', source: 'footer' })
   });
   assert.equal(created.response.status, 201);
   assert.equal(created.data.subscribed, true);
 
   const duplicate = await request('/api/newsletter', {
     method: 'POST',
-    body: JSON.stringify({ email: 'reader-news@example.com', source: 'footer' })
+    body: JSON.stringify({ email: 'reader.news@gmail.com', source: 'footer' })
   });
   assert.equal(duplicate.response.status, 200);
 
   const db = readTestDb();
-  assert.equal(db.newsletters.filter(item => item.email === 'reader-news@example.com').length, 1);
+  assert.equal(db.newsletters.filter(item => item.email === 'reader.news@gmail.com').length, 1);
 });
 
-test('login returns token and user', async () => {
+test('login returns token and user by username or Gmail', async () => {
+  const byUsername = await request('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ identifier: 'bandoc', password: '123456' })
+  });
+  assert.equal(byUsername.response.status, 200);
+  assert.ok(byUsername.data.token);
+  assert.equal(byUsername.data.user.email, 'bandoc.daudotruyen@gmail.com');
+  assert.equal(byUsername.data.user.username, 'bandoc');
+
   const { response, data } = await request('/api/auth/login', {
     method: 'POST',
-    body: JSON.stringify({ email: 'user@example.com', password: '123456' })
+    body: JSON.stringify({ identifier: 'bandoc.daudotruyen@gmail.com', password: '123456' })
   });
   assert.equal(response.status, 200);
   assert.ok(data.token);
-  assert.equal(data.user.email, 'user@example.com');
+  assert.equal(data.user.email, 'bandoc.daudotruyen@gmail.com');
+});
+
+test('register validates username and Gmail uniqueness', async () => {
+  const created = await request('/api/auth/register', {
+    method: 'POST',
+    body: JSON.stringify({ name: 'Gmail Reader', username: 'gmail.reader', email: 'gmail.reader@gmail.com', password: '123456' })
+  });
+  assert.equal(created.response.status, 201);
+  assert.equal(created.data.user.username, 'gmail.reader');
+  assert.equal(created.data.user.email, 'gmail.reader@gmail.com');
+
+  const duplicateUsername = await request('/api/auth/register', {
+    method: 'POST',
+    body: JSON.stringify({ name: 'Other Reader', username: 'gmail.reader', email: 'other.reader@gmail.com', password: '123456' })
+  });
+  assert.equal(duplicateUsername.response.status, 400);
+  assert.equal(duplicateUsername.data.message, 'Tên đăng nhập đã tồn tại.');
+
+  const duplicateGmail = await request('/api/auth/register', {
+    method: 'POST',
+    body: JSON.stringify({ name: 'Other Reader', username: 'other.reader', email: 'gmail.reader@gmail.com', password: '123456' })
+  });
+  assert.equal(duplicateGmail.response.status, 400);
+  assert.equal(duplicateGmail.data.message, 'Gmail đã tồn tại.');
+
+  const nonGmail = await request('/api/auth/register', {
+    method: 'POST',
+    body: JSON.stringify({ name: 'Other Reader', username: 'other.reader2', email: 'other.reader@yahoo.com', password: '123456' })
+  });
+  assert.equal(nonGmail.response.status, 400);
+  assert.match(nonGmail.data.message, /Gmail/i);
+
+  const invalidUsername = await request('/api/auth/register', {
+    method: 'POST',
+    body: JSON.stringify({ name: 'Other Reader', username: 'bad name', email: 'bad.name@gmail.com', password: '123456' })
+  });
+  assert.equal(invalidUsername.response.status, 400);
+  assert.match(invalidUsername.data.message, /Tên đăng nhập/i);
+});
+
+test('ensureDbShape generates unique usernames for legacy users', () => {
+  const shaped = ensureDbShape({
+    users: [
+      { id: 'legacy_1', name: 'Legacy User', email: 'legacy@gmail.com' },
+      { id: 'legacy_2', name: 'Legacy User', email: 'legacy@gmail.com' },
+      { id: 'legacy_3', name: 'No Email User', email: '' }
+    ]
+  });
+  const usernames = shaped.users.map(user => user.username);
+  assert.deepEqual(new Set(usernames).size, usernames.length);
+  usernames.forEach(username => assert.match(username, /^[a-z0-9._]{3,30}$/));
+  assert.equal(usernames[0], 'legacy');
+  assert.equal(usernames[1], 'legacy_2');
 });
 
 test('account profile endpoint validates and persists profile fields', async () => {
-  const token = await loginToken('user@example.com');
+  const token = await loginToken('bandoc.daudotruyen@gmail.com');
   const headers = { Authorization: `Bearer ${token}` };
 
   const invalidEmail = await request('/api/me/profile', {
@@ -150,7 +217,7 @@ test('account profile endpoint validates and persists profile fields', async () 
   const duplicateEmail = await request('/api/me/profile', {
     method: 'PATCH',
     headers,
-    body: JSON.stringify({ name: 'Bạn đọc Đậu Đỏ', email: 'admin@example.com' })
+    body: JSON.stringify({ name: 'Bạn đọc Đậu Đỏ', email: 'quantri.daudotruyen@gmail.com' })
   });
   assert.equal(duplicateEmail.response.status, 400);
   assert.match(duplicateEmail.data.message, /tồn tại/i);
@@ -158,7 +225,7 @@ test('account profile endpoint validates and persists profile fields', async () 
   const futureBirthday = await request('/api/me/profile', {
     method: 'PATCH',
     headers,
-    body: JSON.stringify({ name: 'Bạn đọc Đậu Đỏ', email: 'user@example.com', birthday: '2999-01-01' })
+    body: JSON.stringify({ name: 'Bạn đọc Đậu Đỏ', email: 'bandoc.daudotruyen@gmail.com', birthday: '2999-01-01' })
   });
   assert.equal(futureBirthday.response.status, 400);
   assert.match(futureBirthday.data.message, /tương lai/i);
@@ -166,7 +233,7 @@ test('account profile endpoint validates and persists profile fields', async () 
   const invalidWebsite = await request('/api/me/profile', {
     method: 'PATCH',
     headers,
-    body: JSON.stringify({ name: 'Bạn đọc Đậu Đỏ', email: 'user@example.com', website: 'ftp://example.com' })
+    body: JSON.stringify({ name: 'Bạn đọc Đậu Đỏ', email: 'bandoc.daudotruyen@gmail.com', website: 'ftp://example.com' })
   });
   assert.equal(invalidWebsite.response.status, 400);
   assert.match(invalidWebsite.data.message, /http\/https/i);
@@ -174,7 +241,7 @@ test('account profile endpoint validates and persists profile fields', async () 
   const unknownField = await request('/api/me/profile', {
     method: 'PATCH',
     headers,
-    body: JSON.stringify({ name: 'Bạn đọc Đậu Đỏ', email: 'user@example.com', role: 'admin' })
+    body: JSON.stringify({ name: 'Bạn đọc Đậu Đỏ', email: 'bandoc.daudotruyen@gmail.com', role: 'admin' })
   });
   assert.equal(unknownField.response.status, 400);
 
@@ -183,7 +250,7 @@ test('account profile endpoint validates and persists profile fields', async () 
     headers,
     body: JSON.stringify({
       name: 'Bạn đọc Production',
-      email: 'user@example.com',
+      email: 'bandoc.daudotruyen@gmail.com',
       phone: '+84 912 345 678',
       birthday: '2000-05-20',
       gender: 'prefer-not',
@@ -242,7 +309,7 @@ test('account profile endpoint validates and persists profile fields', async () 
 });
 
 test('avatar upload stores only a storage URL on the user profile', async () => {
-  const token = await loginToken('user@example.com');
+  const token = await loginToken('bandoc.daudotruyen@gmail.com');
   const headers = { Authorization: `Bearer ${token}` };
 
   const invalidType = new FormData();
@@ -270,7 +337,7 @@ test('avatar upload stores only a storage URL on the user profile', async () => 
 });
 
 test('account preferences endpoint whitelists keys and persists values', async () => {
-  const token = await loginToken('user@example.com');
+  const token = await loginToken('bandoc.daudotruyen@gmail.com');
   const headers = { Authorization: `Bearer ${token}` };
 
   const unknown = await request('/api/me/preferences', {
@@ -299,7 +366,7 @@ test('account preferences endpoint whitelists keys and persists values', async (
 test('password endpoint enforces policy, changes password, and creates security notification', async () => {
   const register = await request('/api/auth/register', {
     method: 'POST',
-    body: JSON.stringify({ name: 'Password Test', email: 'password-test@example.com', password: '123456' })
+    body: JSON.stringify({ name: 'Password Test', username: 'password.test', email: 'password.test@gmail.com', password: '123456' })
   });
   assert.equal(register.response.status, 201);
   const headers = { Authorization: `Bearer ${register.data.token}` };
@@ -337,7 +404,7 @@ test('password endpoint enforces policy, changes password, and creates security 
 
   const loginNew = await request('/api/auth/login', {
     method: 'POST',
-    body: JSON.stringify({ email: 'password-test@example.com', password: 'abc123' })
+    body: JSON.stringify({ email: 'password.test@gmail.com', password: 'abc123' })
   });
   assert.equal(loginNew.response.status, 200);
 
@@ -348,7 +415,7 @@ test('password endpoint enforces policy, changes password, and creates security 
 test('logout-all invalidates the current token version', async () => {
   const register = await request('/api/auth/register', {
     method: 'POST',
-    body: JSON.stringify({ name: 'Logout Test', email: 'logout-test@example.com', password: '123456' })
+    body: JSON.stringify({ name: 'Logout Test', username: 'logout.test', email: 'logout.test@gmail.com', password: '123456' })
   });
   assert.equal(register.response.status, 201);
   const headers = { Authorization: `Bearer ${register.data.token}` };
@@ -363,7 +430,7 @@ test('logout-all invalidates the current token version', async () => {
 test('deactivate account requires password and blocks future login', async () => {
   const register = await request('/api/auth/register', {
     method: 'POST',
-    body: JSON.stringify({ name: 'Deactivate Test', email: 'deactivate-test@example.com', password: '123456' })
+    body: JSON.stringify({ name: 'Deactivate Test', username: 'deactivate.test', email: 'deactivate.test@gmail.com', password: '123456' })
   });
   assert.equal(register.response.status, 201);
   const headers = { Authorization: `Bearer ${register.data.token}` };
@@ -384,7 +451,7 @@ test('deactivate account requires password and blocks future login', async () =>
 
   const login = await request('/api/auth/login', {
     method: 'POST',
-    body: JSON.stringify({ email: 'deactivate-test@example.com', password: '123456' })
+    body: JSON.stringify({ email: 'deactivate.test@gmail.com', password: '123456' })
   });
   assert.equal(login.response.status, 403);
 });
@@ -405,7 +472,7 @@ test('premium chapter returns preview when not unlocked', async () => {
 });
 
 test('cover upload validates image size and stories reject base64 covers', async () => {
-  const token = await loginToken('user@example.com');
+  const token = await loginToken('bandoc.daudotruyen@gmail.com');
   const headers = { Authorization: `Bearer ${token}` };
   const tooLarge = new FormData();
   tooLarge.append('file', new Blob([Buffer.alloc(501 * 1024)], { type: 'image/webp' }), 'cover.webp');
@@ -436,7 +503,7 @@ test('cover upload validates image size and stories reject base64 covers', async
 });
 
 test('reading progress is upserted per user and story', async () => {
-  const token = await loginToken('user@example.com');
+  const token = await loginToken('bandoc.daudotruyen@gmail.com');
   const headers = { Authorization: `Bearer ${token}` };
   await request('/api/stories/dau-pha-thuong-khung/chapters/1', { headers });
   await request('/api/stories/dau-pha-thuong-khung/chapters/2', { headers });
@@ -446,7 +513,7 @@ test('reading progress is upserted per user and story', async () => {
 });
 
 test('unlocking a VIP chapter is idempotent and writes ledger fields', async () => {
-  const user = await registerUser('vip-idempotent@example.com', 'VIP Idempotent');
+  const user = await registerUser('vip.idempotent@gmail.com', 'VIP Idempotent');
   const headers = { Authorization: `Bearer ${user.token}` };
   const db = readTestDb();
   db.users.find(item => item.id === user.user.id).seeds = 30;
@@ -468,7 +535,7 @@ test('unlocking a VIP chapter is idempotent and writes ledger fields', async () 
 });
 
 test('mock topup is idempotent and admin adjustment writes audit log', async () => {
-  const user = await registerUser('wallet-idempotent@example.com', 'Wallet Idempotent');
+  const user = await registerUser('wallet.idempotent@gmail.com', 'Wallet Idempotent');
   const headers = { Authorization: `Bearer ${user.token}` };
   const first = await request('/api/wallet/topup', { method: 'POST', headers, body: JSON.stringify({ packageId: 'seed-20', idempotencyKey: 'idem-1' }) });
   const second = await request('/api/wallet/topup', { method: 'POST', headers, body: JSON.stringify({ packageId: 'seed-20', idempotencyKey: 'idem-1' }) });
@@ -559,7 +626,7 @@ test('comment requires auth', async () => {
 test('rating only accepts one to five stars', async () => {
   const login = await request('/api/auth/login', {
     method: 'POST',
-    body: JSON.stringify({ email: 'user@example.com', password: '123456' })
+    body: JSON.stringify({ email: 'bandoc.daudotruyen@gmail.com', password: '123456' })
   });
   const { response, data } = await request('/api/stories/s1/rating', {
     method: 'POST',
@@ -573,7 +640,7 @@ test('rating only accepts one to five stars', async () => {
 test('admin stats rejects non-admin user', async () => {
   const login = await request('/api/auth/login', {
     method: 'POST',
-    body: JSON.stringify({ email: 'user@example.com', password: '123456' })
+    body: JSON.stringify({ email: 'bandoc.daudotruyen@gmail.com', password: '123456' })
   });
   const { response } = await request('/api/admin/stats', {
     headers: { Authorization: `Bearer ${login.data.token}` }
@@ -582,7 +649,7 @@ test('admin stats rejects non-admin user', async () => {
 });
 
 test('admin chapters API rejects non-admin user', async () => {
-  const token = await loginToken('user@example.com');
+  const token = await loginToken('bandoc.daudotruyen@gmail.com');
   const { response } = await request('/api/admin/chapters', {
     headers: { Authorization: `Bearer ${token}` }
   });
@@ -590,7 +657,7 @@ test('admin chapters API rejects non-admin user', async () => {
 });
 
 test('admin endpoints reject non-admin users', async () => {
-  const token = await loginToken('user@example.com');
+  const token = await loginToken('bandoc.daudotruyen@gmail.com');
   const headers = { Authorization: `Bearer ${token}` };
   const checks = [
     ['/api/admin/dashboard', { headers }],
@@ -624,7 +691,7 @@ test('admin endpoints reject non-admin users', async () => {
 
 test('admin can lock and unlock a user, blocking protected APIs and login while locked', async () => {
   const adminToken = await loginToken();
-  const userToken = await loginToken('user@example.com');
+  const userToken = await loginToken('bandoc.daudotruyen@gmail.com');
 
   const lock = await request('/api/admin/users/u_user', {
     method: 'PATCH',
@@ -641,7 +708,7 @@ test('admin can lock and unlock a user, blocking protected APIs and login while 
 
   const lockedLogin = await request('/api/auth/login', {
     method: 'POST',
-    body: JSON.stringify({ email: 'user@example.com', password: '123456' })
+    body: JSON.stringify({ email: 'bandoc.daudotruyen@gmail.com', password: '123456' })
   });
   assert.equal(lockedLogin.response.status, 403);
 
@@ -655,7 +722,7 @@ test('admin can lock and unlock a user, blocking protected APIs and login while 
 
   const loginAgain = await request('/api/auth/login', {
     method: 'POST',
-    body: JSON.stringify({ email: 'user@example.com', password: '123456' })
+    body: JSON.stringify({ email: 'bandoc.daudotruyen@gmail.com', password: '123456' })
   });
   assert.equal(loginAgain.response.status, 200);
 });
@@ -721,7 +788,7 @@ test('admin can list chapters and approve chapter status', async () => {
 test('admin can create story with publish metadata', async () => {
   const login = await request('/api/auth/login', {
     method: 'POST',
-    body: JSON.stringify({ email: 'admin@example.com', password: '123456' })
+    body: JSON.stringify({ email: 'quantri.daudotruyen@gmail.com', password: '123456' })
   });
   const { response, data } = await request('/api/admin/stories', {
     method: 'POST',
@@ -831,7 +898,7 @@ test('scheduled chapters stay private until scheduled time', async () => {
 test('admin can update and delete chapters', async () => {
   const login = await request('/api/auth/login', {
     method: 'POST',
-    body: JSON.stringify({ email: 'admin@example.com', password: '123456' })
+    body: JSON.stringify({ email: 'quantri.daudotruyen@gmail.com', password: '123456' })
   });
   const create = await request('/api/admin/stories/s1/chapters', {
     method: 'POST',
@@ -856,7 +923,7 @@ test('admin can update and delete chapters', async () => {
 test('combo purchase unlocks premium chapters', async () => {
   const login = await request('/api/auth/login', {
     method: 'POST',
-    body: JSON.stringify({ email: 'user@example.com', password: '123456' })
+    body: JSON.stringify({ email: 'bandoc.daudotruyen@gmail.com', password: '123456' })
   });
   const combo = await request('/api/stories/s1/unlock-combo', {
     method: 'POST',
@@ -873,8 +940,8 @@ test('combo purchase unlocks premium chapters', async () => {
 });
 
 test('notification APIs require auth, isolate users, and persist read/delete state', async () => {
-  const userToken = await loginToken('user@example.com');
-  const adminToken = await loginToken('admin@example.com');
+  const userToken = await loginToken('bandoc.daudotruyen@gmail.com');
+  const adminToken = await loginToken('quantri.daudotruyen@gmail.com');
   const db = readTestDb();
   db.notifications.unshift(
     { id: 'noti_private_user', userId: 'u_user', type: 'system', title: 'User private', body: 'Only user can see this', link: '/account', read: false, createdAt: new Date().toISOString() },
@@ -933,7 +1000,7 @@ test('notification APIs require auth, isolate users, and persist read/delete sta
 });
 
 test('read-all clears unread notification count', async () => {
-  const userToken = await loginToken('user@example.com');
+  const userToken = await loginToken('bandoc.daudotruyen@gmail.com');
   const db = readTestDb();
   db.notifications.unshift(
     { id: 'noti_read_all_1', userId: 'u_user', type: 'system', title: 'A', body: 'A', read: false, createdAt: new Date().toISOString() },
@@ -955,8 +1022,8 @@ test('read-all clears unread notification count', async () => {
 });
 
 test('user actions create notifications for the correct recipients', async () => {
-  const userToken = await loginToken('user@example.com');
-  const adminToken = await loginToken('admin@example.com');
+  const userToken = await loginToken('bandoc.daudotruyen@gmail.com');
+  const adminToken = await loginToken('quantri.daudotruyen@gmail.com');
 
   const topup = await request('/api/wallet/topup', {
     method: 'POST',
@@ -1000,8 +1067,8 @@ test('user actions create notifications for the correct recipients', async () =>
 });
 
 test('chapter publish notifications go only to followers with chapter notifications enabled', async () => {
-  const userToken = await loginToken('user@example.com');
-  const adminToken = await loginToken('admin@example.com');
+  const userToken = await loginToken('bandoc.daudotruyen@gmail.com');
+  const adminToken = await loginToken('quantri.daudotruyen@gmail.com');
 
   const first = await request('/api/admin/stories/s7/chapters', {
     method: 'POST',
@@ -1038,7 +1105,7 @@ test('chapter publish notifications go only to followers with chapter notificati
 test('admin can review reports', async () => {
   const userLogin = await request('/api/auth/login', {
     method: 'POST',
-    body: JSON.stringify({ email: 'user@example.com', password: '123456' })
+    body: JSON.stringify({ email: 'bandoc.daudotruyen@gmail.com', password: '123456' })
   });
   const report = await request('/api/stories/s1/report', {
     method: 'POST',
@@ -1048,7 +1115,7 @@ test('admin can review reports', async () => {
   assert.equal(report.response.status, 201);
   const adminLogin = await request('/api/auth/login', {
     method: 'POST',
-    body: JSON.stringify({ email: 'admin@example.com', password: '123456' })
+    body: JSON.stringify({ email: 'quantri.daudotruyen@gmail.com', password: '123456' })
   });
   const list = await request('/api/admin/reports', {
     headers: { Authorization: `Bearer ${adminLogin.data.token}` }
@@ -1066,7 +1133,7 @@ test('admin can review reports', async () => {
 
 test('admin report action hides content and creates audit log', async () => {
   const adminToken = await loginToken();
-  const userToken = await loginToken('user@example.com');
+  const userToken = await loginToken('bandoc.daudotruyen@gmail.com');
   const create = await request('/api/admin/stories', {
     method: 'POST',
     headers: { Authorization: `Bearer ${adminToken}` },
@@ -1116,7 +1183,7 @@ test('admin report action hides content and creates audit log', async () => {
 test('pending stories stay out of public listing', async () => {
   const login = await request('/api/auth/login', {
     method: 'POST',
-    body: JSON.stringify({ email: 'admin@example.com', password: '123456' })
+    body: JSON.stringify({ email: 'quantri.daudotruyen@gmail.com', password: '123456' })
   });
   const create = await request('/api/admin/stories', {
     method: 'POST',
@@ -1186,7 +1253,7 @@ test('story moderation status controls public listing', async () => {
 test('hidden stories stay out of public listing', async () => {
   const login = await request('/api/auth/login', {
     method: 'POST',
-    body: JSON.stringify({ email: 'admin@example.com', password: '123456' })
+    body: JSON.stringify({ email: 'quantri.daudotruyen@gmail.com', password: '123456' })
   });
   const create = await request('/api/admin/stories', {
     method: 'POST',
@@ -1211,7 +1278,7 @@ test('author APIs require authentication', async () => {
 });
 
 test('author can create draft and pending stories with ownerId', async () => {
-  const author = await registerUser('author-create@example.com', 'Author Create');
+  const author = await registerUser('author.create@gmail.com', 'Author Create');
   const headers = { Authorization: `Bearer ${author.token}` };
 
   const draft = await request('/api/author/stories', {
@@ -1246,8 +1313,8 @@ test('author can create draft and pending stories with ownerId', async () => {
 });
 
 test('author cannot edit another owner story or chapter', async () => {
-  const owner = await registerUser('owner-author@example.com', 'Owner Author');
-  const intruder = await registerUser('intruder-author@example.com', 'Intruder Author');
+  const owner = await registerUser('owner.author@gmail.com', 'Owner Author');
+  const intruder = await registerUser('intruder.author@gmail.com', 'Intruder Author');
   const ownerHeaders = { Authorization: `Bearer ${owner.token}` };
   const intruderHeaders = { Authorization: `Bearer ${intruder.token}` };
 
@@ -1290,7 +1357,7 @@ test('author cannot edit another owner story or chapter', async () => {
 });
 
 test('admin approval publishes author story to public listing', async () => {
-  const author = await registerUser('approval-author@example.com', 'Approval Author');
+  const author = await registerUser('approval.author@gmail.com', 'Approval Author');
   const authorHeaders = { Authorization: `Bearer ${author.token}` };
   const adminToken = await loginToken();
   const adminHeaders = { Authorization: `Bearer ${adminToken}` };
@@ -1327,7 +1394,7 @@ test('admin approval publishes author story to public listing', async () => {
 });
 
 test('author can add single and bulk chapters before story approval', async () => {
-  const author = await registerUser('pending-chapter-author@example.com', 'Pending Chapter Author');
+  const author = await registerUser('pending.chapter.author@gmail.com', 'Pending Chapter Author');
   const authorHeaders = { Authorization: `Bearer ${author.token}` };
   const adminHeaders = { Authorization: `Bearer ${await loginToken()}` };
   const title = 'Pending Story With Ready Chapters';
@@ -1422,7 +1489,7 @@ test('author can add single and bulk chapters before story approval', async () =
 });
 
 test('draft rejected and hidden author stories are not public', async () => {
-  const author = await registerUser('visibility-author@example.com', 'Visibility Author');
+  const author = await registerUser('visibility.author@gmail.com', 'Visibility Author');
   const headers = { Authorization: `Bearer ${author.token}` };
   const adminHeaders = { Authorization: `Bearer ${await loginToken()}` };
 
@@ -1464,8 +1531,8 @@ test('draft rejected and hidden author stories are not public', async () => {
 });
 
 test('author revenue only includes owned stories', async () => {
-  const first = await registerUser('revenue-author-a@example.com', 'Revenue Author A');
-  const second = await registerUser('revenue-author-b@example.com', 'Revenue Author B');
+  const first = await registerUser('revenue.author.a@gmail.com', 'Revenue Author A');
+  const second = await registerUser('revenue.author.b@gmail.com', 'Revenue Author B');
   const firstHeaders = { Authorization: `Bearer ${first.token}` };
   const secondHeaders = { Authorization: `Bearer ${second.token}` };
 
@@ -1501,7 +1568,7 @@ test('author revenue only includes owned stories', async () => {
 });
 
 test('promotion purchase deducts wallet and creates transaction', async () => {
-  const author = await registerUser('promotion-author@example.com', 'Promotion Author');
+  const author = await registerUser('promotion.author@gmail.com', 'Promotion Author');
   const headers = { Authorization: `Bearer ${author.token}` };
   const story = await request('/api/author/stories', {
     method: 'POST',
