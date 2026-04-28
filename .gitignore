@@ -5,3 +5,14 @@ dist
 .env
 .DS_Store
 backend/data/*.bak
+
+*.log
+
+.vercel/
+.temp/
+
+frontend/*.log
+backend/*.log
+backend/.env
+
+supabase/.temp/

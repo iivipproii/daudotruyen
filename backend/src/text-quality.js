@@ -1,5 +1,6 @@
 const CORRUPT_TEXT_PATTERN = /[\uFFFD]|\u00C3|\u00C2(?:[\s\u00a0.,;:!?'"”’)]|$)|\u00E2\u20AC|\u00C4[\u2018\u0090]?|\u00E1[\u00BA\u00BB]|\u00C6[\u00B0\u00A1]|\u00C5|\u02DC/;
 const REPLACEMENT_PATTERN = /[\uFFFD]/;
+const TEST_PLACEHOLDER_PATTERN = /test\s+từ\s+supabase/i;
 
 const CP1252_BYTES = {
   '\u20AC': 0x80,
@@ -68,10 +69,21 @@ function validateCleanText(value, context = 'text') {
   return normalized;
 }
 
+function hasTestPlaceholder(value) {
+  return typeof value === 'string' && TEST_PLACEHOLDER_PATTERN.test(value);
+}
+
+function validateNoTestPlaceholder(value, context = 'text') {
+  if (hasTestPlaceholder(value)) {
+    throw new Error(`Test placeholder text is not allowed in ${context}.`);
+  }
+  return value;
+}
+
 function validateTextFields(record, fields, context) {
   fields.forEach(field => {
     if (record[field] !== undefined && record[field] !== null) {
-      record[field] = validateCleanText(String(record[field]), `${context}.${field}`);
+      record[field] = validateNoTestPlaceholder(validateCleanText(String(record[field]), `${context}.${field}`), `${context}.${field}`);
     }
   });
   return record;
@@ -82,7 +94,9 @@ module.exports = {
   normalizeText,
   hasCorruptText,
   hasReplacementChar,
+  hasTestPlaceholder,
   repairMojibake,
   validateCleanText,
+  validateNoTestPlaceholder,
   validateTextFields
 };

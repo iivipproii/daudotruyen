@@ -6,7 +6,7 @@ const mammoth = require('mammoth');
 const dataStore = require('./db');
 const storage = require('./services/storage');
 const { normalizeRole, isAdmin, canPostStory } = require('./permissions');
-const { validateTextFields, validateCleanText } = require('./text-quality');
+const { hasTestPlaceholder, validateTextFields, validateCleanText } = require('./text-quality');
 
 const PORT = Number(process.env.PORT || 4000);
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
@@ -526,6 +526,7 @@ const VALID_REPORT_STATUSES = ['open', 'reviewing', 'resolved', 'rejected'];
 const VALID_COMMENT_STATUSES = ['visible', 'hidden', 'deleted'];
 const VALID_TRANSACTION_TYPES = ['topup', 'purchase', 'bonus', 'admin_adjustment', 'refund', 'promotion', 'withdrawal', 'author_payout'];
 const AUTHOR_CHAPTER_STATUSES = ['draft', 'approved', 'published', 'hidden', 'scheduled'];
+const MIN_PUBLISHED_CHAPTER_LENGTH = 500;
 const USERNAME_PATTERN = /^[a-z0-9._]{3,30}$/;
 const PROMOTION_PACKAGES = [
   { id: 'promo-1', title: 'Day top trang chu', days: 3, price: 120, reach: '25.000 luot hien thi', features: ['Gan nhan de xuat', 'Uu tien trong muc hot'] },
@@ -584,6 +585,33 @@ function isPublicChapter(chapter) {
     return new Date(chapter.scheduledAt).getTime() <= Date.now();
   }
   return false;
+}
+
+function isPublishChapterStatus(status) {
+  return ['approved', 'published', 'scheduled'].includes(String(status || '').trim());
+}
+
+function publicChapterContentError(content) {
+  const text = String(content || '').trim();
+  if (hasTestPlaceholder(text)) return 'Noi dung chuong dang la placeholder test.';
+  if (text.length < MIN_PUBLISHED_CHAPTER_LENGTH) return `Noi dung chuong can toi thieu ${MIN_PUBLISHED_CHAPTER_LENGTH} ky tu truoc khi publish. Hay luu draft neu chua co noi dung that.`;
+  return '';
+}
+
+function publicChapterError(chapterOrBody, status = chapterStatus(chapterOrBody)) {
+  if (!isPublishChapterStatus(status)) return '';
+  return publicChapterContentError(chapterOrBody?.content);
+}
+
+function publicReaderChapter(chapter) {
+  if (!chapter || !hasTestPlaceholder(chapter.content)) return chapter;
+  return {
+    ...chapter,
+    content: '',
+    preview: '',
+    contentUnavailable: true,
+    unavailableMessage: 'Chương này đang được cập nhật.'
+  };
 }
 
 function defaultNotificationPreferences() {
@@ -2277,7 +2305,7 @@ async function handle(req, res) {
       if (!chapter) return notFound(res);
       if (!isPublicChapter(chapter) && viewer?.role !== 'admin') return notFound(res);
       const unlocked = !chapter.isPremium || (viewer && db.purchases.some(item => item.userId === viewer.id && (item.chapterId === chapter.id || (item.storyId === story.id && item.combo))));
-      const payloadChapter = unlocked ? chapter : { ...chapter, content: chapter.preview || 'Chương trả phí. Vui lòng mở khóa để đọc đầy đủ.' };
+      const payloadChapter = unlocked ? publicReaderChapter(chapter) : { ...chapter, content: chapter.preview || 'Chương trả phí. Vui lòng mở khóa để đọc đầy đủ.' };
       chapter.views += 1;
       story.views += 1;
       db.viewEvents.push({ id: uid('view'), storyId: story.id, chapterId: chapter.id, userId: viewer?.id || null, createdAt: now() });
@@ -2972,7 +3000,7 @@ async function handle(req, res) {
       let skipped = 0;
 
       incoming.forEach((item, index) => {
-        const content = String(item.content || '').trim();
+        let content = String(item.content || '').trim();
         const number = renumber ? cursor : Number(item.number || cursor);
         if (renumber) cursor += 1;
         if (!Number.isFinite(number) || number <= 0) {
@@ -2980,7 +3008,7 @@ async function handle(req, res) {
           errors.push({ index, number: item.number || null, reason: 'So chuong khong hop le' });
           return;
         }
-        const title = String(item.title || `Chuong ${number}`).trim();
+        let title = String(item.title || `Chuong ${number}`).trim();
         if (!title) {
           skipped += 1;
           errors.push({ index, number, reason: 'Ten chuong rong' });
@@ -2989,6 +3017,20 @@ async function handle(req, res) {
         if (!content) {
           skipped += 1;
           errors.push({ index, number, reason: 'Noi dung chuong rong' });
+          return;
+        }
+        try {
+          title = validateCleanText(title, `chapters[${index}].title`);
+          content = validateCleanText(content, `chapters[${index}].content`);
+        } catch (error) {
+          skipped += 1;
+          errors.push({ index, number, reason: error.message });
+          return;
+        }
+        const publishError = isPublishChapterStatus(status) ? publicChapterContentError(content) : '';
+        if (publishError) {
+          skipped += 1;
+          errors.push({ index, number, reason: publishError });
           return;
         }
         if (chapterNumberExists(db, story.id, number) || createdChapters.some(chapter => Number(chapter.number) === Number(number))) {
@@ -3126,6 +3168,8 @@ async function handle(req, res) {
       if (body.scheduledAt !== undefined) chapter.scheduledAt = String(body.scheduledAt || '');
       if (status === 'pending') chapter.rejectionReason = '';
       if (body.content !== undefined) chapter.wordCount = wordCount(chapter.content);
+      const publishError = publicChapterError(chapter, status);
+      if (publishError) return badRequest(res, publishError);
       chapter.updatedAt = now();
       refreshStoryChapterMetadata(db, targetStory);
       if (oldStoryId !== chapter.storyId) {
@@ -3985,6 +4029,8 @@ async function handle(req, res) {
         createdAt: now(),
         updatedAt: now()
       };
+      const inputError = validateChapterInput(chapter, status);
+      if (inputError) return badRequest(res, inputError);
       db.chapters.push(chapter);
       refreshStoryChapterMetadata(db, story);
       notifyChapterPublished(db, story, chapter, admin.id);
@@ -4024,6 +4070,8 @@ async function handle(req, res) {
         chapter.rejectionReason = '';
         chapter.scheduledAt = '';
       }
+      const publishError = publicChapterError(chapter, body.status);
+      if (publishError) return badRequest(res, publishError);
       chapter.updatedAt = now();
       const story = db.stories.find(item => item.id === chapter.storyId);
       if (story) refreshStoryChapterMetadata(db, story);
@@ -4069,6 +4117,8 @@ async function handle(req, res) {
         if (body.status === 'rejected') chapter.rejectionReason = String(body.rejectionReason || 'Can chinh sua truoc khi duyet.').slice(0, 500);
         if (['approved', 'published'].includes(body.status)) chapter.rejectionReason = '';
       }
+      const publishError = publicChapterError(chapter, chapter.status);
+      if (publishError) return badRequest(res, publishError);
       if (body.scheduledAt !== undefined) {
         const scheduledAt = body.scheduledAt ? new Date(body.scheduledAt) : null;
         if (scheduledAt && Number.isNaN(scheduledAt.getTime())) return badRequest(res, 'scheduledAt khong hop le.');
@@ -4165,7 +4215,7 @@ function validateStoryInput(body) {
   return null;
 }
 
-function validateChapterInput(body) {
+function validateChapterInput(body, status = body.status || body.mode || 'draft') {
   try {
     normalizeIncomingTextFields(body, ['title', 'content', 'preview', 'rejectionReason'], 'chapter');
   } catch (error) {
@@ -4173,6 +4223,9 @@ function validateChapterInput(body) {
   }
   const title = String(body.title || '').trim();
   const content = String(body.content || '').trim();
+  const normalizedStatus = normalizeAuthorChapterStatus(status, status);
+  const publishError = isPublishChapterStatus(normalizedStatus) ? publicChapterContentError(content) : '';
+  if (publishError && title && content) return publishError;
   if (!title) return 'Tiêu đề chương là bắt buộc.';
   if (!content) return 'Nội dung chương là bắt buộc.';
   return null;

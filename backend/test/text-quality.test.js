@@ -5,7 +5,8 @@ const {
   hasCorruptText,
   normalizeText,
   repairMojibake,
-  validateCleanText
+  validateCleanText,
+  validateNoTestPlaceholder
 } = require('../src/text-quality');
 const { decodeHtmlBytes } = require('../src/html-decoder');
 
@@ -29,6 +30,13 @@ test('replacement character is rejected and must be re-crawled', () => {
   const broken = 'B\uFFFDi Hi';
   assert.equal(hasCorruptText(broken), true);
   assert.throws(() => validateCleanText(broken, 'story.description'), /Corrupt Vietnamese text/);
+});
+
+test('Supabase test placeholders are rejected before publishing', () => {
+  assert.throws(
+    () => validateNoTestPlaceholder('Nội dung chương test từ Supabase.', 'chapter.content'),
+    /Test placeholder/
+  );
 });
 
 test('HTML import decoder keeps Vietnamese text from declared charset bytes', () => {

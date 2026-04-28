@@ -80,6 +80,10 @@ function addViewEvents(db, storyId, count, createdAt) {
   }
 }
 
+function longChapterContent(seed = 'Nội dung chương tiếng Việt sạch') {
+  return Array.from({ length: 35 }, (_, index) => `${seed} đoạn ${index + 1} có đủ chữ để kiểm tra publish và không dùng placeholder test.`).join('\n\n');
+}
+
 test.before(async () => {
   resetDataStore(createSeedDb());
   server = http.createServer(handle);
@@ -895,7 +899,7 @@ test('admin can list chapters and approve chapter status', async () => {
     headers: { Authorization: `Bearer ${token}` },
     body: JSON.stringify({
       title: 'Chuong can duyet',
-      content: 'Noi dung chuong moi dang cho quan tri vien phe duyet.',
+      content: longChapterContent('Noi dung chuong moi dang cho quan tri vien phe duyet'),
       status: 'pending'
     })
   });
@@ -976,7 +980,7 @@ test('hidden and rejected chapters stay out of public story and reader endpoints
   const approved = await request(`/api/admin/stories/${story.data.story.id}/chapters`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ number: 3, title: 'Approved chapter', content: 'Approved content is public.', status: 'approved' })
+    body: JSON.stringify({ number: 3, title: 'Approved chapter', content: longChapterContent('Approved content is public'), status: 'approved' })
   });
   assert.equal(rejected.response.status, 201);
   assert.equal(hidden.response.status, 201);
@@ -1016,7 +1020,7 @@ test('scheduled chapters stay private until scheduled time', async () => {
   const scheduled = await request(`/api/admin/stories/${story.data.story.id}/chapters`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ number: 1, title: 'Future scheduled', content: 'Future content should not be public yet.', status: 'scheduled', scheduledAt: future })
+    body: JSON.stringify({ number: 1, title: 'Future scheduled', content: longChapterContent('Future content should not be public yet'), status: 'scheduled', scheduledAt: future })
   });
   assert.equal(scheduled.response.status, 201);
 
@@ -1036,7 +1040,7 @@ test('admin can update and delete chapters', async () => {
   const create = await request('/api/admin/stories/s1/chapters', {
     method: 'POST',
     headers: { Authorization: `Bearer ${login.data.token}` },
-    body: JSON.stringify({ title: 'Chuong test', content: 'Noi dung test' })
+    body: JSON.stringify({ title: 'Chuong test', content: longChapterContent('Noi dung test') })
   });
   assert.equal(create.response.status, 201);
   const update = await request(`/api/admin/chapters/${create.data.chapter.id}`, {
@@ -1206,7 +1210,7 @@ test('chapter publish notifications go only to followers with chapter notificati
   const first = await request('/api/admin/stories/s7/chapters', {
     method: 'POST',
     headers: { Authorization: `Bearer ${adminToken}` },
-    body: JSON.stringify({ title: 'Follower notified chapter', content: 'New approved content for followers.', status: 'approved' })
+    body: JSON.stringify({ title: 'Follower notified chapter', content: longChapterContent('New approved content for followers'), status: 'approved' })
   });
   assert.equal(first.response.status, 201);
 
@@ -1225,7 +1229,7 @@ test('chapter publish notifications go only to followers with chapter notificati
   const second = await request('/api/admin/stories/s7/chapters', {
     method: 'POST',
     headers: { Authorization: `Bearer ${adminToken}` },
-    body: JSON.stringify({ title: 'Muted follower chapter', content: 'This should respect chapter preferences.', status: 'approved' })
+    body: JSON.stringify({ title: 'Muted follower chapter', content: longChapterContent('This should respect chapter preferences'), status: 'approved' })
   });
   assert.equal(second.response.status, 201);
 
@@ -1604,7 +1608,7 @@ test('author can add single and bulk chapters before story approval', async () =
     body: JSON.stringify({
       number: 1,
       title: 'Chapter One Ready',
-      content: 'This is a prepared chapter added while the story is still pending approval. It should be saved for the author immediately.',
+      content: longChapterContent('This is a prepared chapter added while the story is still pending approval'),
       status: 'published'
     })
   });
@@ -1617,7 +1621,7 @@ test('author can add single and bulk chapters before story approval', async () =
     body: JSON.stringify({
       number: 1,
       title: 'Duplicate Chapter Number',
-      content: 'This duplicate chapter number should be rejected by validation.',
+      content: longChapterContent('This duplicate chapter number should be rejected by validation'),
       status: 'published'
     })
   });
@@ -1631,8 +1635,8 @@ test('author can add single and bulk chapters before story approval', async () =
       access: 'free',
       renumber: false,
       chapters: [
-        { number: 2, title: 'Bulk Chapter Two', content: 'Second prepared chapter content for bulk creation before approval.' },
-        { number: 3, title: 'Bulk Chapter Three', content: 'Third prepared chapter content for bulk creation before approval.' }
+        { number: 2, title: 'Bulk Chapter Two', content: longChapterContent('Second prepared chapter content for bulk creation before approval') },
+        { number: 3, title: 'Bulk Chapter Three', content: longChapterContent('Third prepared chapter content for bulk creation before approval') }
       ]
     })
   });
@@ -1672,6 +1676,87 @@ test('author can add single and bulk chapters before story approval', async () =
   const reader = await request(`/api/stories/${create.data.story.slug}/chapters/1`);
   assert.equal(reader.response.status, 200);
   assert.equal(reader.data.chapter.title, 'Chapter One Ready');
+});
+
+test('reader chapter route returns the requested story and chapter with clean Vietnamese text', async () => {
+  const db = readTestDb();
+  const story = db.stories.find(item => item.slug === 'co-tong-vo-cu-tai-gia-roi-than-gia-da-nghin-ty') || {
+    id: 'story_encoding_route',
+    ownerId: 'u_admin',
+    slug: 'co-tong-vo-cu-tai-gia-roi-than-gia-da-nghin-ty',
+    title: 'Cố Tổng, Vợ Cũ Tái Giá Rồi, Thân Giá Đã Nghìn Tỷ',
+    author: 'Đô Đô Bảo',
+    description: 'Truyện kiểm tra tiếng Việt.',
+    categories: ['Ngôn tình'],
+    status: 'ongoing',
+    approvalStatus: 'approved',
+    hidden: false,
+    views: 0,
+    rating: 5,
+    follows: 0,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  if (!db.stories.some(item => item.id === story.id)) db.stories.push(story);
+  db.chapters.push({
+    id: 'chapter_encoding_route_1',
+    storyId: story.id,
+    number: 1,
+    title: 'Chương 1: Khởi đầu',
+    content: longChapterContent('Bùi Hiểu Dụi tự nhận họ Bùi, kết hôn bốn năm với Cố Thần'),
+    preview: '',
+    status: 'approved',
+    views: 0,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  });
+  writeTestDb(db);
+
+  const { response, data } = await request('/api/stories/co-tong-vo-cu-tai-gia-roi-than-gia-da-nghin-ty/chapters/1');
+
+  assert.equal(response.status, 200);
+  assert.equal(data.story.slug, 'co-tong-vo-cu-tai-gia-roi-than-gia-da-nghin-ty');
+  assert.equal(data.chapter.number, 1);
+  assert.match(data.story.title, /Cố Tổng/);
+  assert.doesNotMatch(data.story.title, /�/);
+  assert.doesNotMatch(data.chapter.content, /Nội dung chương test từ Supabase/);
+});
+
+test('published chapters reject corrupt text, placeholders, and too-short content', async () => {
+  const author = await registerMod('quality.chapter.author@gmail.com', 'Quality Chapter Author');
+  const headers = { Authorization: `Bearer ${author.token}` };
+  const story = await request('/api/author/stories', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      title: 'Quality Validation Story',
+      description: 'Story for chapter validation.',
+      categories: ['Validation'],
+      approvalStatus: 'pending'
+    })
+  });
+  assert.equal(story.response.status, 201);
+
+  const placeholder = await request(`/api/author/stories/${story.data.story.id}/chapters`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ title: 'Placeholder', content: 'Nội dung chương test từ Supabase.', status: 'published' })
+  });
+  assert.equal(placeholder.response.status, 400);
+
+  const tooShort = await request(`/api/author/stories/${story.data.story.id}/chapters`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ title: 'Too Short', content: 'Nội dung thật nhưng quá ngắn.', status: 'published' })
+  });
+  assert.equal(tooShort.response.status, 400);
+
+  const draft = await request(`/api/author/stories/${story.data.story.id}/chapters`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ title: 'Draft Short', content: 'Bản nháp ngắn.', status: 'draft' })
+  });
+  assert.equal(draft.response.status, 201);
 });
 
 test('draft rejected and hidden author stories are not public', async () => {

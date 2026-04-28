@@ -9,6 +9,7 @@
     "reset-db": "node src/reset-db.js",
     "migrate:supabase": "node src/migrate-json-to-supabase.js",
     "repair:text": "node scripts/repair-text-encoding.cjs",
+    "scan:text": "node scripts/scan-text-quality.cjs",
     "test": "node --test"
   },
   "keywords": [
