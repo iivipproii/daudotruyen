@@ -4011,7 +4011,23 @@ async function handle(req, res) {
       return send(res, 200, { ok: true });
     }
 
-    return notFound(res);
+    if (req.method === 'GET' && pathname === '/') {
+  return send(res, 200, {
+    name: 'Đậu Đỏ Truyện API',
+    status: 'ok',
+    message: 'Backend đang hoạt động',
+  });
+}
+
+if (req.method === 'GET' && pathname === '/healthz') {
+  return send(res, 200, {
+    status: 'ok',
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
+  });
+}
+
+return notFound(res);
     };
 
     return req.method === 'GET' ? runDbRequest() : dataStore.withLock(runDbRequest);
