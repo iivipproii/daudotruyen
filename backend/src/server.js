@@ -2288,7 +2288,7 @@ async function handle(req, res) {
     }
 
     if (req.method === 'POST' && pathname === '/api/author/stories' && dataStore.storeName() !== 'memory') {
-      return await dataStore.withLock(() => handleSupabaseAuthorStoryCreate(req, res));
+      return await handleSupabaseAuthorStoryCreate(req, res);
     }
 
     if (req.method === 'POST' && pathname === '/api/uploads/cover' && dataStore.storeName() !== 'memory') {
@@ -2297,7 +2297,7 @@ async function handle(req, res) {
 
     const targetedAuthorStoryBulkParams = match(pathname, '/api/author/stories/:id/chapters/bulk');
     if (targetedAuthorStoryBulkParams && req.method === 'POST' && dataStore.storeName() !== 'memory') {
-      return await dataStore.withLock(() => handleSupabaseAuthorStoryBulkChapters(req, res, targetedAuthorStoryBulkParams.id));
+      return await handleSupabaseAuthorStoryBulkChapters(req, res, targetedAuthorStoryBulkParams.id);
     }
 
     const runDbRequest = async () => {
