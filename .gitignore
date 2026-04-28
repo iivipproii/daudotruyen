@@ -5,3 +5,12 @@ dist
 .env
 .DS_Store
 backend/data/*.bak
+*.err.log
+*.out.log
+*.vite-dev*
+.author-vite-*.log
+.author-dev-*.log
+supabase/.temp/
+
+.vercel
+.env*.local

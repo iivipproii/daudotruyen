@@ -1135,6 +1135,56 @@ function matchesSearch(values, query) {
   return values.filter(Boolean).join(' ').toLowerCase().includes(text);
 }
 
+function uniqueStories(items = []) {
+  return Array.from(new Map((items || []).map(item => [item.id, item])).values());
+}
+
+function sortStories(items, sort = 'updated') {
+  return items.slice().sort((a, b) => {
+    if (sort === 'views') return Number(b.views || 0) - Number(a.views || 0);
+    if (sort === 'rating') return Number(b.rating || 0) - Number(a.rating || 0);
+    if (sort === 'follows') return Number(b.follows || 0) - Number(a.follows || 0);
+    if (sort === 'chapters') return Number(b.chapterCount || 0) - Number(a.chapterCount || 0);
+    if (sort === 'created' || sort === 'new') {
+      return new Date(b.createdAt || b.updatedAt || 0) - new Date(a.createdAt || a.updatedAt || 0);
+    }
+    return new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0);
+  });
+}
+
+function pickStories(items, limit = 12) {
+  return uniqueStories(items).slice(0, limit).map(storySummary);
+}
+
+function buildHomeResponse(db, viewerId) {
+  const stories = db.stories.filter(isPublicStory).map(story => enrichStory(db, story, viewerId));
+  const byCreated = sortStories(stories, 'created');
+  const byUpdated = sortStories(stories, 'updated');
+  const byViews = sortStories(stories, 'views');
+  const byRating = sortStories(stories, 'rating');
+  const featured = uniqueStories(stories.filter(story => story.featured).concat(byRating));
+  const hot = stories.filter(story => story.hot);
+  const recommended = stories.filter(story => story.recommended);
+  const banner = stories.filter(story => story.banner);
+  const completed = stories.filter(story => story.status === 'completed');
+  const personalized = byRating.filter(story => story.categories?.some(category => ['Ngôn tình', 'Đô thị', 'Chữa lành', 'Trinh thám'].includes(category)));
+  const categories = Array.from(new Set(stories.flatMap(story => story.categories || []).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'vi'));
+
+  return {
+    hero: pickStories(banner.length ? banner : featured, 5),
+    hot: pickStories(hot.length ? hot : byViews, 12),
+    trending: pickStories(byRating, 8),
+    updated: pickStories(byUpdated, 8),
+    completed: pickStories(completed.length ? completed : byRating, 8),
+    newLaunch: pickStories(byCreated, 8),
+    editorPicks: pickStories(featured, 8),
+    recommended: pickStories(recommended.length ? recommended : featured, 8),
+    personalized: pickStories(personalized.length ? personalized : byRating, 8),
+    ranking: pickStories(byViews, 10),
+    categories
+  };
+}
+
 function normalizeStoredRole(role) {
   const value = String(role || '').trim().toLowerCase();
   if (value === 'reader') return 'user';
@@ -1615,11 +1665,9 @@ function validateAuthorStoryPayload(payload, approvalStatus) {
   if (payload.author.length > 120) return 'Tac gia qua dai.';
   if (isDataImageValue(payload.cover)) return 'Anh bia phai duoc upload len storage, khong luu base64 trong database.';
   if (payload.cover && !isCoverImageValue(payload.cover)) return 'Anh bia phai la URL/path hop le.';
-  if (approvalStatus === 'pending') {
-    if (payload.description.length < 20) return 'Mo ta can it nhat 20 ky tu truoc khi gui duyet.';
-    if (!payload.categories.length) return 'Vui long chon it nhat mot the loai.';
-    if (payload.premium && payload.chapterPrice <= 0) return 'Gia chuong VIP phai lon hon 0.';
-  }
+  if (payload.description.length < 20) return approvalStatus === 'pending' ? 'Mo ta can it nhat 20 ky tu truoc khi gui duyet.' : 'Mo ta can it nhat 20 ky tu de luu truyen.';
+  if (!payload.categories.length) return 'Vui long chon it nhat mot the loai.';
+  if (payload.premium && payload.chapterPrice <= 0) return 'Gia chuong VIP phai lon hon 0.';
   return null;
 }
 
@@ -2089,7 +2137,15 @@ async function handle(req, res) {
 
     if (req.method === 'GET' && pathname === '/api/categories') {
       const categories = Array.from(new Set(db.stories.filter(isPublicStory).flatMap(story => story.categories))).sort();
-      return send(res, 200, { categories });
+      return send(res, 200, { categories }, {
+        'Cache-Control': 'public, max-age=300, s-maxage=900, stale-while-revalidate=3600'
+      });
+    }
+
+    if (req.method === 'GET' && pathname === '/api/home') {
+      return send(res, 200, { home: buildHomeResponse(db, viewer && viewer.id) }, {
+        'Cache-Control': 'public, max-age=60, s-maxage=300, stale-while-revalidate=900'
+      });
     }
 
     if (req.method === 'POST' && pathname === '/api/newsletter') {
@@ -2141,18 +2197,9 @@ async function handle(req, res) {
       if (hot) items = items.filter(story => story.hot);
       if (recommended) items = items.filter(story => story.recommended);
       if (banner) items = items.filter(story => story.banner);
-      items.sort((a, b) => {
-        if (sort === 'views') return b.views - a.views;
-        if (sort === 'rating') return b.rating - a.rating;
-        if (sort === 'follows') return b.follows - a.follows;
-        if (sort === 'chapters') return b.chapterCount - a.chapterCount;
-        if (sort === 'created' || sort === 'new') {
-          return new Date(b.createdAt || b.updatedAt || 0) - new Date(a.createdAt || a.updatedAt || 0);
-        }
-        return new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0);
-      });
+      items = sortStories(items, sort);
       return send(res, 200, { stories: items.slice(0, limit).map(storySummary) }, {
-        'Cache-Control': 'no-store, max-age=0'
+        'Cache-Control': 'public, max-age=60, s-maxage=300, stale-while-revalidate=900'
       });
     }
 
@@ -2657,6 +2704,12 @@ async function handle(req, res) {
       return send(res, 200, { stories });
     }
 
+    if (req.method === 'GET' && pathname === '/api/author/taxonomy') {
+      const user = requireStoryPublisher(req, res, db);
+      if (!user) return;
+      return send(res, 200, { taxonomy: taxonomyResponse(db) });
+    }
+
     if (req.method === 'POST' && pathname === '/api/author/stories') {
       const user = requireStoryPublisher(req, res, db);
       if (!user) return;
@@ -2704,7 +2757,14 @@ async function handle(req, res) {
         createdAt: timestamp
       };
       db.stories.unshift(story);
-      await persistDb(db, { prune: false, only: ['stories'], relationStoryIds: [story.id] });
+      try {
+        await persistDb(db, { prune: false, only: ['stories'], relationStoryIds: [story.id] });
+      } catch (error) {
+        if (story.coverPath) {
+          await storage.deleteImage(story.coverPath).catch(deleteError => console.warn(`Could not rollback cover ${story.coverPath}: ${deleteError.message}`));
+        }
+        throw error;
+      }
       requestPerf.mark('db');
       requestPerf.log();
       return send(res, 201, { story: authorStorySummary(db, story, user.id), user: safeUser(user) });

@@ -7,14 +7,17 @@
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0",
-    "test:auth-placeholders": "node scripts/check-auth-placeholders.cjs"
+    "test": "node --test test/*.test.mjs",
+    "test:auth-placeholders": "node scripts/check-auth-placeholders.cjs",
+    "test:bundle-secrets": "node scripts/check-client-bundle.cjs"
   },
   "dependencies": {
+    "@vercel/analytics": "^2.0.1",
+    "@vercel/speed-insights": "^2.0.0",
     "@vitejs/plugin-react": "6.0.1",
-    "vite": "8.0.10",
     "react": "19.2.5",
     "react-dom": "19.2.5",
-    "react-router-dom": "7.14.2"
-  },
-  "devDependencies": {}
+    "react-router-dom": "7.14.2",
+    "vite": "8.0.10"
+  }
 }

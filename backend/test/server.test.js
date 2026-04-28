@@ -106,6 +106,17 @@ test('seed database has enough stories for home sections', () => {
   assert.ok(db.stories.filter(story => story.featured).length >= 6);
 });
 
+test('home endpoint returns curated story slices and categories', async () => {
+  const { response, data } = await request('/api/home');
+  assert.equal(response.status, 200);
+  assert.ok(Array.isArray(data.home.hero));
+  assert.ok(Array.isArray(data.home.hot));
+  assert.ok(Array.isArray(data.home.categories));
+  assert.ok(data.home.hero.length <= 5);
+  assert.ok(data.home.hot.length <= 12);
+  assert.ok(data.home.categories.length > 0);
+});
+
 test('register rejects invalid email', async () => {
   const { response, data } = await request('/api/auth/register', {
     method: 'POST',
@@ -512,7 +523,13 @@ test('cover upload validates image size and stories reject base64 covers', async
   const story = await request('/api/author/stories', {
     method: 'POST',
     headers,
-    body: JSON.stringify({ title: 'Cover URL Story', description: 'Draft story', cover: uploaded.data.url, approvalStatus: 'draft' })
+    body: JSON.stringify({
+      title: 'Cover URL Story',
+      description: 'Draft story now includes enough text to pass the author validation rules.',
+      categories: ['Cover'],
+      cover: uploaded.data.url,
+      approvalStatus: 'draft'
+    })
   });
   assert.equal(story.response.status, 201);
   assert.equal(story.data.story.cover, uploaded.data.url);
@@ -1395,7 +1412,7 @@ test('admin-created story is public and appears first in newest listing without 
 
   const newest = await request('/api/stories?sort=created&limit=1');
   assert.equal(newest.response.status, 200);
-  assert.equal(newest.response.headers.get('cache-control'), 'no-store, max-age=0');
+  assert.equal(newest.response.headers.get('cache-control'), 'public, max-age=60, s-maxage=300, stale-while-revalidate=900');
   assert.equal(newest.data.stories[0].id, create.data.story.id);
   assert.equal(newest.data.stories[0].title, title);
   assert.ok(newest.data.stories[0].createdAt);
@@ -1465,6 +1482,50 @@ test('author can create draft and pending stories with ownerId', async () => {
   assert.equal(pending.data.story.ownerId, author.user.id);
   assert.equal(pending.data.story.approvalStatus, 'pending');
   assert.equal(pending.data.story.hidden, true);
+});
+
+test('author taxonomy endpoint requires auth and returns categories/tags', async () => {
+  const unauthorized = await request('/api/author/taxonomy');
+  assert.equal(unauthorized.response.status, 401);
+
+  const author = await registerMod('author.taxonomy@gmail.com', 'Author Taxonomy');
+  const authorized = await request('/api/author/taxonomy', {
+    headers: { Authorization: `Bearer ${author.token}` }
+  });
+  assert.equal(authorized.response.status, 200);
+  assert.ok(Array.isArray(authorized.data.taxonomy.categories));
+  assert.ok(Array.isArray(authorized.data.taxonomy.tags));
+});
+
+test('author draft creation rejects missing description or category with clear error', async () => {
+  const author = await registerMod('author.validation@gmail.com', 'Author Validation');
+  const headers = { Authorization: `Bearer ${author.token}` };
+
+  const missingDescription = await request('/api/author/stories', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      title: 'Draft missing description',
+      description: '',
+      categories: ['Validation'],
+      approvalStatus: 'draft'
+    })
+  });
+  assert.equal(missingDescription.response.status, 400);
+  assert.match(missingDescription.data.message, /Mo ta/i);
+
+  const missingCategory = await request('/api/author/stories', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      title: 'Draft missing category',
+      description: 'This draft has enough description but no category assigned.',
+      categories: [],
+      approvalStatus: 'draft'
+    })
+  });
+  assert.equal(missingCategory.response.status, 400);
+  assert.match(missingCategory.data.message, /the loai/i);
 });
 
 test('author cannot edit another owner story or chapter', async () => {

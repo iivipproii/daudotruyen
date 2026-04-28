@@ -747,19 +747,34 @@ export function ProductionHome({ apiClient, currentUser }) {
 
     async function loadHome() {
       setLoading(true);
-      const [created, updated, featured, hot, recommended, banner, views, completed, categories] = await Promise.all([
-        fetchSafe(apiClient, '/stories?sort=created&limit=20'),
-        fetchSafe(apiClient, '/stories?sort=updated&limit=20'),
-        fetchSafe(apiClient, '/stories?featured=true&sort=rating&limit=20'),
-        fetchSafe(apiClient, '/stories?hot=true&sort=updated&limit=24'),
-        fetchSafe(apiClient, '/stories?recommended=true&sort=updated&limit=20'),
-        fetchSafe(apiClient, '/stories?banner=true&sort=updated&limit=10'),
-        fetchSafe(apiClient, '/stories?sort=views&limit=20'),
-        fetchSafe(apiClient, '/stories?status=completed&sort=updated&limit=20'),
-        fetchSafe(apiClient, '/categories')
-      ]);
+      const payload = await fetchSafe(apiClient, '/home');
 
       if (!alive) return;
+
+      const home = payload?.home;
+      if (home) {
+        setHomeData({
+          hero: normalizeStories(home.hero || []),
+          hot: normalizeStories(home.hot || []),
+          trending: normalizeStories(home.trending || []),
+          updated: normalizeStories(home.updated || []),
+          completed: normalizeStories(home.completed || []),
+          newLaunch: normalizeStories(home.newLaunch || []),
+          editorPicks: normalizeStories(home.editorPicks || []),
+          recommended: normalizeStories(home.recommended || []),
+          personalized: normalizeStories(home.personalized || []),
+          ranking: normalizeStories(home.ranking || []),
+          categories: (home.categories || []).map(repairText)
+        });
+        setError('');
+        setLoading(false);
+        return;
+      }
+
+      setHomeData(buildHomeSlices(mockStories));
+      setError('KhÃ´ng káº¿t ná»‘i Ä‘Æ°á»£c API, Ä‘ang hiá»ƒn thá»‹ dá»¯ liá»‡u dá»± phÃ²ng cho trang chá»§.');
+      setLoading(false);
+      return;
 
       const merged = normalizeStories([
         ...(created?.stories || []),

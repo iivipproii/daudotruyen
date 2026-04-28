@@ -479,6 +479,14 @@ async function deleteMissing(table, ids) {
 }
 
 async function upsertRows(table, rows, onConflict = 'id') {
+  rows = Array.from(
+    new Map(
+      (rows || [])
+        .filter(row => row && row[onConflict])
+        .map(row => [String(row[onConflict]), row])
+    ).values()
+  );
+
   if (!rows.length) return;
   const supabase = getSupabase();
   for (let index = 0; index < rows.length; index += PAGE_SIZE) {

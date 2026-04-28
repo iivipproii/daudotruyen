@@ -40,6 +40,21 @@ function storagePathForAvatar(file, { userId } = {}) {
   return `avatars/${userPart}/${Date.now()}-${nonce}.${ext}`;
 }
 
+function humanizeStorageError(error) {
+  const message = String(error?.message || '').trim();
+  if (!message) return `Upload ảnh thất bại với bucket ${COVER_BUCKET}.`;
+  if (/bucket/i.test(message) && /not found|does not exist/i.test(message)) {
+    return `Thiếu bucket ${COVER_BUCKET}.`;
+  }
+  if (/mime type/i.test(message)) {
+    return `Loại file không được hỗ trợ: ${message}`;
+  }
+  if (/duplicate/i.test(message)) {
+    return 'Tên file ảnh bị trùng. Vui lòng thử lại.';
+  }
+  return `Upload ảnh thất bại: ${message}`;
+}
+
 async function uploadImage(file, path) {
   const contentType = file.mimeType || file.type || 'application/octet-stream';
   const body = file.data || file.buffer;
@@ -62,7 +77,7 @@ async function uploadImage(file, path) {
         contentType,
         upsert: false
       });
-    if (result.error) throw new Error(result.error.message);
+    if (result.error) throw new Error(humanizeStorageError(result.error));
     return { path, url: getPublicUrl(path) };
   }
 

@@ -303,6 +303,7 @@ export function AuthorDashboard({ user, apiClient }) {
     usingMock: false,
     stories: [],
     chapters: [],
+    currentStory: null,
     promotions: [],
     packages: mockPromotionPackages,
     revenue: buildFallbackRevenue(),
@@ -313,7 +314,10 @@ export function AuthorDashboard({ user, apiClient }) {
   const [toast, setToast] = useState('');
 
   const currentView = getCurrentView(location.pathname);
-  const editingStory = params.id ? state.stories.find(story => story.id === params.id) : null;
+  const storyScopedViews = new Set(['story-form', 'story-preview', 'chapter-choice', 'chapter-new', 'chapter-bulk']);
+  const editingStory = params.id
+    ? (state.currentStory?.id === params.id ? state.currentStory : state.stories.find(story => story.id === params.id))
+    : null;
 
   async function loadAuthorData() {
     if (!apiClient) {
@@ -351,9 +355,151 @@ export function AuthorDashboard({ user, apiClient }) {
     }
   }
 
+  async function loadAuthorViewData() {
+    if (!apiClient) {
+      setState(current => ({
+        ...current,
+        loading: {},
+        errors: {
+          overview: 'API chua san sang.',
+          stories: 'API chua san sang.',
+          chapters: 'API chua san sang.',
+          revenue: 'API chua san sang.',
+          promotions: 'API chua san sang.'
+        }
+      }));
+      return;
+    }
+
+    if (currentView === 'story-form' && !params.id) {
+      setState(current => ({
+        ...current,
+        currentStory: null,
+        loading: {},
+        errors: {}
+      }));
+      return;
+    }
+
+    setState(current => ({
+      ...current,
+      loading: { ...current.loading, overview: true, stories: true, chapters: true, revenue: true, promotions: true },
+      errors: {}
+    }));
+
+    try {
+      if (params.id && storyScopedViews.has(currentView)) {
+        const result = await apiClient(`/author/stories/${params.id}`);
+        setState(current => ({
+          ...current,
+          currentStory: result.story || null,
+          stories: result.story
+            ? current.stories.some(item => item.id === result.story.id)
+              ? current.stories.map(item => item.id === result.story.id ? result.story : item)
+              : [result.story, ...current.stories]
+            : current.stories,
+          chapters: result.chapters || [],
+          loading: {},
+          errors: {}
+        }));
+        return;
+      }
+
+      if (currentView === 'stories') {
+        const storiesRes = await apiClient('/author/stories');
+        setState(current => ({
+          ...current,
+          stories: storiesRes.stories || [],
+          loading: {},
+          errors: {}
+        }));
+        return;
+      }
+
+      if (currentView === 'chapters' || currentView === 'chapter-bulk') {
+        const [storiesRes, chaptersRes] = await Promise.all([
+          apiClient('/author/stories'),
+          apiClient('/author/chapters')
+        ]);
+        setState(current => ({
+          ...current,
+          stories: storiesRes.stories || [],
+          chapters: chaptersRes.chapters || [],
+          loading: {},
+          errors: {}
+        }));
+        return;
+      }
+
+      if (currentView === 'revenue') {
+        const [storiesRes, revenueRes] = await Promise.all([
+          apiClient('/author/stories'),
+          apiClient('/author/revenue')
+        ]);
+        setState(current => ({
+          ...current,
+          stories: storiesRes.stories || [],
+          revenue: revenueRes.revenue || buildFallbackRevenue(),
+          loading: {},
+          errors: {}
+        }));
+        return;
+      }
+
+      if (currentView === 'promotions') {
+        const [storiesRes, promotionsRes] = await Promise.all([
+          apiClient('/author/stories'),
+          apiClient('/author/promotions')
+        ]);
+        setState(current => ({
+          ...current,
+          stories: storiesRes.stories || [],
+          promotions: promotionsRes.promotions || [],
+          packages: promotionsRes.packages?.length ? promotionsRes.packages : mockPromotionPackages,
+          loading: {},
+          errors: {}
+        }));
+        return;
+      }
+
+      const [statsRes, storiesRes, chaptersRes, revenueRes, promotionsRes] = await Promise.all([
+        apiClient('/author/stats'),
+        apiClient('/author/stories'),
+        apiClient('/author/chapters'),
+        apiClient('/author/revenue'),
+        apiClient('/author/promotions')
+      ]);
+      setState({
+        usingMock: false,
+        stats: statsRes.stats || null,
+        stories: storiesRes.stories || [],
+        chapters: chaptersRes.chapters || [],
+        currentStory: null,
+        revenue: revenueRes.revenue || buildFallbackRevenue(),
+        promotions: promotionsRes.promotions || [],
+        packages: promotionsRes.packages?.length ? promotionsRes.packages : mockPromotionPackages,
+        loading: {},
+        errors: {}
+      });
+    } catch (err) {
+      const message = err.message || 'Khong the tai du lieu tac gia.';
+      setState(current => ({
+        ...current,
+        loading: {},
+        errors: {
+          overview: message,
+          stories: message,
+          chapters: message,
+          revenue: message,
+          promotions: message
+        }
+      }));
+    }
+  }
+
   useEffect(() => {
-    loadAuthorData();
-  }, [apiClient]);
+    loadAuthorViewData();
+  }, [apiClient, currentView, params.id]);
 
   useEffect(() => {
     if (!toast) return undefined;
@@ -880,6 +1026,8 @@ export function StoryEditorForm({ story, loading, apiClient, usingMock, onSave }
 
   function validate(mode) {
     if (!form.title.trim()) return 'Vui lòng nhập tên truyện.';
+    if (form.description.trim().length < 20) return 'Mo ta can it nhat 20 ky tu.';
+    if (!form.genres.length) return 'Vui long chon it nhat mot the loai.';
     if (mode === 'draft') return '';
     if (form.description.trim().length < 80) return 'Mô tả cần ít nhất 80 ký tự.';
     if (!form.genres.length) return 'Vui lòng chọn ít nhất một thể loại.';
@@ -1022,6 +1170,8 @@ export function CoverUploader({ value, position = '50% 50%', storyId, apiClient,
     <section className="ad-cover-uploader">
       <div className="ad-cover-preview"><img src={value || coverFallback} alt="cover preview" style={{ objectPosition: position }} onError={handleImageError} /></div>
       <div>
+        {uploading && <small>Dang upload anh bia...</small>}
+        {error && <small className="ad-error-text">{error}</small>}
         <label>Upload ảnh bìa<input type="file" accept="image/*" onChange={event => handleFile(event.target.files?.[0])} /></label>
         <label>Hoặc nhập URL<input value={value} onChange={event => onChange(event.target.value, position)} placeholder="/images/cover-1.jpg" /></label>
         <label>Crop/position<select value={position} onChange={event => onChange(value, event.target.value)}><option value="50% 50%">Giữa</option><option value="50% 0%">Trên</option><option value="50% 100%">Dưới</option><option value="0% 50%">Trái</option><option value="100% 50%">Phải</option></select></label>

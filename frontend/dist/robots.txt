@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://daudotruyen.vn/sitemap.xml
+Sitemap: https://daudotruyen.vercel.app/sitemap.xml
