@@ -46,6 +46,10 @@ function isMemoryStore() {
   return storeName() === 'memory';
 }
 
+function isSupabaseStore() {
+  return !isMemoryStore();
+}
+
 function isCacheFresh() {
   return supabaseCache && Date.now() - supabaseCacheLoadedAt < SUPABASE_CACHE_TTL_MS;
 }
@@ -855,6 +859,53 @@ async function loadDb() {
   }
 }
 
+async function selectOneById(def, id) {
+  if (!isSupabaseStore()) return null;
+  const supabase = getSupabase();
+  const result = await supabase
+    .from(def.table)
+    .select('*')
+    .eq('id', id)
+    .maybeSingle();
+  if (result.error) throw new Error(supabaseErrorMessage(result, `${def.table}:selectOneById`));
+  return result.data ? fromRow(result.data, def) : null;
+}
+
+async function storySlugExists(slug, currentStoryId = '') {
+  if (!isSupabaseStore()) return false;
+  const supabase = getSupabase();
+  let query = supabase
+    .from(TABLES.stories.table)
+    .select('id')
+    .eq('slug', slug)
+    .limit(1);
+  if (currentStoryId) query = query.neq('id', currentStoryId);
+  const result = await query;
+  if (result.error) throw new Error(supabaseErrorMessage(result, 'stories:slugExists'));
+  return Boolean(result.data?.length);
+}
+
+async function createStoryWithRelations(story) {
+  if (!isSupabaseStore()) throw new Error('createStoryWithRelations requires Supabase store.');
+  const nextDb = normalizeSnapshot({ stories: [story] });
+  const taxonomy = buildTaxonomy(nextDb);
+  const storyRow = toRow(story, TABLES.stories);
+  delete storyRow.follows;
+
+  await saveTaxonomy(taxonomy);
+  await upsertRows(TABLES.stories.table, [storyRow]);
+  await deleteStoryRelationsFor([story.id]);
+  await saveStoryRelations(nextDb, taxonomy);
+
+  if (supabaseCache) {
+    supabaseCache.stories = [story, ...(supabaseCache.stories || []).filter(item => item.id !== story.id)];
+    supabaseCache.taxonomy = taxonomy;
+    supabaseCacheLoadedAt = Date.now();
+  }
+
+  return story;
+}
+
 async function saveDb(db, options = {}) {
   if (isMemoryStore()) {
     memoryDb = normalizeSnapshot(db);
@@ -951,5 +1002,8 @@ module.exports = {
   unlockChapter,
   unlockCombo,
   storeName,
+  selectOneById,
+  storySlugExists,
+  createStoryWithRelations,
   withLock
 };

@@ -1705,6 +1705,17 @@ function makeUniqueSlug(db, title, currentStoryId) {
   return slug;
 }
 
+async function makeUniqueSupabaseSlug(title, currentStoryId) {
+  const base = slugify(title || 'truyen-moi');
+  let slug = base;
+  let index = 2;
+  while (await dataStore.storySlugExists(slug, currentStoryId)) {
+    slug = `${base}-${index}`;
+    index += 1;
+  }
+  return slug;
+}
+
 function normalizeAuthorStoryInput(body, user, existingStory) {
   const categories = normalizeCategories(body.categories ?? body.genres ?? existingStory?.categories ?? existingStory?.genres ?? []);
   const tags = normalizeCategories(body.tags ?? existingStory?.tags ?? []);
@@ -1894,6 +1905,117 @@ function authorStorySummary(db, story, viewerId) {
   };
 }
 
+function emptyAuthorDb(story) {
+  return {
+    stories: story ? [story] : [],
+    chapters: [],
+    ratings: [],
+    bookmarks: [],
+    follows: [],
+    comments: [],
+    purchases: [],
+    transactions: []
+  };
+}
+
+async function getSupabaseAuthUser(req) {
+  const header = req.headers.authorization || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : '';
+  const payload = verifyToken(token);
+  if (!payload) return null;
+  const user = await dataStore.selectOneById({ table: 'users', map: {
+    id: 'id',
+    email: 'email',
+    passwordHash: 'password_hash',
+    salt: 'salt',
+    role: 'role',
+    status: 'status',
+    seeds: 'seeds',
+    tokenVersion: 'token_version',
+    name: 'name',
+    avatar: 'avatar_url',
+    cover: 'cover',
+    phone: 'phone',
+    birthday: 'birthday',
+    gender: 'gender',
+    address: 'address',
+    website: 'website',
+    bio: 'bio',
+    socialLinks: 'social_links',
+    preferences: 'preferences',
+    notificationPreferences: 'notification_preferences',
+    note: 'note',
+    sessionsRevokedAt: 'sessions_revoked_at',
+    deactivatedAt: 'deactivated_at',
+    createdAt: 'created_at',
+    updatedAt: 'updated_at'
+  } }, payload.id);
+  if (!user || user.status === 'deactivated' || user.status === 'locked') return null;
+  if (Number(payload.tokenVersion || 0) !== Number(user.tokenVersion || 0)) return null;
+  user.role = normalizeRole(user.role);
+  return user;
+}
+
+async function handleSupabaseAuthorStoryCreate(req, res) {
+  const requestPerf = createPerf('story:create:targeted');
+  const user = await getSupabaseAuthUser(req);
+  if (!user) return unauthorized(res);
+  if (!canPostStory(user.role)) return forbidden(res);
+  requestPerf.mark('auth');
+
+  const body = await parseBody(req);
+  const approvalStatus = authorStoryApprovalStatus(body, 'draft');
+  const payload = normalizeAuthorStoryInput(body, user);
+  const inputError = validateAuthorStoryPayload(payload, approvalStatus);
+  if (inputError) return badRequest(res, inputError);
+  requestPerf.mark('validate');
+
+  const timestamp = now();
+  const story = {
+    id: uid('story'),
+    ownerId: user.id,
+    slug: await makeUniqueSupabaseSlug(body.slug || payload.title),
+    title: payload.title,
+    author: payload.author,
+    translator: payload.translator,
+    cover: payload.cover,
+    coverPath: payload.coverPath,
+    coverPosition: payload.coverPosition,
+    shortDescription: payload.shortDescription,
+    description: payload.description,
+    status: payload.status,
+    language: payload.language,
+    ageRating: payload.ageRating,
+    hidden: true,
+    approvalStatus,
+    chapterCountEstimate: payload.chapterCountEstimate,
+    premium: payload.premium,
+    type: payload.type,
+    price: payload.price,
+    chapterPrice: payload.chapterPrice,
+    vipFromChapter: payload.vipFromChapter,
+    comboPrice: payload.comboPrice,
+    featured: false,
+    hot: false,
+    recommended: false,
+    banner: false,
+    views: 0,
+    rating: 4.5,
+    follows: 0,
+    categories: payload.categories,
+    tags: payload.tags,
+    chapterCount: 0,
+    latestChapter: null,
+    updatedAt: timestamp,
+    createdAt: timestamp
+  };
+  requestPerf.mark('slug');
+  await dataStore.createStoryWithRelations(story);
+  requestPerf.mark('db');
+  requestPerf.log();
+  return send(res, 201, { story: authorStorySummary(emptyAuthorDb(story), story, user.id), user: safeUser(user) });
+}
+
 function authorChapterSummary(db, chapter) {
   const story = db.stories.find(item => item.id === chapter.storyId);
   const purchases = db.purchases.filter(purchase => purchase.chapterId === chapter.id);
@@ -2003,6 +2125,10 @@ async function handle(req, res) {
           message: error.message
         });
       }
+    }
+
+    if (req.method === 'POST' && pathname === '/api/author/stories' && dataStore.storeName() !== 'memory') {
+      return await dataStore.withLock(() => handleSupabaseAuthorStoryCreate(req, res));
     }
 
     const runDbRequest = async () => {
