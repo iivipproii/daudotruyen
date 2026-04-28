@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { mockStories } from '../../data/mockStories';
+const isDev = import.meta.env.DEV;
+const LOAD_ERROR_MESSAGE = 'Không tải được dữ liệu từ máy chủ. Vui lòng thử lại.';
 
 const periodOptions = [
   { value: 'day', label: 'Ngày' },
@@ -120,6 +122,7 @@ export function RankingPage({ apiClient }) {
   const [stories, setStories] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [retryCount, setRetryCount] = useState(0);
 
   const period = searchParams.get('period') || 'week';
   const metric = searchParams.get('metric') || 'views';
@@ -134,12 +137,16 @@ export function RankingPage({ apiClient }) {
         const data = await apiClient(`/rankings?period=${encodeURIComponent(period)}&metric=${encodeURIComponent(metric)}&limit=100`);
         if (!alive) return;
         const apiStories = Array.isArray(data?.stories) ? data.stories.map(normalizeStory) : [];
-        setStories(apiStories.length ? apiStories : fallbackRankingStories(metric));
-        setError(apiStories.length ? '' : 'API /rankings chưa có dữ liệu, đang hiển thị dữ liệu mẫu.');
+        setStories(apiStories.length ? apiStories : isDev ? fallbackRankingStories(metric) : []);
+        setError('');
       } catch (err) {
         if (!alive) return;
-        setStories(fallbackRankingStories(metric));
-        setError(`${err.message || 'Không tải được API /rankings.'} Đang hiển thị dữ liệu mẫu.`);
+        console.error('[API_ERROR]', {
+          endpoint: '/rankings',
+          message: err?.message
+        });
+        setStories(isDev ? fallbackRankingStories(metric) : []);
+        setError(LOAD_ERROR_MESSAGE);
       } finally {
         if (alive) setLoading(false);
       }
@@ -148,7 +155,7 @@ export function RankingPage({ apiClient }) {
     return () => {
       alive = false;
     };
-  }, [apiClient, period, metric]);
+  }, [apiClient, period, metric, retryCount]);
 
   function updateQuery(patch) {
     const next = new URLSearchParams(searchParams);
@@ -174,9 +181,9 @@ export function RankingPage({ apiClient }) {
         <RankingLoading />
       ) : (
         <>
-          {error && <div className="rk-warning">{error}</div>}
-          <RankingPodium stories={stories.slice(0, 3)} metric={metric} />
-          <RankingTable stories={stories} metric={metric} period={period} />
+          {error && <div className="rk-warning">{error}<button type="button" onClick={() => setRetryCount(count => count + 1)}>Thử lại</button></div>}
+          {!error && <RankingPodium stories={stories.slice(0, 3)} metric={metric} />}
+          {!error && <RankingTable stories={stories} metric={metric} period={period} />}
         </>
       )}
     </div>

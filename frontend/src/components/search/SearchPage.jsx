@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { mockCategories, mockPopularSearches, mockStories } from '../../data/mockStories';
+const isDev = import.meta.env.DEV;
+const LOAD_ERROR_MESSAGE = 'Không tải được dữ liệu từ máy chủ. Vui lòng thử lại.';
 
 const defaultFilters = {
   q: '',
@@ -205,7 +207,11 @@ async function fetchSafe(apiClient, path) {
   if (!apiClient) return null;
   try {
     return await apiClient(path);
-  } catch {
+  } catch (error) {
+    console.error('[API_ERROR]', {
+      endpoint: path,
+      message: error?.message
+    });
     return null;
   }
 }
@@ -242,9 +248,10 @@ export function SearchPage({ apiClient, presetFilters = {} }) {
   const [filters, setFilters] = useState(() => filtersFromUrl(searchParams, params.category, presetFilters));
   const [draftQ, setDraftQ] = useState(filters.q);
   const [stories, setStories] = useState([]);
-  const [categories, setCategories] = useState(mockCategories);
+  const [categories, setCategories] = useState(isDev ? mockCategories : []);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [retryCount, setRetryCount] = useState(0);
   const { recent, saveRecent, clearRecent } = useRecentSearches();
 
   useEffect(() => {
@@ -272,18 +279,18 @@ export function SearchPage({ apiClient, presetFilters = {} }) {
         ...(rating?.stories || []),
         ...(chapters?.stories || [])
       ]);
-      const sourceStories = apiStories.length ? apiStories : uniqueStories(mockStories);
+      const sourceStories = apiStories.length ? apiStories : isDev ? uniqueStories(mockStories) : [];
       const nextCategories = (categoryData?.categories || []).map(repairText);
       setStories(sourceStories);
       setCategories(nextCategories.length ? nextCategories : categoriesFromStories(sourceStories));
-        setError(apiStories.length ? '' : 'Không kết nối được API, đang dùng dữ liệu dự phòng để tìm kiếm.');
+        setError(apiStories.length || isDev ? '' : LOAD_ERROR_MESSAGE);
       setLoading(false);
     }
     load();
     return () => {
       alive = false;
     };
-  }, [apiClient]);
+  }, [apiClient, retryCount]);
 
   const filteredStories = useMemo(() => {
     return stories.filter(story => storyMatchesFilters(story, filters)).sort(scoreSort(filters));
@@ -364,7 +371,7 @@ export function SearchPage({ apiClient, presetFilters = {} }) {
 
       <div className="sr-suggestion-row">
         <SuggestionGroup title="Tìm kiếm gần đây" items={recent} onSelect={useSuggestion} empty="Chưa có lịch sử tìm kiếm." action={recent.length ? <button type="button" onClick={clearRecent}>Xóa</button> : null} />
-        <SuggestionGroup title="Gợi ý phổ biến" items={mockPopularSearches} onSelect={useSuggestion} />
+        <SuggestionGroup title="Gợi ý phổ biến" items={isDev ? mockPopularSearches : []} onSelect={useSuggestion} />
       </div>
 
       <AdvancedFilters
@@ -382,6 +389,7 @@ export function SearchPage({ apiClient, presetFilters = {} }) {
         error={error}
         filters={filters}
         resetFilters={resetFilters}
+        onRetry={() => setRetryCount(count => count + 1)}
       />
     </div>
   );
@@ -483,7 +491,7 @@ export function SortSelect({ value, onChange }) {
   );
 }
 
-export function SearchResults({ stories, loading, error, filters, resetFilters }) {
+export function SearchResults({ stories, loading, error, filters, resetFilters, onRetry }) {
   if (loading) {
     return (
       <section className="sr-results">
@@ -497,9 +505,10 @@ export function SearchResults({ stories, loading, error, filters, resetFilters }
     <section className="sr-results">
       <div className="sr-results-head">
         <div>
-            <span>{error ? 'Dữ liệu dự phòng' : 'Results'}</span>
+            <span>{error ? 'Lỗi tải dữ liệu' : 'Results'}</span>
           <h2>{formatNumber(stories.length)} truyện phù hợp</h2>
           {error && <p>{error}</p>}
+          {error && <button type="button" onClick={onRetry}>Thử lại</button>}
         </div>
       </div>
 

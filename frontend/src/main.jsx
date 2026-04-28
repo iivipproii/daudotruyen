@@ -24,7 +24,7 @@ const API_BASE = (() => {
     return `${cleanBase}/api`;
   }
   if (import.meta.env.PROD) {
-    throw new Error('Missing VITE_API_BASE_URL for production build.');
+    throw new Error('Missing VITE_API_URL or VITE_API_BASE_URL for production build.');
   }
   return '/api';
 })();

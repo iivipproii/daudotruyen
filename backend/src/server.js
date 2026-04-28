@@ -122,12 +122,20 @@ function safeUser(user) {
 }
 
 function resolveCorsOrigins() {
-  const configured = String(process.env.ALLOWED_ORIGINS || process.env.CORS_ORIGINS || process.env.FRONTEND_ORIGIN || '')
+  const configured = [
+    process.env.CLIENT_URL,
+    process.env.FRONTEND_URL,
+    process.env.FRONTEND_ORIGIN,
+    process.env.ALLOWED_ORIGINS,
+    process.env.CORS_ORIGINS
+  ].filter(Boolean).join(',')
     .split(',')
     .map(item => item.trim())
     .filter(Boolean);
-  if (configured.length) return configured;
-  return process.env.NODE_ENV === 'production' ? DEFAULT_PRODUCTION_CORS_ORIGINS : DEFAULT_LOCAL_CORS_ORIGINS;
+  return Array.from(new Set([
+    ...(process.env.NODE_ENV === 'production' ? DEFAULT_PRODUCTION_CORS_ORIGINS : DEFAULT_LOCAL_CORS_ORIGINS),
+    ...configured
+  ]));
 }
 
 function corsHeaders(req) {
@@ -136,7 +144,7 @@ function corsHeaders(req) {
   const headers = {
     ...(origin && CORS_ORIGINS.includes(origin) ? { 'Access-Control-Allow-Origin': origin } : {}),
     ...(!origin ? { 'Access-Control-Allow-Origin': CORS_ORIGINS[0] || DEFAULT_PRODUCTION_CORS_ORIGINS[0] } : {}),
-    'Access-Control-Allow-Credentials': 'false',
+    'Access-Control-Allow-Credentials': 'true',
     'Access-Control-Allow-Methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
     'Access-Control-Allow-Headers': requestHeaders || 'Content-Type, Authorization',
     Vary: 'Origin, Access-Control-Request-Headers'
@@ -1945,7 +1953,22 @@ async function handle(req, res) {
     }
 
     if (req.method === 'GET' && pathname === '/api/health') {
-      return send(res, 200, { ok: true, app: 'Đậu Đỏ Truyện API', time: now() });
+      try {
+        await dataStore.health();
+        return send(res, 200, {
+          ok: true,
+          service: 'daudotruyen-api',
+          database: 'connected'
+        });
+      } catch (error) {
+        console.error('[DB_HEALTH_ERROR]', error);
+        return send(res, 500, {
+          ok: false,
+          service: 'daudotruyen-api',
+          database: 'disconnected',
+          error: error.message
+        });
+      }
     }
 
     if (req.method === 'GET' && pathname === '/api/health-db') {

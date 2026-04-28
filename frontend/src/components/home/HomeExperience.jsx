@@ -9,6 +9,8 @@ import {
 } from '../../data/mockStories';
 
 const coverFallback = '/images/cover-1.jpg';
+const isDev = import.meta.env.DEV;
+const LOAD_ERROR_MESSAGE = 'Không tải được dữ liệu từ máy chủ. Vui lòng thử lại.';
 
 const cp1252Map = {
   '€': 0x80,
@@ -128,10 +130,10 @@ function sortByDate(key) {
   return (a, b) => new Date(b[key] || 0).getTime() - new Date(a[key] || 0).getTime();
 }
 
-function buildHomeSlices(sourceStories = mockStories) {
-  const normalizedStories = normalizeStories(sourceStories.length ? sourceStories : mockStories);
+function buildHomeSlices(sourceStories = []) {
+  const normalizedStories = normalizeStories(sourceStories);
   const safeStories = normalizedStories.filter(isDisplaySafeStory);
-  const stories = safeStories.length ? safeStories : normalizeStories(mockStories).filter(isDisplaySafeStory);
+  const stories = safeStories;
   const byViews = stories.slice().sort(sortByNumber('views'));
   const byRating = stories.slice().sort(sortByNumber('rating'));
   const byUpdated = stories.slice().sort(sortByDate('updatedAt'));
@@ -176,7 +178,7 @@ async function fetchSafe(apiClient, path) {
   try {
     return await apiClient(path);
   } catch (error) {
-    console.warn('[HOME_API_FALLBACK]', {
+    console.error('[API_ERROR]', {
       path,
       url: error?.url,
       status: error?.status,
@@ -196,8 +198,8 @@ export function ProductionHeader({ user, logout, theme = 'light', toggleTheme, a
   const [searchOpen, setSearchOpen] = useState(false);
   const [userOpen, setUserOpen] = useState(false);
   const [notificationOpen, setNotificationOpen] = useState(false);
-  const [categories, setCategories] = useState(mockCategories);
-  const [stories, setStories] = useState(mockStories);
+  const [categories, setCategories] = useState(isDev ? mockCategories : []);
+  const [stories, setStories] = useState(isDev ? mockStories : []);
   const headerRef = useRef(null);
   const navId = 'prod-mobile-nav';
   const genreMenuId = 'prod-genre-menu';
@@ -211,8 +213,12 @@ export function ProductionHeader({ user, logout, theme = 'light', toggleTheme, a
       if (!alive) return;
       const nextStories = normalizeStories(storyData?.stories || []);
       const nextCategories = (categoryData?.categories || []).map(repairText);
-      setStories(nextStories.length ? nextStories : mockStories);
-      setCategories(nextCategories.length ? nextCategories : uniqueCategoriesFrom(nextStories.length ? nextStories : mockStories));
+      setStories(nextStories.length ? nextStories : isDev ? mockStories : []);
+      setCategories(nextCategories.length ? nextCategories : uniqueCategoriesFrom(nextStories.length ? nextStories : isDev ? mockStories : []));
+    }).catch(() => {
+      if (!alive) return;
+      setStories(isDev ? mockStories : []);
+      setCategories(isDev ? mockCategories : []);
     });
     return () => {
       alive = false;
@@ -739,7 +745,7 @@ export function UserDropdown({ user, logout, open, setOpen, closeAll, menuId }) 
 export function ProductionHome({ apiClient, currentUser }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [homeData, setHomeData] = useState(() => buildHomeSlices(mockStories));
+  const [homeData, setHomeData] = useState(() => buildHomeSlices(isDev ? mockStories : []));
   const [continueItems, setContinueItems] = useState([]);
 
   useEffect(() => {
@@ -775,10 +781,10 @@ export function ProductionHome({ apiClient, currentUser }) {
       ]);
       const unique = Array.from(new Map(merged.map(story => [story.id || story.slug, story])).values());
       const fallbackUsed = unique.length === 0;
-      const nextData = buildHomeSlices(fallbackUsed ? mockStories : unique);
+      const nextData = buildHomeSlices(isDev && fallbackUsed ? mockStories : unique);
       const apiCategories = ((home?.categories || fallback?.[5]?.categories) || []).map(repairText);
       setHomeData({ ...nextData, categories: apiCategories.length ? apiCategories : nextData.categories });
-      setError(fallbackUsed ? 'Không kết nối được API, đang hiển thị dữ liệu dự phòng cho trang chủ.' : '');
+      setError(fallbackUsed && !isDev ? LOAD_ERROR_MESSAGE : '');
       setLoading(false);
     }
 
@@ -798,7 +804,7 @@ export function ProductionHome({ apiClient, currentUser }) {
       const library = await fetchSafe(apiClient, '/me/library');
       if (!alive) return;
       const history = (library?.history || []).map(mapHistoryItem);
-      setContinueItems(history.length ? history : mockContinueReading);
+      setContinueItems(history.length ? history : isDev ? mockContinueReading : []);
     }
     loadLibrary();
     return () => {
@@ -816,7 +822,7 @@ export function ProductionHome({ apiClient, currentUser }) {
 
   return (
     <div className="home-production">
-      {error && <div className="prod-error-state">{error}</div>}
+      {error && <div className="prod-error-state">{error}<button type="button" onClick={() => window.location.reload()}>Thử lại</button></div>}
       <HeroSlider stories={homeData.hero} />
       <ContinueReadingSection user={currentUser} items={continueItems} />
       <StorySection kicker="Hot" title="Truyện hot" subtitle="Những bộ truyện có lượng đọc và theo dõi nổi bật trong cộng đồng." to="/danh-sach?sort=views">
@@ -871,7 +877,7 @@ function HomeLoading() {
 
 export function HeroSlider({ stories }) {
   const [active, setActive] = useState(0);
-  const slides = normalizeStories(stories?.length ? stories : mockStories.slice(0, 4)).filter(isDisplaySafeStory);
+  const slides = normalizeStories(stories?.length ? stories : isDev ? mockStories.slice(0, 4) : []).filter(isDisplaySafeStory);
   const current = slides.length ? slides[active % slides.length] : null;
 
   useEffect(() => {
@@ -1056,7 +1062,8 @@ export function ContinueReadingSection({ user, items }) {
 }
 
 export function RankingMini({ stories }) {
-  const list = stories?.length ? stories : mockStories.slice(0, 10);
+  const list = stories?.length ? stories : isDev ? mockStories.slice(0, 10) : [];
+  if (!list.length) return <RevealSection className="prod-ranking-mini"><div className="prod-empty-state">Chưa có dữ liệu xếp hạng.</div></RevealSection>;
   return (
     <RevealSection className="prod-ranking-mini">
       <div className="prod-section-head">
@@ -1084,7 +1091,7 @@ export function RankingMini({ stories }) {
 }
 
 export function GenreChips({ categories }) {
-  const items = categories?.length ? categories : mockCategories;
+  const items = categories?.length ? categories : isDev ? mockCategories : [];
   return (
     <RevealSection className="prod-genre-chips">
       <div className="prod-section-head">

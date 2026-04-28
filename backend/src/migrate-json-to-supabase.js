@@ -31,6 +31,9 @@ function validateImportPayload(db) {
 }
 
 async function main() {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('Refusing to seed or migrate bundled JSON data while NODE_ENV=production.');
+  }
   const source = validateImportPayload(readJsonDb());
   const current = await dataStore.loadDb();
   const shouldSeedUsers = !current.users || current.users.length === 0;
