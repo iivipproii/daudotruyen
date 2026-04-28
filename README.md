@@ -200,6 +200,7 @@ Backend service:
 Root directory: backend
 Build command: npm install
 Start command: npm start
+Health check path: /api/health
 ```
 
 Set these environment variables on the backend host:
@@ -217,6 +218,8 @@ SUPABASE_COVER_BUCKET=story-covers
 `backend/src/server.js` already accepts a comma-separated `FRONTEND_ORIGIN`, so you can allow both the current public Vercel domain and the legacy hyphenated domain during cutover.
 
 The backend reads `process.env.PORT`, so leave `PORT` to the hosting platform when it provides one.
+
+If Render logs show a Cloudflare `502 Bad Gateway` page for the Supabase host, verify that `SUPABASE_URL` points to an active Supabase project and that `SUPABASE_SERVICE_ROLE_KEY` belongs to that same project. Keep `DATA_STORE=supabase` in production; switching to `memory` only hides the outage and loses persistent data.
 
 Frontend service:
 

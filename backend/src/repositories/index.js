@@ -439,11 +439,78 @@ function fromRow(row, def) {
   return item;
 }
 
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function summarizeSupabaseMessage(value) {
+  const text = String(value || '')
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, ' ')
+    .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&#38;/g, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return text.length > 240 ? `${text.slice(0, 237)}...` : text;
+}
+
+function supabaseErrorMessage(result, table) {
+  const error = result?.error || result;
+  const status = result?.status || error?.status || error?.code || '';
+  const statusText = result?.statusText || error?.statusText || '';
+  const details = summarizeSupabaseMessage(error?.message || error?.details || error?.hint || error);
+  return [
+    `Supabase query failed for table "${table}"`,
+    status ? `status=${status}` : '',
+    statusText ? `statusText=${statusText}` : '',
+    details ? `message="${details}"` : ''
+  ].filter(Boolean).join(' ');
+}
+
+function isTransientSupabaseError(error) {
+  const text = String(error?.message || error || '').toLowerCase();
+  return /\b(502|503|504|econnreset|etimedout|fetch failed|bad gateway|service unavailable|gateway timeout|schema cache|retrying)\b/.test(text);
+}
+
 async function assertResult(result, table) {
   if (result.error) {
-    throw new Error(`${table}: ${result.error.message}`);
+    throw new Error(supabaseErrorMessage(result, table));
   }
   return result.data || [];
+}
+
+async function runSupabaseRead(table, operation) {
+  const attempts = 4;
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (attempt === attempts || !isTransientSupabaseError(error)) break;
+      await sleep(250 * attempt);
+    }
+  }
+  throw lastError;
+}
+
+async function mapWithConcurrency(items, limit, mapper) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await mapper(items[index], index);
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(limit, items.length) }, worker);
+  await Promise.all(workers);
+  return results;
 }
 
 async function selectAll(table) {
@@ -452,11 +519,13 @@ async function selectAll(table) {
   let from = 0;
 
   while (true) {
-    const result = await supabase
-      .from(table)
-      .select('*')
-      .range(from, from + PAGE_SIZE - 1);
-    const page = await assertResult(result, table);
+    const page = await runSupabaseRead(table, async () => {
+      const result = await supabase
+        .from(table)
+        .select('*')
+        .range(from, from + PAGE_SIZE - 1);
+      return assertResult(result, table);
+    });
     rows.push(...page);
     if (page.length < PAGE_SIZE) break;
     from += PAGE_SIZE;
@@ -572,12 +641,12 @@ function buildTaxonomy(db) {
 }
 
 async function loadRelations(db) {
-  const [categoryRows, tagRows, storyCategoryRows, storyTagRows] = await Promise.all([
-    selectAll('taxonomy_categories'),
-    selectAll('taxonomy_tags'),
-    selectAll('story_categories'),
-    selectAll('story_tags')
-  ]);
+  const [categoryRows, tagRows, storyCategoryRows, storyTagRows] = await mapWithConcurrency([
+    'taxonomy_categories',
+    'taxonomy_tags',
+    'story_categories',
+    'story_tags'
+  ], 2, table => selectAll(table));
 
   db.taxonomy = {
     categories: categoryRows.map(taxonomyFromRow),
@@ -686,8 +755,10 @@ async function deleteStoryRelationsFor(storyIds = []) {
 }
 
 async function loadSupabaseDb() {
-  const pairs = await Promise.all(
-    LOAD_DEFS.map(async def => [def.key, (await selectAll(def.table)).map(row => fromRow(row, def))])
+  const pairs = await mapWithConcurrency(
+    LOAD_DEFS,
+    3,
+    async def => [def.key, (await selectAll(def.table)).map(row => fromRow(row, def))]
   );
   const db = pairs.reduce((acc, [key, rows]) => {
     acc[key] = rows;
@@ -753,8 +824,10 @@ async function health() {
   if (isMemoryStore()) {
     return { ok: true, database: 'memory', time: new Date().toISOString() };
   }
-  const result = await getSupabase().from('users').select('id').limit(1);
-  await assertResult(result, 'users');
+  await runSupabaseRead('users', async () => {
+    const result = await getSupabase().from('users').select('id').limit(1);
+    await assertResult(result, 'users');
+  });
   return { ok: true, database: 'supabase', time: new Date().toISOString() };
 }
 
