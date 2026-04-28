@@ -22,6 +22,7 @@ const DEFAULT_LOCAL_CORS_ORIGINS = [
   'http://localhost:3000'
 ];
 const DEFAULT_PRODUCTION_CORS_ORIGINS = ['https://daudotruyen.vercel.app'];
+const VERCEL_PREVIEW_ORIGIN_PATTERN = /^https:\/\/daudotruyen(?:-git-[a-z0-9-]+|-[-a-z0-9]+-iivipproiis-projects)\.vercel\.app$/i;
 const PUBLIC_CACHE_CONTROL = 'public, max-age=60, s-maxage=300, stale-while-revalidate=86400';
 const NO_STORE_CACHE_CONTROL = 'no-store, max-age=0';
 const CORS_ORIGINS = resolveCorsOrigins();
@@ -141,8 +142,9 @@ function resolveCorsOrigins() {
 function corsHeaders(req) {
   const origin = req.headers && req.headers.origin;
   const requestHeaders = req.headers && req.headers['access-control-request-headers'];
+  const allowOrigin = origin && (CORS_ORIGINS.includes(origin) || VERCEL_PREVIEW_ORIGIN_PATTERN.test(origin));
   const headers = {
-    ...(origin && CORS_ORIGINS.includes(origin) ? { 'Access-Control-Allow-Origin': origin } : {}),
+    ...(allowOrigin ? { 'Access-Control-Allow-Origin': origin } : {}),
     ...(!origin ? { 'Access-Control-Allow-Origin': CORS_ORIGINS[0] || DEFAULT_PRODUCTION_CORS_ORIGINS[0] } : {}),
     'Access-Control-Allow-Credentials': 'true',
     'Access-Control-Allow-Methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
