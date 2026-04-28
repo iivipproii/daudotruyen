@@ -187,6 +187,11 @@ function send(res, status, body, extraHeaders = {}) {
   res.end(payload);
 }
 
+function isDatabaseAvailabilityError(error) {
+  const message = String(error?.message || error || '').toLowerCase();
+  return /\b(supabase|database|schema cache|upstream request timeout|fetch failed|bad gateway|service unavailable|gateway timeout|econnreset|etimedout)\b/.test(message);
+}
+
 function clientIp(req) {
   return String(req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'local').split(',')[0].trim();
 }
@@ -1950,6 +1955,22 @@ async function handle(req, res) {
   try {
     if (!checkRateLimit(req, pathname)) {
       return send(res, 429, { message: 'Qua nhieu request. Vui long thu lai sau.' });
+    }
+
+    if (req.method === 'GET' && pathname === '/') {
+      return send(res, 200, {
+        name: 'Äáº­u Äá» Truyá»‡n API',
+        status: 'ok',
+        message: 'Backend Ä‘ang hoáº¡t Ä‘á»™ng',
+      });
+    }
+
+    if (req.method === 'GET' && pathname === '/healthz') {
+      return send(res, 200, {
+        status: 'ok',
+        uptime: process.uptime(),
+        timestamp: new Date().toISOString(),
+      });
     }
 
     if (req.method === 'GET' && pathname === '/api/health') {
@@ -4176,28 +4197,18 @@ async function handle(req, res) {
       return send(res, 200, { ok: true });
     }
 
-    if (req.method === 'GET' && pathname === '/') {
-  return send(res, 200, {
-    name: 'Đậu Đỏ Truyện API',
-    status: 'ok',
-    message: 'Backend đang hoạt động',
-  });
-}
-
-if (req.method === 'GET' && pathname === '/healthz') {
-  return send(res, 200, {
-    status: 'ok',
-    uptime: process.uptime(),
-    timestamp: new Date().toISOString(),
-  });
-}
-
 return notFound(res);
     };
 
-    return req.method === 'GET' ? runDbRequest() : dataStore.withLock(runDbRequest);
+    return await (req.method === 'GET' ? runDbRequest() : dataStore.withLock(runDbRequest));
   } catch (error) {
     console.error(error);
+    if (isDatabaseAvailabilityError(error)) {
+      return send(res, 503, {
+        message: 'Database temporarily unavailable',
+        error: error.message || 'Database request failed'
+      });
+    }
     return send(res, 500, { message: error.message || 'Lỗi máy chủ.' });
   }
 }
