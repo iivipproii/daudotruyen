@@ -5,6 +5,7 @@ const mammoth = require('mammoth');
 const dataStore = require('./db');
 const storage = require('./services/storage');
 const { normalizeRole, isAdmin, canPostStory } = require('./permissions');
+const { validateTextFields, validateCleanText } = require('./text-quality');
 
 const PORT = Number(process.env.PORT || 4000);
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
@@ -197,6 +198,10 @@ function parseBody(req) {
       }
     });
   });
+}
+
+function normalizeIncomingTextFields(target, fields, context) {
+  return validateTextFields(target, fields, context);
 }
 
 function readRawBody(req, limit = UPLOAD_LIMIT) {
@@ -3013,9 +3018,13 @@ async function handle(req, res) {
         return badRequest(res, 'Gia chuong VIP phai lon hon 0.');
       }
       requestPerf.mark('validate');
-      ['title', 'content', 'preview'].forEach(key => {
-        if (body[key] !== undefined) chapter[key] = String(body[key]).trim();
-      });
+      try {
+        ['title', 'content', 'preview'].forEach(key => {
+          if (body[key] !== undefined) chapter[key] = validateCleanText(String(body[key]).trim(), `chapter.${key}`);
+        });
+      } catch (error) {
+        return badRequest(res, error.message);
+      }
       if (body.storyId) chapter.storyId = targetStory.id;
       if (body.number !== undefined) chapter.number = Number(body.number);
       if (body.isPremium !== undefined || body.access !== undefined) chapter.isPremium = Boolean(body.isPremium ?? body.access === 'vip');
@@ -3768,9 +3777,16 @@ async function handle(req, res) {
         if (db.stories.some(item => item.id !== story.id && item.slug === nextSlug)) return badRequest(res, 'Slug da ton tai.');
         story.slug = nextSlug;
       }
-      ['title','author','translator','cover','description','status','language','ageRating','type'].forEach(key => {
-        if (body[key] !== undefined) story[key] = String(body[key]);
-      });
+      try {
+        ['title','author','translator','cover','description','status','language','ageRating','type'].forEach(key => {
+          if (body[key] !== undefined) {
+            const value = String(body[key]);
+            story[key] = ['cover', 'status', 'ageRating', 'type'].includes(key) ? value : validateCleanText(value, `story.${key}`);
+          }
+        });
+      } catch (error) {
+        return badRequest(res, error.message);
+      }
       if (body.hidden !== undefined) story.hidden = Boolean(body.hidden);
       if (body.approvalStatus !== undefined) {
         if (!VALID_STORY_APPROVAL_STATUSES.includes(body.approvalStatus)) return badRequest(res, 'Trang thai duyet khong hop le.');
@@ -3945,9 +3961,13 @@ async function handle(req, res) {
         if (chapterNumberExists(db, chapter.storyId, nextNumber, chapter.id)) return badRequest(res, 'So chuong da ton tai trong truyen nay.');
         chapter.number = nextNumber;
       }
-      ['title','content','preview'].forEach(key => {
-        if (body[key] !== undefined) chapter[key] = String(body[key]);
-      });
+      try {
+        ['title','content','preview'].forEach(key => {
+          if (body[key] !== undefined) chapter[key] = validateCleanText(String(body[key]), `chapter.${key}`);
+        });
+      } catch (error) {
+        return badRequest(res, error.message);
+      }
       if (body.isPremium !== undefined || body.vip !== undefined) chapter.isPremium = Boolean(body.isPremium ?? body.vip);
       if (body.price !== undefined) chapter.price = Number(body.price);
       const wasPublic = isPublicChapter(chapter);
@@ -4002,8 +4022,8 @@ async function handle(req, res) {
 }
 
 function normalizeCategories(input) {
-  if (Array.isArray(input)) return input.map(item => String(item).trim()).filter(Boolean);
-  return String(input || '').split(',').map(item => item.trim()).filter(Boolean);
+  if (Array.isArray(input)) return input.map((item, index) => validateCleanText(String(item).trim(), `categories[${index}]`)).filter(Boolean);
+  return String(input || '').split(',').map((item, index) => validateCleanText(item.trim(), `categories[${index}]`)).filter(Boolean);
 }
 
 function isEmail(value) {
@@ -4021,6 +4041,11 @@ function parsePositiveNumber(value, fallback = 0) {
 }
 
 function validateStoryInput(body) {
+  try {
+    normalizeIncomingTextFields(body, ['title', 'author', 'description', 'translator', 'language', 'rejectionReason', 'rejectReason'], 'story');
+  } catch (error) {
+    return error.message;
+  }
   const title = String(body.title || '').trim();
   const author = String(body.author || '').trim();
   const description = String(body.description || '').trim();
@@ -4033,6 +4058,11 @@ function validateStoryInput(body) {
 }
 
 function validateChapterInput(body) {
+  try {
+    normalizeIncomingTextFields(body, ['title', 'content', 'preview', 'rejectionReason'], 'chapter');
+  } catch (error) {
+    return error.message;
+  }
   const title = String(body.title || '').trim();
   const content = String(body.content || '').trim();
   if (!title) return 'Tiêu đề chương là bắt buộc.';

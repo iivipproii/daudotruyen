@@ -7,6 +7,7 @@ process.env.DATA_STORE = 'supabase';
 
 const { createSeedDb } = require('./server');
 const dataStore = require('./db');
+const { validateTextFields } = require('./text-quality');
 
 const DB_PATH = path.join(__dirname, '..', 'data', 'db.json');
 
@@ -17,8 +18,20 @@ function readJsonDb() {
   return JSON.parse(fs.readFileSync(DB_PATH, 'utf8'));
 }
 
+function validateImportPayload(db) {
+  (db.stories || []).forEach(story => {
+    validateTextFields(story, ['title', 'author', 'translator', 'description', 'language', 'rejectionReason'], `story:${story.id || story.slug}`);
+    (story.categories || []).forEach((category, index) => validateTextFields({ category }, ['category'], `story:${story.id || story.slug}.categories[${index}]`));
+    (story.tags || []).forEach((tag, index) => validateTextFields({ tag }, ['tag'], `story:${story.id || story.slug}.tags[${index}]`));
+  });
+  (db.chapters || []).forEach(chapter => {
+    validateTextFields(chapter, ['title', 'content', 'preview', 'rejectionReason'], `chapter:${chapter.id || chapter.storyId}`);
+  });
+  return db;
+}
+
 async function main() {
-  const source = readJsonDb();
+  const source = validateImportPayload(readJsonDb());
   const current = await dataStore.loadDb();
   const shouldSeedUsers = !current.users || current.users.length === 0;
   const payload = shouldSeedUsers ? source : {
