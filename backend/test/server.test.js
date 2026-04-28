@@ -88,6 +88,37 @@ test.before(async () => {
   baseUrl = `http://127.0.0.1:${port}`;
 });
 
+test('CORS preflight allows the production frontend origin', async () => {
+  const response = await fetch(`${baseUrl}/api/stories`, {
+    method: 'OPTIONS',
+    headers: {
+      Origin: 'https://daudotruyen.vercel.app',
+      'Access-Control-Request-Method': 'GET',
+      'Access-Control-Request-Headers': 'Content-Type, Authorization'
+    }
+  });
+
+  assert.equal(response.status, 204);
+  assert.equal(response.headers.get('access-control-allow-origin'), 'https://daudotruyen.vercel.app');
+  assert.match(response.headers.get('access-control-allow-methods') || '', /GET/);
+  assert.match(response.headers.get('access-control-allow-methods') || '', /OPTIONS/);
+  assert.match(response.headers.get('access-control-allow-headers') || '', /Content-Type/);
+  assert.match(response.headers.get('access-control-allow-headers') || '', /Authorization/);
+});
+
+test('protected API 401 responses still include CORS headers', async () => {
+  const response = await fetch(`${baseUrl}/api/me/library`, {
+    headers: {
+      Origin: 'https://daudotruyen.vercel.app'
+    }
+  });
+  const data = await response.json();
+
+  assert.equal(response.status, 401);
+  assert.equal(response.headers.get('access-control-allow-origin'), 'https://daudotruyen.vercel.app');
+  assert.ok(data.message);
+});
+
 test.after(async () => {
   await new Promise(resolve => server.close(resolve));
   resetDataStore({});

@@ -685,7 +685,7 @@ export function AuthorStoryTable({ stories, onUpdate, onDelete }) {
         <div className="header"><span>Truyện</span><span>Duyệt</span><span>Xuất bản</span><span>Chương</span><span>Lượt đọc</span><span>Doanh thu</span><span>Thao tác</span></div>
         {filtered.map(story => (
           <div key={story.id}>
-            <span className="ad-story-cell"><img src={story.cover || coverFallback} alt={story.title} onError={handleImageError} /><b>{story.title}</b></span>
+            <span className="ad-story-cell"><img src={story.cover || coverFallback} alt={story.title} loading="lazy" decoding="async" onError={handleImageError} /><b>{story.title}</b></span>
             <span className="ad-badge-stack"><StatusBadge status={story.approvalStatus} />{story.hidden && <StatusBadge hidden />}</span>
             <span>{statusText(story.status)} · {story.hidden ? 'Đang ẩn' : story.approvalStatus === 'approved' ? 'Đã xuất bản' : 'Chưa public'}</span>
             <span>{formatNumber(story.chapters ?? story.chapterCount)}</span>
@@ -816,7 +816,7 @@ function AuthorStoryDashboardView({ stories, onUpdate, onDelete }) {
 function StoryManagementRow({ story, onUpdate, onDelete }) {
   return (
     <div>
-      <span className="ad-story-cell"><img src={story.cover || coverFallback} alt={story.title} onError={handleImageError} /><b>{story.title}</b></span>
+            <span className="ad-story-cell"><img src={story.cover || coverFallback} alt={story.title} loading="lazy" decoding="async" onError={handleImageError} /><b>{story.title}</b></span>
       <span className="ad-badge-stack"><StatusBadge status={story.approvalStatus} />{story.hidden && <StatusBadge hidden />}</span>
       <span>{statusText(story.status)} · {story.hidden ? 'Đang ẩn' : story.approvalStatus === 'approved' ? 'Đã public' : 'Chưa public'}</span>
       <span>{formatNumber(story.chapters ?? story.chapterCount)}</span>
@@ -832,7 +832,7 @@ function StoryManagementCard({ story, onUpdate, onDelete }) {
   return (
     <article className="ad-story-card">
       <div className="ad-story-cover">
-        <img src={story.cover || coverFallback} alt={story.title} onError={handleImageError} />
+                <img src={story.cover || coverFallback} alt={story.title} loading="lazy" decoding="async" onError={handleImageError} />
         <span className="ad-cover-badges"><StatusBadge status={story.approvalStatus} />{story.hidden && <StatusBadge hidden />}</span>
       </div>
       <div className="ad-story-card-body">
@@ -1089,7 +1089,7 @@ export function GenreMultiSelect({ label, options, selected, onChange, max }) {
 function StoryPreview({ story }) {
   return (
     <article className="ad-story-preview">
-      <img src={story.cover || coverFallback} alt={story.title || 'preview'} onError={handleImageError} />
+          <img src={story.cover || coverFallback} alt={story.title || 'preview'} loading="lazy" decoding="async" onError={handleImageError} />
       <div>
         <span>{story.genres?.join(' · ') || 'Chưa chọn thể loại'}</span>
         <h3>{story.title || 'Tên truyện preview'}</h3>
@@ -1137,7 +1137,7 @@ function StorySearchPicker({ stories, selectedStoryId, onSelect, placeholder = '
         <div className="ad-story-suggestions">
           {suggestions.map(story => (
             <button type="button" key={story.id} onMouseDown={event => event.preventDefault()} onClick={() => choose(story)}>
-              <img src={story.cover || coverFallback} alt="" onError={handleImageError} />
+          <img src={story.cover || coverFallback} alt="" loading="lazy" decoding="async" onError={handleImageError} />
               <span><strong>{story.title}</strong><small>{story.author || 'Tác giả'} · {(story.genres || story.categories || []).slice(0, 2).join(' · ')}</small></span>
             </button>
           ))}
@@ -1304,7 +1304,7 @@ function AuthorPrivatePreview({ story, chapters, loading }) {
         <Link className="ad-secondary" to={`/author/stories/${story.id}/edit`}>Sửa truyện</Link>
       </div>
       <article className="ad-private-preview">
-        <img src={story.cover || coverFallback} alt={story.title} onError={handleImageError} />
+        <img src={story.cover || coverFallback} alt={story.title} loading="lazy" decoding="async" onError={handleImageError} />
         <div>
           <div className="ad-badge-stack"><StatusBadge status={story.approvalStatus} />{story.hidden && <StatusBadge hidden />}</div>
           <h3>{story.title}</h3>

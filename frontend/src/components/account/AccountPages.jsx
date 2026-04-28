@@ -400,7 +400,7 @@ export function LibraryTabs({ library }) {
 function LibraryMiniRow({ item }) {
   return (
     <Link className="acct-library-mini" to={`/truyen/${item.story.slug}/chuong/${item.chapter?.number || 1}`}>
-      <img src={item.story.cover || coverFallback} alt={item.story.title} loading="lazy" onError={handleImageError} />
+              <img src={item.story.cover || coverFallback} alt={item.story.title} decoding="async" loading="lazy" onError={handleImageError} />
       <span><strong>{item.story.title}</strong><small>{item.chapter?.title || 'Chương đang đọc'}</small><em><i style={{ width: `${Math.min(100, item.progress || 8)}%` }} /></em></span>
       <b>Đọc tiếp</b>
     </Link>
@@ -461,7 +461,7 @@ export function BookmarksPage({ apiClient }) {
 function BookmarkRow({ item, onRemove }) {
   return (
     <article className="acct-bookmark-row">
-      <img src={item.story.cover || coverFallback} alt={item.story.title} loading="lazy" onError={handleImageError} />
+              <img src={item.story.cover || coverFallback} alt={item.story.title} decoding="async" loading="lazy" onError={handleImageError} />
       <div>
         <h3>{item.story.title}</h3>
         <p>{item.chapter?.title || `Chương ${item.chapter?.number || 1}`} · Vị trí đọc {item.position || 20}%</p>
@@ -505,7 +505,7 @@ export function ReadingHistoryPage({ apiClient }) {
 function HistoryRow({ item, onRemove }) {
   return (
     <article className="acct-history-row">
-      <img src={item.story.cover || coverFallback} alt={item.story.title} loading="lazy" onError={handleImageError} />
+              <img src={item.story.cover || coverFallback} alt={item.story.title} decoding="async" loading="lazy" onError={handleImageError} />
       <div>
         <h3>{item.story.title}</h3>
         <p>{item.chapter?.title || `Chương ${item.chapterNumber || 1}`}</p>

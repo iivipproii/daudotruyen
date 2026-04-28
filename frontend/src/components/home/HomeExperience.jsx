@@ -207,7 +207,7 @@ export function ProductionHeader({ user, logout, theme = 'light', toggleTheme, a
 
   useEffect(() => {
     let alive = true;
-    Promise.all([fetchSafe(apiClient, '/categories'), fetchSafe(apiClient, '/stories?sort=views')]).then(([categoryData, storyData]) => {
+    Promise.all([fetchSafe(apiClient, '/categories?limit=32'), fetchSafe(apiClient, '/stories?sort=views&limit=8')]).then(([categoryData, storyData]) => {
       if (!alive) return;
       const nextStories = normalizeStories(storyData?.stories || []);
       const nextCategories = (categoryData?.categories || []).map(repairText);
@@ -747,34 +747,36 @@ export function ProductionHome({ apiClient, currentUser }) {
 
     async function loadHome() {
       setLoading(true);
-      const [created, updated, featured, hot, recommended, banner, views, completed, categories] = await Promise.all([
+      const home = await fetchSafe(apiClient, '/home');
+      const fallback = home ? null : await Promise.all([
         fetchSafe(apiClient, '/stories?sort=created&limit=20'),
         fetchSafe(apiClient, '/stories?sort=updated&limit=20'),
         fetchSafe(apiClient, '/stories?featured=true&sort=rating&limit=20'),
-        fetchSafe(apiClient, '/stories?hot=true&sort=updated&limit=24'),
-        fetchSafe(apiClient, '/stories?recommended=true&sort=updated&limit=20'),
-        fetchSafe(apiClient, '/stories?banner=true&sort=updated&limit=10'),
         fetchSafe(apiClient, '/stories?sort=views&limit=20'),
         fetchSafe(apiClient, '/stories?status=completed&sort=updated&limit=20'),
-        fetchSafe(apiClient, '/categories')
+        fetchSafe(apiClient, '/categories?limit=30')
       ]);
 
       if (!alive) return;
 
-      const merged = normalizeStories([
-        ...(created?.stories || []),
-        ...(featured?.stories || []),
-        ...(hot?.stories || []),
-        ...(recommended?.stories || []),
-        ...(banner?.stories || []),
-        ...(views?.stories || []),
-        ...(updated?.stories || []),
-        ...(completed?.stories || [])
+      const merged = normalizeStories(home ? [
+        ...(home?.banners || []),
+        ...(home?.updatedStories || []),
+        ...(home?.popularStories || []),
+        ...(home?.completedStories || []),
+        ...(home?.featuredStories || []),
+        ...(home?.recommendedStories || [])
+      ] : [
+        ...(fallback?.[0]?.stories || []),
+        ...(fallback?.[1]?.stories || []),
+        ...(fallback?.[2]?.stories || []),
+        ...(fallback?.[3]?.stories || []),
+        ...(fallback?.[4]?.stories || [])
       ]);
       const unique = Array.from(new Map(merged.map(story => [story.id || story.slug, story])).values());
       const fallbackUsed = unique.length === 0;
       const nextData = buildHomeSlices(fallbackUsed ? mockStories : unique);
-      const apiCategories = (categories?.categories || []).map(repairText);
+      const apiCategories = ((home?.categories || fallback?.[5]?.categories) || []).map(repairText);
       setHomeData({ ...nextData, categories: apiCategories.length ? apiCategories : nextData.categories });
       setError(fallbackUsed ? 'Không kết nối được API, đang hiển thị dữ liệu dự phòng cho trang chủ.' : '');
       setLoading(false);
@@ -893,6 +895,14 @@ export function HeroSlider({ stories }) {
 
   return (
     <section className="prod-hero-slider" style={{ '--hero-image': `url("${current.banner || current.cover || '/images/hero.jpg'}")` }}>
+      <img
+        src={current.banner || current.cover || '/images/hero.jpg'}
+        alt={current.title}
+        fetchPriority="high"
+        decoding="async"
+        className="prod-hero-media"
+        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}
+      />
       <div className="prod-hero-overlay" />
       <button className="prod-hero-arrow prev" type="button" onClick={goPrev} aria-label="Truyện nổi bật trước">‹</button>
       <div className="prod-hero-content">
@@ -922,7 +932,7 @@ export function HeroSlider({ stories }) {
             onClick={() => setActive(index)}
             aria-label={`Chọn ${story.title}`}
           >
-            <img src={story.cover || coverFallback} alt={story.title} loading="lazy" onError={handleImageError} />
+            <img src={story.cover || coverFallback} alt={story.title} decoding="async" loading="lazy" onError={handleImageError} />
             <span>{story.title}</span>
           </button>
         ))}
@@ -946,7 +956,7 @@ export function StoryCard({ story }) {
   return (
     <article className="prod-story-card">
       <Link to={`/truyen/${story.slug}`} className="prod-card-cover" aria-label={story.title}>
-        <img src={story.cover || coverFallback} alt={story.title} loading="lazy" onError={handleImageError} />
+        <img src={story.cover || coverFallback} alt={story.title} decoding="async" loading="lazy" onError={handleImageError} />
         <span className="prod-badge-row">
           {isHot && <b className="hot">HOT</b>}
           {isFull && <b className="full">FULL</b>}
@@ -1032,7 +1042,7 @@ export function ContinueReadingSection({ user, items }) {
       <div className="prod-continue-grid">
         {items.slice(0, 3).map(item => (
           <Link key={item.id} to={`/truyen/${item.story.slug}/chuong/${item.chapterNumber}`} className="prod-continue-card">
-            <img src={item.story.cover || coverFallback} alt={item.story.title} loading="lazy" onError={handleImageError} />
+            <img src={item.story.cover || coverFallback} alt={item.story.title} decoding="async" loading="lazy" onError={handleImageError} />
             <div>
               <strong>{item.story.title}</strong>
               <span>Chương {item.chapterNumber}</span>

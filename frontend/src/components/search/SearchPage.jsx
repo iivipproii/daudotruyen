@@ -354,7 +354,7 @@ export function SearchPage({ apiClient, presetFilters = {} }) {
             <strong>Kết quả nhanh</strong>
             {quickResults.map(story => (
               <Link key={story.id || story.slug} to={`/truyen/${story.slug}`}>
-                <img src={story.cover || coverFallback} alt={story.title} loading="lazy" onError={handleImageError} />
+                <img src={story.cover || coverFallback} alt={story.title} decoding="async" loading="lazy" onError={handleImageError} />
                 <span>{story.title}<small>{story.author}</small></span>
               </Link>
             ))}
@@ -523,7 +523,7 @@ function SearchResultCard({ story }) {
   return (
     <article className="sr-result-card">
       <Link to={`/truyen/${story.slug}`} className="sr-result-cover">
-        <img src={story.cover || coverFallback} alt={story.title} loading="lazy" onError={handleImageError} />
+              <img src={story.cover || coverFallback} alt={story.title} decoding="async" loading="lazy" onError={handleImageError} />
         {story.premium && <b>VIP</b>}
       </Link>
       <div className="sr-result-copy">

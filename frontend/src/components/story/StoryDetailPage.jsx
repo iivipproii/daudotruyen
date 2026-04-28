@@ -405,7 +405,7 @@ export function StoryDetailHero({ story, chapters, continueProgress, firstChapte
   return (
     <section className="sd-hero" style={{ '--sd-bg': `url("${story.banner || story.cover || coverFallback}")` }}>
       <div className="sd-cover-wrap">
-        <img src={story.cover || coverFallback} alt={story.title} loading="lazy" onError={handleImageError} />
+      <img src={story.cover || coverFallback} alt={story.title} decoding="async" loading="lazy" onError={handleImageError} />
         {story.premium && <b>VIP</b>}
       </div>
       <div className="sd-hero-copy">
@@ -620,7 +620,7 @@ function SidebarBlock({ title, to, stories }) {
       <div><h3>{title}</h3><Link to={to}>Xem thêm</Link></div>
       {stories.length ? stories.map(story => (
         <Link key={story.id || story.slug} to={`/truyen/${story.slug}`} className="sd-side-story">
-          <img src={story.cover || coverFallback} alt={story.title} loading="lazy" onError={handleImageError} />
+          <img src={story.cover || coverFallback} alt={story.title} decoding="async" loading="lazy" onError={handleImageError} />
           <span><strong>{story.title}</strong><small>{story.author} · ★ {story.rating}</small></span>
         </Link>
       )) : <p className="sd-side-empty">Chưa có gợi ý phù hợp.</p>}

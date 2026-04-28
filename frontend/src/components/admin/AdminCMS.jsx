@@ -820,7 +820,7 @@ function StoriesTab({ busy = false, stories, taxonomy, onLoadStories, onStoriesL
 function StoryCell({ story }) {
   return (
     <div className="cms-story-cell">
-      <img src={story.cover || '/images/cover-1.jpg'} alt={story.title} loading="lazy" />
+                  <img src={story.cover || '/images/cover-1.jpg'} alt={story.title} decoding="async" loading="lazy" />
       <span>
         <strong>{story.title}</strong>
         <small>{story.author} · {story.categories.slice(0, 2).join(', ')}</small>

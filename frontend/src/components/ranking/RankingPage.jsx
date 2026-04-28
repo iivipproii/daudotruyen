@@ -226,7 +226,7 @@ export function RankingPodium({ stories, metric }) {
         return (
           <Link key={story.id || story.slug} to={`/truyen/${story.slug}`} className={`rk-podium-card rank-${actualRank}`}>
             <b>#{actualRank}</b>
-            <img src={story.cover || coverFallback} alt={story.title} loading="lazy" onError={handleImageError} />
+                <img src={story.cover || coverFallback} alt={story.title} decoding="async" loading="lazy" onError={handleImageError} />
             <span>
               <strong>{story.title}</strong>
               <small>{story.author}</small>
@@ -265,7 +265,7 @@ export function RankingTable({ stories, metric, period }) {
           <Link key={story.id || story.slug} to={`/truyen/${story.slug}`} className="rk-table-row" role="row">
             <span className="rk-rank">#{index + 1}</span>
             <span className="rk-story-cell">
-              <img src={story.cover || coverFallback} alt={story.title} loading="lazy" onError={handleImageError} />
+              <img src={story.cover || coverFallback} alt={story.title} decoding="async" loading="lazy" onError={handleImageError} />
               <strong>{story.title}</strong>
             </span>
             <span>{story.author}</span>

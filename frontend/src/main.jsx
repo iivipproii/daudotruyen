@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, createContext, lazy, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import './styles.css';
@@ -10,37 +10,21 @@ import './account.css';
 import './author.css';
 import './admin-cms.css';
 import { ProductionFooter, ProductionHeader, ProductionHome } from './components/home/HomeExperience.jsx';
-import { SearchPage } from './components/search/SearchPage.jsx';
-import { RankingPage as RankingExperiencePage } from './components/ranking/RankingPage.jsx';
-import { StoryDetailPage as StoryDetailExperiencePage } from './components/story/StoryDetailPage.jsx';
-import { ReaderPage as ReaderExperiencePage } from './components/reader/ReaderPage.jsx';
-import {
-  AccountSettings,
-  BookmarksPage as AccountBookmarksPage,
-  ForgotPasswordPage,
-  LoginPage,
-  ReaderDashboard,
-  ReadingHistoryPage,
-  RegisterPage,
-  WalletPage as AccountWalletPage
-} from './components/account/AccountPages.jsx';
-import { AuthorDashboard } from './components/author/AuthorDashboard.jsx';
-import { AdminDashboard as AdminCMSDashboard, NotificationPage as CMSNotificationPage } from './components/admin/AdminCMS.jsx';
 import { PageSeo } from './components/shared/Seo.jsx';
 import { AUTHOR_CATEGORIES } from './data/storyCategories.js';
 import { canPostStory, isAdmin, normalizeRole } from './lib/permissions.js';
 
 const API_BASE = (() => {
-  const configured = String(import.meta.env.VITE_API_URL || '').trim();
+  const configured = String(import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || '').trim();
   if (configured) {
-    const cleanBase = configured.replace(/\/+$/, '');
+    const cleanBase = configured.replace(/\/+$/, '').replace(/\/api$/i, '');
     if (import.meta.env.PROD && /^https?:\/\/(?:localhost|127\.0\.0\.1)(?::|\/|$)/i.test(cleanBase)) {
-      throw new Error(`Invalid production VITE_API_URL: ${cleanBase}`);
+      throw new Error(`Invalid production API base URL: ${cleanBase}`);
     }
-    return cleanBase;
+    return `${cleanBase}/api`;
   }
   if (import.meta.env.PROD) {
-    throw new Error('Missing VITE_API_URL for production build.');
+    throw new Error('Missing VITE_API_BASE_URL for production build.');
   }
   return '/api';
 })();
@@ -48,6 +32,22 @@ const AuthContext = createContext(null);
 const ThemeContext = createContext(null);
 const STORY_CATEGORIES = AUTHOR_CATEGORIES;
 const PUBLISH_STORY_CATEGORIES = AUTHOR_CATEGORIES;
+const lazyNamed = (loader, exportName) => lazy(() => loader().then(module => ({ default: module[exportName] })));
+const SearchPage = lazyNamed(() => import('./components/search/SearchPage.jsx'), 'SearchPage');
+const RankingExperiencePage = lazyNamed(() => import('./components/ranking/RankingPage.jsx'), 'RankingPage');
+const StoryDetailExperiencePage = lazyNamed(() => import('./components/story/StoryDetailPage.jsx'), 'StoryDetailPage');
+const ReaderExperiencePage = lazyNamed(() => import('./components/reader/ReaderPage.jsx'), 'ReaderPage');
+const LoginPage = lazyNamed(() => import('./components/account/AccountPages.jsx'), 'LoginPage');
+const RegisterPage = lazyNamed(() => import('./components/account/AccountPages.jsx'), 'RegisterPage');
+const ForgotPasswordPage = lazyNamed(() => import('./components/account/AccountPages.jsx'), 'ForgotPasswordPage');
+const ReaderDashboard = lazyNamed(() => import('./components/account/AccountPages.jsx'), 'ReaderDashboard');
+const AccountBookmarksPage = lazyNamed(() => import('./components/account/AccountPages.jsx'), 'BookmarksPage');
+const ReadingHistoryPage = lazyNamed(() => import('./components/account/AccountPages.jsx'), 'ReadingHistoryPage');
+const AccountWalletPage = lazyNamed(() => import('./components/account/AccountPages.jsx'), 'WalletPage');
+const AccountSettings = lazyNamed(() => import('./components/account/AccountPages.jsx'), 'AccountSettings');
+const AuthorDashboard = lazyNamed(() => import('./components/author/AuthorDashboard.jsx'), 'AuthorDashboard');
+const AdminCMSDashboard = lazyNamed(() => import('./components/admin/AdminCMS.jsx'), 'AdminDashboard');
+const CMSNotificationPage = lazyNamed(() => import('./components/admin/AdminCMS.jsx'), 'NotificationPage');
 
 function normalizeSessionUser(user) {
   return user ? { ...user, role: normalizeRole(user.role) } : null;
@@ -61,18 +61,25 @@ function buildApiUrl(path) {
 
 async function api(path, options = {}) {
   const token = localStorage.getItem('daudo_token');
-  const isFormData = options.body instanceof FormData;
+  const { headers: optionHeaders = {}, noStore = false, ...fetchOptions } = options;
+  const isFormData = fetchOptions.body instanceof FormData;
   const headers = {
     Accept: 'application/json',
     ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
-    ...(options.headers || {})
+    ...optionHeaders
   };
   if (token) headers.Authorization = `Bearer ${token}`;
   const url = buildApiUrl(path);
+  const method = String(fetchOptions.method || 'GET').toUpperCase();
+  const shouldUseNoStore = noStore || (method === 'GET' && /^(\/auth\/me|\/me\/|\/wallet(?:\/|$)|\/notifications(?:\/|$)|\/admin(?:\/|$))/.test(String(path)));
   let response;
   let data = {};
   try {
-    response = await fetch(url, { cache: 'no-store', ...options, headers });
+    response = await fetch(url, {
+      ...fetchOptions,
+      ...(shouldUseNoStore ? { cache: 'no-store' } : {}),
+      headers
+    });
     const text = await response.text();
     data = text ? JSON.parse(text) : {};
     if (!response.ok) {
@@ -176,72 +183,78 @@ function App() {
       <ThemeProvider>
         <AuthProvider>
           <Shell>
-            <Routes>
-              <Route path="/" element={<HomeRoute />} />
-              <Route path="/danh-sach" element={<SearchRoute />} />
-              <Route path="/the-loai/:category" element={<SearchRoute />} />
-              <Route path="/truyen-ngan" element={<ShortStoriesPage />} />
-              <Route path="/xep-hang" element={<RankingRoute />} />
-              <Route path="/truyen-moi" element={<SearchRoute presetFilters={{ sort: 'created' }} />} />
-              <Route path="/tac-gia/:name" element={<AuthorPage />} />
-              <Route path="/truyen/:slug" element={<StoryDetailRoute />} />
-              <Route path="/truyen/:slug/chuong/:number" element={<ReaderRoute />} />
-              <Route path="/login" element={<LoginRoute />} />
-              <Route path="/register" element={<RegisterRoute />} />
-              <Route path="/forgot-password" element={<ForgotPasswordRoute />} />
-              <Route path="/dang-nhap" element={<LoginRoute />} />
-              <Route path="/dang-ky" element={<RegisterRoute />} />
-              <Route path="/account" element={<Protected><ReaderDashboardRoute /></Protected>} />
-              <Route path="/profile" element={<Protected><ReaderDashboardRoute /></Protected>} />
-              <Route path="/ho-so" element={<Protected><ReaderDashboardRoute /></Protected>} />
-              <Route path="/settings" element={<Protected><AccountSettingsRoute /></Protected>} />
-              <Route path="/bookmarks" element={<Protected><BookmarksRoute /></Protected>} />
-              <Route path="/theo-doi" element={<Protected><Library type="follows" /></Protected>} />
-              <Route path="/history" element={<Protected><HistoryRoute /></Protected>} />
-              <Route path="/lich-su" element={<Protected><HistoryRoute /></Protected>} />
-              <Route path="/wallet" element={<Protected><WalletRoute /></Protected>} />
-              <Route path="/nap-xu" element={<Protected><WalletRoute /></Protected>} />
-              <Route path="/vi-hat" element={<Protected><WalletRoute /></Protected>} />
-              <Route path="/notifications" element={<Protected><NotificationsRoute /></Protected>} />
-              <Route path="/thong-bao" element={<Protected><NotificationsRoute /></Protected>} />
-              <Route path="/ai-tools" element={<AiTools />} />
-              <Route path="/author" element={<Protected author><AuthorRoute /></Protected>} />
-              <Route path="/author/stories" element={<Protected author><AuthorRoute /></Protected>} />
-              <Route path="/author/stories/new" element={<Protected author><AuthorRoute /></Protected>} />
-              <Route path="/author/stories/:id/edit" element={<Protected author><AuthorRoute /></Protected>} />
-              <Route path="/author/stories/:id/preview" element={<Protected author><AuthorRoute /></Protected>} />
-              <Route path="/author/stories/:id/chapters" element={<Protected author><AuthorRoute /></Protected>} />
-              <Route path="/author/stories/:id/chapters/new" element={<Protected author><AuthorRoute /></Protected>} />
-              <Route path="/author/stories/:id/chapters/bulk" element={<Protected author><AuthorRoute /></Protected>} />
-              <Route path="/author/chapters" element={<Protected author><AuthorRoute /></Protected>} />
-              <Route path="/author/revenue" element={<Protected author><AuthorRoute /></Protected>} />
-              <Route path="/author/promotions" element={<Protected author><AuthorRoute /></Protected>} />
-              <Route path="/dang-truyen" element={<Protected author><Navigate to="/author/stories/new" replace /></Protected>} />
-              <Route path="/dang-truyen/them-nhieu-chuong" element={<Protected author><AuthorRoute /></Protected>} />
-              <Route path="/admin" element={<Protected admin><AdminRoute /></Protected>} />
-              <Route path="/quan-tri-vien" element={<Protected admin><AdminRoute /></Protected>} />
-              <Route path="/admin/users" element={<Protected admin><AdminRoute /></Protected>} />
-              <Route path="/admin/stories" element={<Protected admin><AdminRoute /></Protected>} />
-              <Route path="/admin/chapters" element={<Protected admin><AdminRoute /></Protected>} />
-              <Route path="/admin/reports" element={<Protected admin><AdminRoute /></Protected>} />
-              <Route path="/admin/comments" element={<Protected admin><AdminRoute /></Protected>} />
-              <Route path="/admin/transactions" element={<Protected admin><AdminRoute /></Protected>} />
-              <Route path="/admin/taxonomy" element={<Protected admin><AdminRoute /></Protected>} />
-              <Route path="/admin/notifications" element={<Protected admin><AdminRoute /></Protected>} />
-              <Route path="/admin/logs" element={<Protected admin><AdminRoute /></Protected>} />
-              <Route path="/lien-he" element={<StaticPage type="contact" />} />
-              <Route path="/dieu-khoan" element={<StaticPage type="terms" />} />
-              <Route path="/bao-mat" element={<StaticPage type="privacy" />} />
-              <Route path="/faq" element={<StaticPage type="faq" />} />
-              <Route path="/dmca" element={<StaticPage type="dmca" />} />
-              <Route path="/quy-dinh-noi-dung" element={<StaticPage type="contentRules" />} />
-              <Route path="*" element={<NotFound />} />
-            </Routes>
+            <Suspense fallback={<RouteLoader />}>
+              <Routes>
+                <Route path="/" element={<HomeRoute />} />
+                <Route path="/danh-sach" element={<SearchRoute />} />
+                <Route path="/the-loai/:category" element={<SearchRoute />} />
+                <Route path="/truyen-ngan" element={<ShortStoriesPage />} />
+                <Route path="/xep-hang" element={<RankingRoute />} />
+                <Route path="/truyen-moi" element={<SearchRoute presetFilters={{ sort: 'created' }} />} />
+                <Route path="/tac-gia/:name" element={<AuthorPage />} />
+                <Route path="/truyen/:slug" element={<StoryDetailRoute />} />
+                <Route path="/truyen/:slug/chuong/:number" element={<ReaderRoute />} />
+                <Route path="/login" element={<LoginRoute />} />
+                <Route path="/register" element={<RegisterRoute />} />
+                <Route path="/forgot-password" element={<ForgotPasswordRoute />} />
+                <Route path="/dang-nhap" element={<LoginRoute />} />
+                <Route path="/dang-ky" element={<RegisterRoute />} />
+                <Route path="/account" element={<Protected><ReaderDashboardRoute /></Protected>} />
+                <Route path="/profile" element={<Protected><ReaderDashboardRoute /></Protected>} />
+                <Route path="/ho-so" element={<Protected><ReaderDashboardRoute /></Protected>} />
+                <Route path="/settings" element={<Protected><AccountSettingsRoute /></Protected>} />
+                <Route path="/bookmarks" element={<Protected><BookmarksRoute /></Protected>} />
+                <Route path="/theo-doi" element={<Protected><Library type="follows" /></Protected>} />
+                <Route path="/history" element={<Protected><HistoryRoute /></Protected>} />
+                <Route path="/lich-su" element={<Protected><HistoryRoute /></Protected>} />
+                <Route path="/wallet" element={<Protected><WalletRoute /></Protected>} />
+                <Route path="/nap-xu" element={<Protected><WalletRoute /></Protected>} />
+                <Route path="/vi-hat" element={<Protected><WalletRoute /></Protected>} />
+                <Route path="/notifications" element={<Protected><NotificationsRoute /></Protected>} />
+                <Route path="/thong-bao" element={<Protected><NotificationsRoute /></Protected>} />
+                <Route path="/ai-tools" element={<AiTools />} />
+                <Route path="/author" element={<Protected author><AuthorRoute /></Protected>} />
+                <Route path="/author/stories" element={<Protected author><AuthorRoute /></Protected>} />
+                <Route path="/author/stories/new" element={<Protected author><AuthorRoute /></Protected>} />
+                <Route path="/author/stories/:id/edit" element={<Protected author><AuthorRoute /></Protected>} />
+                <Route path="/author/stories/:id/preview" element={<Protected author><AuthorRoute /></Protected>} />
+                <Route path="/author/stories/:id/chapters" element={<Protected author><AuthorRoute /></Protected>} />
+                <Route path="/author/stories/:id/chapters/new" element={<Protected author><AuthorRoute /></Protected>} />
+                <Route path="/author/stories/:id/chapters/bulk" element={<Protected author><AuthorRoute /></Protected>} />
+                <Route path="/author/chapters" element={<Protected author><AuthorRoute /></Protected>} />
+                <Route path="/author/revenue" element={<Protected author><AuthorRoute /></Protected>} />
+                <Route path="/author/promotions" element={<Protected author><AuthorRoute /></Protected>} />
+                <Route path="/dang-truyen" element={<Protected author><Navigate to="/author/stories/new" replace /></Protected>} />
+                <Route path="/dang-truyen/them-nhieu-chuong" element={<Protected author><AuthorRoute /></Protected>} />
+                <Route path="/admin" element={<Protected admin><AdminRoute /></Protected>} />
+                <Route path="/quan-tri-vien" element={<Protected admin><AdminRoute /></Protected>} />
+                <Route path="/admin/users" element={<Protected admin><AdminRoute /></Protected>} />
+                <Route path="/admin/stories" element={<Protected admin><AdminRoute /></Protected>} />
+                <Route path="/admin/chapters" element={<Protected admin><AdminRoute /></Protected>} />
+                <Route path="/admin/reports" element={<Protected admin><AdminRoute /></Protected>} />
+                <Route path="/admin/comments" element={<Protected admin><AdminRoute /></Protected>} />
+                <Route path="/admin/transactions" element={<Protected admin><AdminRoute /></Protected>} />
+                <Route path="/admin/taxonomy" element={<Protected admin><AdminRoute /></Protected>} />
+                <Route path="/admin/notifications" element={<Protected admin><AdminRoute /></Protected>} />
+                <Route path="/admin/logs" element={<Protected admin><AdminRoute /></Protected>} />
+                <Route path="/lien-he" element={<StaticPage type="contact" />} />
+                <Route path="/dieu-khoan" element={<StaticPage type="terms" />} />
+                <Route path="/bao-mat" element={<StaticPage type="privacy" />} />
+                <Route path="/faq" element={<StaticPage type="faq" />} />
+                <Route path="/dmca" element={<StaticPage type="dmca" />} />
+                <Route path="/quy-dinh-noi-dung" element={<StaticPage type="contentRules" />} />
+                <Route path="*" element={<NotFound />} />
+              </Routes>
+            </Suspense>
           </Shell>
         </AuthProvider>
       </ThemeProvider>
     </BrowserRouter>
   );
+}
+
+function RouteLoader() {
+  return <div className="center-card"><p>Đang tải trang...</p></div>;
 }
 
 function scrollPageToTop(behavior = 'smooth') {
