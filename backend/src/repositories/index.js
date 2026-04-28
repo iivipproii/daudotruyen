@@ -871,6 +871,45 @@ async function selectOneById(def, id) {
   return result.data ? fromRow(result.data, def) : null;
 }
 
+async function selectUserById(id) {
+  return selectOneById(TABLES.users, id);
+}
+
+async function selectStoryById(id) {
+  return selectOneById(TABLES.stories, id);
+}
+
+async function selectChaptersByStoryId(storyId) {
+  if (!isSupabaseStore()) return [];
+  const supabase = getSupabase();
+  const result = await supabase
+    .from(TABLES.chapters.table)
+    .select('*')
+    .eq('story_id', storyId)
+    .order('number', { ascending: true });
+  if (result.error) throw new Error(supabaseErrorMessage(result, 'chapters:selectByStoryId'));
+  return (result.data || []).map(row => fromRow(row, TABLES.chapters));
+}
+
+async function selectStoryFollowerUsers(storyId) {
+  if (!isSupabaseStore()) return { follows: [], users: [] };
+  const supabase = getSupabase();
+  const followsResult = await supabase
+    .from(TABLES.follows.table)
+    .select('*')
+    .eq('story_id', storyId);
+  if (followsResult.error) throw new Error(supabaseErrorMessage(followsResult, 'follows:selectByStoryId'));
+  const follows = (followsResult.data || []).map(row => fromRow(row, TABLES.follows));
+  const userIds = Array.from(new Set(follows.map(item => item.userId).filter(Boolean)));
+  if (!userIds.length) return { follows, users: [] };
+  const usersResult = await supabase
+    .from(TABLES.users.table)
+    .select('*')
+    .in('id', userIds);
+  if (usersResult.error) throw new Error(supabaseErrorMessage(usersResult, 'users:selectFollowers'));
+  return { follows, users: (usersResult.data || []).map(row => fromRow(row, TABLES.users)) };
+}
+
 async function storySlugExists(slug, currentStoryId = '') {
   if (!isSupabaseStore()) return false;
   const supabase = getSupabase();
@@ -885,15 +924,19 @@ async function storySlugExists(slug, currentStoryId = '') {
   return Boolean(result.data?.length);
 }
 
+function storyRowForUpsert(story) {
+  const row = toRow(story, TABLES.stories);
+  delete row.follows;
+  return row;
+}
+
 async function createStoryWithRelations(story) {
   if (!isSupabaseStore()) throw new Error('createStoryWithRelations requires Supabase store.');
   const nextDb = normalizeSnapshot({ stories: [story] });
   const taxonomy = buildTaxonomy(nextDb);
-  const storyRow = toRow(story, TABLES.stories);
-  delete storyRow.follows;
 
   await saveTaxonomy(taxonomy);
-  await upsertRows(TABLES.stories.table, [storyRow]);
+  await upsertRows(TABLES.stories.table, [storyRowForUpsert(story)]);
   await deleteStoryRelationsFor([story.id]);
   await saveStoryRelations(nextDb, taxonomy);
 
@@ -904,6 +947,14 @@ async function createStoryWithRelations(story) {
   }
 
   return story;
+}
+
+async function saveStoryAndChapters({ story, chapters = [], notifications = [] }) {
+  if (!isSupabaseStore()) throw new Error('saveStoryAndChapters requires Supabase store.');
+  if (story) await upsertRows(TABLES.stories.table, [storyRowForUpsert(story)]);
+  await upsertRows(TABLES.chapters.table, chapters.map(item => toRow(item, TABLES.chapters)));
+  await upsertRows(TABLES.notifications.table, notifications.map(item => toRow(item, TABLES.notifications)));
+  clearSupabaseCache();
 }
 
 async function saveDb(db, options = {}) {
@@ -1003,7 +1054,12 @@ module.exports = {
   unlockCombo,
   storeName,
   selectOneById,
+  selectUserById,
+  selectStoryById,
+  selectChaptersByStoryId,
+  selectStoryFollowerUsers,
   storySlugExists,
   createStoryWithRelations,
+  saveStoryAndChapters,
   withLock
 };

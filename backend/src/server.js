@@ -1956,6 +1956,40 @@ async function getSupabaseAuthUser(req) {
   return user;
 }
 
+async function handleSupabaseCoverUpload(req, res) {
+  const requestPerf = createPerf('cover:upload:targeted');
+  const user = await getSupabaseAuthUser(req);
+  if (!user) return unauthorized(res);
+  if (!canPostStory(user.role)) return forbidden(res);
+  requestPerf.mark('auth');
+
+  const upload = await parseMultipartRequest(req);
+  const file = upload.files.find(item => item.fieldname === 'file') || upload.files[0];
+  const validationError = validateUploadedImage(file);
+  if (validationError) return badRequest(res, validationError);
+  requestPerf.mark('validate');
+
+  const storyId = String(upload.fields.storyId || upload.fields.story_id || 'draft').trim();
+  try {
+    const uploaded = await storage.uploadCoverImage(file, { storyId, userId: user.id });
+    requestPerf.mark('upload');
+    requestPerf.log();
+    return send(res, 201, {
+      path: uploaded.path,
+      url: uploaded.url,
+      cover: uploaded.url,
+      size: file.data.length,
+      mimeType: file.mimeType
+    });
+  } catch (error) {
+    console.error('[COVER_UPLOAD_ERROR]', error);
+    return send(res, 503, {
+      message: error.message || 'Upload anh bia that bai.',
+      error: error.message || 'Storage upload failed'
+    });
+  }
+}
+
 async function handleSupabaseAuthorStoryCreate(req, res) {
   const requestPerf = createPerf('story:create:targeted');
   const user = await getSupabaseAuthUser(req);
@@ -2014,6 +2048,132 @@ async function handleSupabaseAuthorStoryCreate(req, res) {
   requestPerf.mark('db');
   requestPerf.log();
   return send(res, 201, { story: authorStorySummary(emptyAuthorDb(story), story, user.id), user: safeUser(user) });
+}
+
+function buildBulkChapters({ body, story, existingChapters }) {
+  const incoming = Array.isArray(body.chapters) ? body.chapters : [];
+  if (!incoming.length) return { error: 'Danh sach chuong rong.' };
+  const status = normalizeAuthorChapterStatus(body.mode || body.status, 'draft');
+  if (status === 'scheduled' && !body.scheduledAt) return { error: 'Vui long chon thoi gian len lich.' };
+  const access = String(body.access || 'free').trim();
+  const inheritedPremium = Boolean(story.premium || ['vip', 'mixed'].includes(story.type));
+  const isPremium = access === 'inherit' ? inheritedPremium : access === 'vip' || access === 'paid';
+  const price = isPremium ? parsePositiveNumber(body.price ?? story.chapterPrice ?? story.price, 0) : 0;
+  if (isPremium && price <= 0) return { error: 'Gia chuong VIP phai lon hon 0.' };
+
+  const db = emptyAuthorDb(story);
+  db.chapters = existingChapters.slice();
+  const renumber = body.renumber !== false;
+  let cursor = parsePositiveNumber(body.startNumber, nextChapterNumber(db, story.id));
+  const batchId = uid('batch');
+  const createdChapters = [];
+  const errors = [];
+  let skipped = 0;
+
+  incoming.forEach((item, index) => {
+    let content = String(item.content || '').trim();
+    const number = renumber ? cursor : Number(item.number || cursor);
+    if (renumber) cursor += 1;
+    if (!Number.isFinite(number) || number <= 0) {
+      skipped += 1;
+      errors.push({ index, number: item.number || null, reason: 'So chuong khong hop le' });
+      return;
+    }
+    let title = String(item.title || `Chuong ${number}`).trim();
+    if (!title) {
+      skipped += 1;
+      errors.push({ index, number, reason: 'Ten chuong rong' });
+      return;
+    }
+    if (!content) {
+      skipped += 1;
+      errors.push({ index, number, reason: 'Noi dung chuong rong' });
+      return;
+    }
+    try {
+      title = validateCleanText(title, `chapters[${index}].title`);
+      content = validateCleanText(content, `chapters[${index}].content`);
+    } catch (error) {
+      skipped += 1;
+      errors.push({ index, number, reason: error.message });
+      return;
+    }
+    const publishError = isPublishChapterStatus(status) ? publicChapterContentError(content) : '';
+    if (publishError) {
+      skipped += 1;
+      errors.push({ index, number, reason: publishError });
+      return;
+    }
+    if (chapterNumberExists(db, story.id, number) || createdChapters.some(chapter => Number(chapter.number) === Number(number))) {
+      skipped += 1;
+      errors.push({ index, number, reason: 'Trung so chuong' });
+      return;
+    }
+    const timestamp = now();
+    createdChapters.push({
+      id: uid('chap'),
+      storyId: story.id,
+      number,
+      title,
+      content,
+      preview: String(item.preview || content.slice(0, 320)).trim(),
+      isPremium,
+      price,
+      status,
+      scheduledAt: status === 'scheduled' ? String(body.scheduledAt) : '',
+      password: body.password ? String(body.password) : '',
+      wordCount: wordCount(content),
+      sourceBatchId: batchId,
+      views: 0,
+      createdAt: timestamp,
+      updatedAt: timestamp
+    });
+  });
+
+  return { createdChapters, errors, skipped };
+}
+
+async function handleSupabaseAuthorStoryBulkChapters(req, res, storyId) {
+  const requestPerf = createPerf('chapter:bulk-create:targeted');
+  const user = await getSupabaseAuthUser(req);
+  if (!user) return unauthorized(res);
+  if (!canPostStory(user.role)) return forbidden(res);
+  requestPerf.mark('auth');
+
+  const [story, existingChapters] = await Promise.all([
+    dataStore.selectStoryById(storyId),
+    dataStore.selectChaptersByStoryId(storyId)
+  ]);
+  if (!story) return notFound(res);
+  if (!canEditStory(user, story)) return forbidden(res);
+
+  const body = await parseBody(req);
+  const built = buildBulkChapters({ body, story, existingChapters });
+  if (built.error) return badRequest(res, built.error);
+  requestPerf.mark('validate');
+
+  const db = emptyAuthorDb(story);
+  db.users = [user];
+  db.chapters = existingChapters.concat(built.createdChapters);
+  const followerData = isPublicStory(story) && built.createdChapters.some(isPublicChapter)
+    ? await dataStore.selectStoryFollowerUsers(story.id)
+    : { follows: [], users: [] };
+  db.follows = followerData.follows || [];
+  db.users.push(...(followerData.users || []).filter(item => item.id !== user.id));
+  db.notifications = [];
+
+  refreshStoryChapterMetadata(db, story);
+  built.createdChapters.forEach(chapter => notifyChapterPublished(db, story, chapter, user.id));
+  await dataStore.saveStoryAndChapters({ story, chapters: built.createdChapters, notifications: db.notifications });
+  requestPerf.mark('db');
+  requestPerf.log(`created=${built.createdChapters.length} skipped=${built.skipped}`);
+  return send(res, 201, {
+    created: built.createdChapters.length,
+    skipped: built.skipped,
+    errors: built.errors,
+    chapters: built.createdChapters.map(chapter => authorChapterSummary(db, chapter)),
+    story: authorStorySummary(db, story, user.id)
+  });
 }
 
 function authorChapterSummary(db, chapter) {
@@ -2129,6 +2289,15 @@ async function handle(req, res) {
 
     if (req.method === 'POST' && pathname === '/api/author/stories' && dataStore.storeName() !== 'memory') {
       return await dataStore.withLock(() => handleSupabaseAuthorStoryCreate(req, res));
+    }
+
+    if (req.method === 'POST' && pathname === '/api/uploads/cover' && dataStore.storeName() !== 'memory') {
+      return await handleSupabaseCoverUpload(req, res);
+    }
+
+    const targetedAuthorStoryBulkParams = match(pathname, '/api/author/stories/:id/chapters/bulk');
+    if (targetedAuthorStoryBulkParams && req.method === 'POST' && dataStore.storeName() !== 'memory') {
+      return await dataStore.withLock(() => handleSupabaseAuthorStoryBulkChapters(req, res, targetedAuthorStoryBulkParams.id));
     }
 
     const runDbRequest = async () => {
