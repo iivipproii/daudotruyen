@@ -1985,7 +1985,7 @@ async function handle(req, res) {
         });
       } catch (error) {
         console.error('[DB_HEALTH_ERROR]', error);
-        return send(res, 500, {
+        return send(res, 503, {
           ok: false,
           service: 'daudotruyen-api',
           database: 'disconnected',
@@ -1998,7 +1998,7 @@ async function handle(req, res) {
       try {
         return send(res, 200, await dataStore.health());
       } catch (error) {
-        return send(res, 500, {
+        return send(res, 503, {
           ok: false,
           message: error.message
         });

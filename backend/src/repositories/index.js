@@ -1,9 +1,14 @@
 const { getSupabase } = require('../supabase');
 
 const PAGE_SIZE = 1000;
+const SUPABASE_CACHE_TTL_MS = Number(process.env.SUPABASE_CACHE_TTL_MS || 60_000);
+const SUPABASE_LOAD_TIMEOUT_MS = Number(process.env.SUPABASE_LOAD_TIMEOUT_MS || 8_000);
 
 let memoryDb = {};
 let lock = Promise.resolve();
+let supabaseCache = null;
+let supabaseCacheLoadedAt = 0;
+let supabaseLoadPromise = null;
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value || {}));
@@ -39,6 +44,21 @@ function storeName() {
 
 function isMemoryStore() {
   return storeName() === 'memory';
+}
+
+function isCacheFresh() {
+  return supabaseCache && Date.now() - supabaseCacheLoadedAt < SUPABASE_CACHE_TTL_MS;
+}
+
+function cacheSupabaseDb(db) {
+  supabaseCache = normalizeSnapshot(db);
+  supabaseCacheLoadedAt = Date.now();
+  return supabaseCache;
+}
+
+function clearSupabaseCache() {
+  supabaseCache = null;
+  supabaseCacheLoadedAt = 0;
 }
 
 const TIMESTAMP_FIELDS = new Set([
@@ -443,6 +463,15 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function withTimeout(promise, ms, label) {
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    timeoutId.unref?.();
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timeoutId));
+}
+
 function summarizeSupabaseMessage(value) {
   const text = String(value || '')
     .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, ' ')
@@ -471,7 +500,7 @@ function supabaseErrorMessage(result, table) {
 
 function isTransientSupabaseError(error) {
   const text = String(error?.message || error || '').toLowerCase();
-  return /\b(502|503|504|econnreset|etimedout|fetch failed|bad gateway|service unavailable|gateway timeout|schema cache|retrying)\b/.test(text);
+  return /\b(502|503|504|econnreset|etimedout|fetch failed|bad gateway|service unavailable|gateway timeout|schema cache|retrying|timed out)\b/.test(text);
 }
 
 async function assertResult(result, table) {
@@ -768,6 +797,17 @@ async function loadSupabaseDb() {
   return db;
 }
 
+function startSupabaseLoad() {
+  if (!supabaseLoadPromise) {
+    supabaseLoadPromise = loadSupabaseDb()
+      .then(db => cacheSupabaseDb(db))
+      .finally(() => {
+        supabaseLoadPromise = null;
+      });
+  }
+  return supabaseLoadPromise;
+}
+
 async function saveSupabaseDb(db, options = {}) {
   const shouldPrune = options.prune !== false;
   const nextDb = normalizeSnapshot(db);
@@ -801,7 +841,18 @@ async function saveSupabaseDb(db, options = {}) {
 
 async function loadDb() {
   if (isMemoryStore()) return clone(memoryDb);
-  return loadSupabaseDb();
+  if (isCacheFresh()) return clone(supabaseCache);
+
+  try {
+    const db = await withTimeout(startSupabaseLoad(), SUPABASE_LOAD_TIMEOUT_MS, 'Supabase loadDb');
+    return clone(db);
+  } catch (error) {
+    if (supabaseCache) {
+      console.warn(`[SUPABASE_CACHE_STALE] ${error.message}`);
+      return clone(supabaseCache);
+    }
+    throw error;
+  }
 }
 
 async function saveDb(db, options = {}) {
@@ -810,10 +861,12 @@ async function saveDb(db, options = {}) {
     return;
   }
   await saveSupabaseDb(db, options);
+  cacheSupabaseDb(db);
 }
 
 function reset(db = {}) {
   memoryDb = normalizeSnapshot(db);
+  clearSupabaseCache();
 }
 
 function snapshot() {
@@ -824,10 +877,10 @@ async function health() {
   if (isMemoryStore()) {
     return { ok: true, database: 'memory', time: new Date().toISOString() };
   }
-  await runSupabaseRead('users', async () => {
+  await withTimeout(runSupabaseRead('users', async () => {
     const result = await getSupabase().from('users').select('id').limit(1);
     await assertResult(result, 'users');
-  });
+  }), SUPABASE_LOAD_TIMEOUT_MS, 'Supabase health');
   return { ok: true, database: 'supabase', time: new Date().toISOString() };
 }
 
@@ -854,6 +907,7 @@ async function topupWallet({ userId, amount, transactionId, note, notificationId
     p_notification_title: notificationTitle,
     p_notification_message: notificationMessage
   });
+  clearSupabaseCache();
   return loadUser(userId);
 }
 
@@ -865,6 +919,7 @@ async function unlockChapter({ userId, chapterId, purchaseId, transactionId, not
     p_transaction_id: transactionId,
     p_notification_id: notificationId
   });
+  clearSupabaseCache();
   return { result, user: await loadUser(userId) };
 }
 
@@ -876,6 +931,7 @@ async function unlockCombo({ userId, storyId, purchaseId, transactionId, notific
     p_transaction_id: transactionId,
     p_notification_id: notificationId
   });
+  clearSupabaseCache();
   return { result, user: await loadUser(userId) };
 }
 
