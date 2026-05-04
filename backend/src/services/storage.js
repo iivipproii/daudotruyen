@@ -107,7 +107,12 @@ async function deleteImageByUrl(url) {
 
 function getPublicUrl(objectPath) {
   if (!objectPath) return '';
-  if (/^https?:\/\//i.test(objectPath) || objectPath.startsWith('/')) return objectPath;
+  if (/^https?:\/\//i.test(objectPath)) {
+    const extractedPath = pathFromPublicUrl(objectPath);
+    if (extractedPath) return getPublicUrl(extractedPath);
+    return objectPath;
+  }
+  if (objectPath.startsWith('/')) return objectPath;
   if (PUBLIC_BASE_URL) return `${PUBLIC_BASE_URL}/${objectPath.replace(/^\/+/, '')}`;
   if (STORAGE_PROVIDER === 'supabase') {
     const { data } = getSupabase().storage.from(COVER_BUCKET).getPublicUrl(objectPath);
@@ -122,5 +127,6 @@ module.exports = {
   deleteImage,
   deleteImageByUrl,
   getPublicUrl,
+  pathFromPublicUrl,
   COVER_BUCKET
 };

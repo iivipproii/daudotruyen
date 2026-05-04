@@ -141,6 +141,106 @@ test('seed database has enough stories for home sections', () => {
   assert.ok(db.stories.filter(story => story.featured).length >= 6);
 });
 
+test('admin home trending updates invalidate home cache and public APIs filter safely', async () => {
+  const db = createSeedDb();
+  const hiddenTrending = db.stories.find(story => story.id === 's8');
+  hiddenTrending.hidden = true;
+  resetDataStore(db);
+
+  const primedHome = await request('/api/home');
+  assert.equal(primedHome.response.status, 200);
+  assert.equal(primedHome.data.trendingStories.length, 0);
+
+  const token = await loginToken();
+  const update = await request('/api/admin/home/trending', {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ storyIds: ['s7', 's8', 's6'] })
+  });
+  assert.equal(update.response.status, 200);
+
+  const snapshot = readTestDb();
+  assert.equal(snapshot.stories.find(story => story.id === 's7').homeTrending, true);
+  assert.equal(snapshot.stories.find(story => story.id === 's7').homeTrendingOrder, 1);
+  assert.equal(snapshot.stories.find(story => story.id === 's8').homeTrending, true);
+  assert.equal(snapshot.stories.find(story => story.id === 's8').homeTrendingOrder, 2);
+  assert.equal(snapshot.stories.find(story => story.id === 's6').homeTrending, true);
+  assert.equal(snapshot.stories.find(story => story.id === 's6').homeTrendingOrder, 3);
+
+  const refreshedHome = await request('/api/home');
+  assert.equal(refreshedHome.response.status, 200);
+  assert.deepEqual(refreshedHome.data.trendingStories.map(story => story.id), ['s7', 's6']);
+  assert.ok(!refreshedHome.data.trendingStories.some(story => story.id === 's8'));
+
+  const list = await request('/api/stories?homeTrending=true&limit=10');
+  assert.equal(list.response.status, 200);
+  assert.deepEqual(list.data.stories.map(story => story.id), ['s7', 's6']);
+});
+
+test('admin story flags invalidate home cache and update public story sections', async () => {
+  const db = createSeedDb();
+  const story = db.stories.find(item => item.id === 's12');
+  story.approvalStatus = 'approved';
+  story.hidden = false;
+  story.featured = false;
+  story.hot = false;
+  story.recommended = false;
+  story.banner = false;
+  story.bannerImage = '';
+  resetDataStore(db);
+
+  const primedHome = await request('/api/home');
+  assert.equal(primedHome.response.status, 200);
+  assert.ok(!primedHome.data.banners.some(item => item.id === story.id));
+  assert.ok(!primedHome.data.featuredStories.some(item => item.id === story.id));
+  assert.ok(!primedHome.data.recommendedStories.some(item => item.id === story.id));
+
+  const token = await loginToken();
+  const update = await request(`/api/admin/stories/${story.id}/flags`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ banner: true, featured: true, recommended: true, hot: true })
+  });
+  assert.equal(update.response.status, 200);
+  assert.equal(update.data.story.banner, true);
+  assert.equal(update.data.story.bannerImage, story.cover);
+
+  const coverBannerHome = await request('/api/home');
+  assert.equal(coverBannerHome.response.status, 200);
+  const coverBannerStory = coverBannerHome.data.banners.find(item => item.id === story.id);
+  assert.ok(coverBannerStory);
+  assert.equal(coverBannerStory.bannerImage, story.cover);
+
+  const bannerImage = 'https://cdn.example.com/story-banner.jpg';
+  const storyUpdate = await request(`/api/admin/stories/${story.id}`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({
+      title: story.title,
+      author: story.author,
+      description: story.description,
+      bannerImage
+    })
+  });
+  assert.equal(storyUpdate.response.status, 200);
+  assert.equal(storyUpdate.data.story.bannerImage, bannerImage);
+
+  const refreshedHome = await request('/api/home');
+  assert.equal(refreshedHome.response.status, 200);
+  const bannerStory = refreshedHome.data.banners.find(item => item.id === story.id);
+  assert.ok(bannerStory);
+  assert.equal(bannerStory.bannerImage, bannerImage);
+  assert.ok(refreshedHome.data.featuredStories.some(item => item.id === story.id));
+  assert.ok(refreshedHome.data.recommendedStories.some(item => item.id === story.id));
+
+  const hotList = await request('/api/stories?hot=true&limit=10');
+  assert.equal(hotList.response.status, 200);
+  const hotStory = hotList.data.stories.find(item => item.id === story.id);
+  assert.ok(hotStory);
+  assert.equal(hotStory.hot, true);
+  assert.equal(hotStory.isHot, true);
+});
+
 test('register rejects invalid email', async () => {
   const { response, data } = await request('/api/auth/register', {
     method: 'POST',
@@ -522,6 +622,15 @@ test('premium chapter returns preview when not unlocked', async () => {
   assert.match(data.chapter.content, /Đoạn xem trước/);
 });
 
+test('chapter index endpoint returns metadata only without content', async () => {
+  const { response, data } = await request('/api/stories/dau-pha-thuong-khung/chapters?limit=10');
+  assert.equal(response.status, 200);
+  assert.ok(Array.isArray(data.chapters));
+  assert.ok(data.chapters.length > 0);
+  assert.ok(data.pagination);
+  assert.ok(!Object.prototype.hasOwnProperty.call(data.chapters[0], 'content'));
+});
+
 test('cover upload validates image size and stories reject base64 covers', async () => {
   const userToken = await loginToken('bandoc.daudotruyen@gmail.com');
   const userHeaders = { Authorization: `Bearer ${userToken}` };
@@ -706,6 +815,37 @@ test('admin stats rejects non-admin user', async () => {
   assert.equal(response.status, 403);
 });
 
+test('admin bootstrap requires admin and returns CMS data shape', async () => {
+  const anonymous = await request('/api/admin/bootstrap');
+  assert.equal(anonymous.response.status, 401);
+
+  const userToken = await loginToken('bandoc.daudotruyen@gmail.com');
+  const forbidden = await request('/api/admin/bootstrap', {
+    headers: { Authorization: `Bearer ${userToken}` }
+  });
+  assert.equal(forbidden.response.status, 403);
+
+  const adminToken = await loginToken();
+  const { response, data } = await request('/api/admin/bootstrap?limit=100', {
+    headers: { Authorization: `Bearer ${adminToken}` }
+  });
+  assert.equal(response.status, 200);
+  assert.ok(data.stats);
+  assert.ok(Array.isArray(data.users));
+  assert.ok(Array.isArray(data.stories));
+  assert.ok(Array.isArray(data.chapters));
+  assert.ok(Array.isArray(data.reports));
+  assert.ok(Array.isArray(data.transactions));
+  assert.ok(Array.isArray(data.comments));
+  assert.ok(Array.isArray(data.taxonomy.categories));
+  assert.ok(Array.isArray(data.taxonomy.tags));
+  assert.ok(Array.isArray(data.notifications));
+  assert.ok(Array.isArray(data.logs));
+  assert.ok(data.pagination.transactions);
+  assert.ok(data.pagination.notifications);
+  assert.equal(typeof data.transactions[0]?.status || 'string', 'string');
+});
+
 test('admin chapters API rejects non-admin user', async () => {
   const token = await loginToken('bandoc.daudotruyen@gmail.com');
   const { response } = await request('/api/admin/chapters', {
@@ -719,6 +859,7 @@ test('admin endpoints reject non-admin users', async () => {
   const headers = { Authorization: `Bearer ${token}` };
   const checks = [
     ['/api/admin/dashboard', { headers }],
+    ['/api/admin/bootstrap', { headers }],
     ['/api/admin/users', { headers }],
     ['/api/admin/users/u_admin', { method: 'PATCH', headers, body: JSON.stringify({ note: 'nope' }) }],
     ['/api/admin/users/u_admin/adjust-balance', { method: 'POST', headers, body: JSON.stringify({ amount: 1, reason: 'nope' }) }],
@@ -1502,6 +1643,37 @@ test('author can create draft and pending stories with ownerId', async () => {
   assert.equal(pending.data.story.hidden, true);
 });
 
+test('author can update combo price without resubmitting story categories', async () => {
+  const author = await registerMod('combo.patch.author@gmail.com', 'Combo Patch Author');
+  const headers = { Authorization: `Bearer ${author.token}` };
+
+  const create = await request('/api/author/stories', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      title: 'Combo Patch Pending Story',
+      description: 'Pending story keeps combo edits independent from submit validation.',
+      categories: ['Combo'],
+      approvalStatus: 'pending'
+    })
+  });
+  assert.equal(create.response.status, 201);
+
+  const db = readTestDb();
+  const story = db.stories.find(item => item.id === create.data.story.id);
+  story.categories = [];
+  story.genres = [];
+  writeTestDb(db);
+
+  const update = await request(`/api/author/stories/${create.data.story.id}`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify({ comboPrice: 33 })
+  });
+  assert.equal(update.response.status, 200);
+  assert.equal(update.data.story.comboPrice, 33);
+});
+
 test('author cannot edit another owner story or chapter', async () => {
   const owner = await registerMod('owner.author@gmail.com', 'Owner Author');
   const intruder = await registerMod('intruder.author@gmail.com', 'Intruder Author');
@@ -1676,6 +1848,81 @@ test('author can add single and bulk chapters before story approval', async () =
   const reader = await request(`/api/stories/${create.data.story.slug}/chapters/1`);
   assert.equal(reader.response.status, 200);
   assert.equal(reader.data.chapter.title, 'Chapter One Ready');
+});
+
+test('author chapter dashboard API paginates filters bulk deletes and reorders owned chapters', async () => {
+  const owner = await registerMod('chapter.dashboard.owner@gmail.com', 'Chapter Dashboard Owner');
+  const intruder = await registerMod('chapter.dashboard.intruder@gmail.com', 'Chapter Dashboard Intruder');
+  const ownerHeaders = { Authorization: `Bearer ${owner.token}` };
+  const intruderHeaders = { Authorization: `Bearer ${intruder.token}` };
+
+  const story = await request('/api/author/stories', {
+    method: 'POST',
+    headers: ownerHeaders,
+    body: JSON.stringify({ title: 'Chapter Dashboard Story', description: 'Story for dashboard chapter management.', categories: ['Dashboard'], approvalStatus: 'draft' })
+  });
+  assert.equal(story.response.status, 201);
+
+  const created = [];
+  for (let index = 1; index <= 25; index += 1) {
+    const chapter = await request(`/api/author/stories/${story.data.story.id}/chapters`, {
+      method: 'POST',
+      headers: ownerHeaders,
+      body: JSON.stringify({
+        number: index,
+        title: index === 10 ? 'SearchNeedle VIP Chapter' : `Dashboard Chapter ${index}`,
+        content: `Draft chapter ${index} content.`,
+        status: index % 3 === 0 ? 'pending' : 'draft',
+        access: index % 5 === 0 ? 'vip' : 'free',
+        price: index % 5 === 0 ? 3 : 0
+      })
+    });
+    assert.equal(chapter.response.status, 201);
+    created.push(chapter.data.chapter);
+  }
+
+  const firstPage = await request(`/api/author/chapters?storyId=${story.data.story.id}&page=1&limit=20`, { headers: ownerHeaders });
+  assert.equal(firstPage.response.status, 200);
+  assert.equal(firstPage.data.chapters.length, 20);
+  assert.equal(firstPage.data.pagination.total, 25);
+  assert.equal(firstPage.data.pagination.totalPages, 2);
+  assert.equal(firstPage.data.stats.total, 25);
+  assert.equal(firstPage.data.stats.vip, 5);
+  assert.equal(firstPage.data.stats.free, 20);
+
+  const search = await request(`/api/author/chapters?storyId=${story.data.story.id}&q=SearchNeedle&access=vip`, { headers: ownerHeaders });
+  assert.equal(search.response.status, 200);
+  assert.equal(search.data.chapters.length, 1);
+  assert.equal(search.data.chapters[0].title, 'SearchNeedle VIP Chapter');
+
+  const forbiddenDelete = await request('/api/author/chapters/bulk', {
+    method: 'DELETE',
+    headers: intruderHeaders,
+    body: JSON.stringify({ ids: [created[0].id] })
+  });
+  assert.equal(forbiddenDelete.response.status, 403);
+
+  const bulkDelete = await request('/api/author/chapters/bulk', {
+    method: 'DELETE',
+    headers: ownerHeaders,
+    body: JSON.stringify({ ids: [created[20].id, created[21].id] })
+  });
+  assert.equal(bulkDelete.response.status, 200);
+  assert.equal(bulkDelete.data.deleted, 2);
+
+  const reorder = await request(`/api/author/stories/${story.data.story.id}/chapters/reorder`, {
+    method: 'PATCH',
+    headers: ownerHeaders,
+    body: JSON.stringify({
+      chapters: created.slice(0, 20).map((chapter, index) => ({
+        id: chapter.id,
+        number: index === 0 ? 2 : index === 1 ? 1 : index + 1
+      }))
+    })
+  });
+  assert.equal(reorder.response.status, 200);
+  assert.equal(reorder.data.chapters[0].id, created[1].id);
+  assert.equal(reorder.data.chapters[1].id, created[0].id);
 });
 
 test('reader chapter route returns the requested story and chapter with clean Vietnamese text', async () => {

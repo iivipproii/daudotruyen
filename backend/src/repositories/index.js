@@ -3,6 +3,7 @@ const { getSupabase } = require('../supabase');
 const PAGE_SIZE = 1000;
 const SUPABASE_CACHE_TTL_MS = Number(process.env.SUPABASE_CACHE_TTL_MS || 60_000);
 const SUPABASE_LOAD_TIMEOUT_MS = Number(process.env.SUPABASE_LOAD_TIMEOUT_MS || 8_000);
+const SUPABASE_DEBUG_EGRESS = process.env.SUPABASE_DEBUG_EGRESS === 'true' && process.env.NODE_ENV !== 'production';
 
 let memoryDb = {};
 let lock = Promise.resolve();
@@ -121,6 +122,7 @@ const TABLES = {
       ownerId: 'owner_id',
       description: 'description',
       cover: 'cover',
+      bannerImage: 'banner_image',
       coverPath: 'cover_path',
       status: 'status',
       approvalStatus: 'approval_status',
@@ -141,6 +143,8 @@ const TABLES = {
       hot: 'hot',
       recommended: 'recommended',
       banner: 'banner',
+      homeTrending: 'home_trending',
+      homeTrendingOrder: 'home_trending_order',
       type: 'type',
       chapterPrice: 'chapter_price',
       vipFromChapter: 'vip_from_chapter',
@@ -514,6 +518,32 @@ async function assertResult(result, table) {
   return result.data || [];
 }
 
+function debugEgress({ table, method, columns, data }) {
+  if (!SUPABASE_DEBUG_EGRESS) return;
+  const rows = Array.isArray(data) ? data.length : data ? 1 : 0;
+  const bytes = data ? Buffer.byteLength(JSON.stringify(data), 'utf8') : 0;
+  console.info(`[SUPABASE_EGRESS] method=${method} table=${table} columns=${columns || '-'} rows=${rows} bytes=${bytes}`);
+}
+
+function tableColumns(table, includeLarge = true) {
+  const columns = TABLE_COLUMNS_ALLOWLIST[table] || ['id'];
+  if (includeLarge) return columns.join(',');
+  return columns.filter(column => column !== 'content' && column !== 'password').join(',');
+}
+
+async function safeRead({ table, method, columns, run }) {
+  const result = await run();
+  const data = await assertResult(result, table);
+  debugEgress({ table, method, columns, data });
+  return data;
+}
+
+async function safeWrite({ table, method, run }) {
+  const result = await run();
+  await assertResult(result, table);
+  debugEgress({ table, method, columns: 'minimal(write)', data: null });
+}
+
 async function runSupabaseRead(table, operation) {
   const attempts = 4;
   let lastError;
@@ -550,15 +580,18 @@ async function selectAll(table) {
   const supabase = getSupabase();
   const rows = [];
   let from = 0;
+  const columns = tableColumns(table, true);
 
   while (true) {
-    const page = await runSupabaseRead(table, async () => {
-      const result = await supabase
-        .from(table)
-        .select('*')
-        .range(from, from + PAGE_SIZE - 1);
-      return assertResult(result, table);
-    });
+    const page = await runSupabaseRead(
+      table,
+      async () => safeRead({
+        table,
+        method: 'selectAll',
+        columns,
+        run: () => supabase.from(table).select(columns).range(from, from + PAGE_SIZE - 1)
+      })
+    );
     rows.push(...page);
     if (page.length < PAGE_SIZE) break;
     from += PAGE_SIZE;
@@ -575,19 +608,86 @@ async function deleteMissing(table, ids) {
 
   for (let index = 0; index < missing.length; index += PAGE_SIZE) {
     const batch = missing.slice(index, index + PAGE_SIZE);
-    const result = await supabase.from(table).delete().in('id', batch);
-    await assertResult(result, table);
+    await safeWrite({
+      table,
+      method: 'delete',
+      run: () => supabase.from(table).delete().in('id', batch)
+    });
   }
 }
 
-async function upsertRows(table, rows, onConflict = 'id') {
-  if (!rows.length) return;
-  const supabase = getSupabase();
-  for (let index = 0; index < rows.length; index += PAGE_SIZE) {
-    const batch = rows.slice(index, index + PAGE_SIZE);
-    const result = await supabase.from(table).upsert(batch, { onConflict });
-    await assertResult(result, table);
+function dedupeRows(rows, onConflict = 'id') {
+  const keys = String(onConflict)
+    .split(',')
+    .map((key) => key.trim())
+    .filter(Boolean);
+
+  const map = new Map();
+
+  for (const row of rows || []) {
+    const conflictKey = keys
+      .map((key) => String(row?.[key] ?? ''))
+      .join('::');
+
+    if (!conflictKey || conflictKey.replaceAll(':', '') === '') continue;
+
+    map.set(conflictKey, row);
   }
+
+  return Array.from(map.values());
+}
+
+async function upsertRows(table, rows, onConflict = 'id') {
+  if (!rows?.length) return;
+
+  const supabase = getSupabase();
+  const uniqueRows = dedupeRows(rows, onConflict);
+
+  for (let index = 0; index < uniqueRows.length; index += PAGE_SIZE) {
+    const batch = uniqueRows.slice(index, index + PAGE_SIZE);
+
+    await safeWrite({
+      table,
+      method: 'upsert',
+      run: () => supabase.from(table).upsert(batch, { onConflict })
+    });
+  }
+}
+
+async function updateChapterOrderSafely(chapters = []) {
+  if (!isSupabaseStore()) return;
+  const rows = chapters
+    .filter(item => item?.id && Number.isFinite(Number(item.number)))
+    .map((item, index) => ({
+      id: item.id,
+      number: Number(item.number),
+      updated_at: dbValue('updatedAt', item.updatedAt || new Date().toISOString()),
+      temporary_number: -(index + 1)
+    }));
+  if (!rows.length) return;
+
+  const supabase = getSupabase();
+  for (const row of rows) {
+    await safeWrite({
+      table: TABLES.chapters.table,
+      method: 'reorder-temp',
+      run: () => supabase
+        .from(TABLES.chapters.table)
+        .update({ number: row.temporary_number, updated_at: row.updated_at })
+        .eq('id', row.id)
+    });
+  }
+  for (const row of rows) {
+    await safeWrite({
+      table: TABLES.chapters.table,
+      method: 'reorder-final',
+      run: () => supabase
+        .from(TABLES.chapters.table)
+        .update({ number: row.number, updated_at: row.updated_at })
+        .eq('id', row.id)
+    });
+  }
+  clearSupabaseCache();
 }
 
 function taxonomyItem(value, prefix) {
@@ -782,8 +882,11 @@ async function deleteStoryRelationsFor(storyIds = []) {
   if (!ids.length) return;
   const supabase = getSupabase();
   for (const table of ['story_categories', 'story_tags']) {
-    const result = await supabase.from(table).delete().in('story_id', ids);
-    await assertResult(result, table);
+    await safeWrite({
+      table,
+      method: 'delete',
+      run: () => supabase.from(table).delete().in('story_id', ids)
+    });
   }
 }
 
@@ -837,10 +940,23 @@ async function saveSupabaseDb(db, options = {}) {
     await saveStoryRelations(nextDb, taxonomy);
   }
   for (const def of UPSERT_ORDER.filter(def => def !== TABLES.users && def !== TABLES.stories)) {
-    if (!shouldSave(def.key)) continue;
-    const rows = (nextDb[def.key] || []).map(item => toRow(item, def));
-    await upsertRows(def.table, rows);
+  if (!shouldSave(def.key)) continue;
+
+  let rows = (nextDb[def.key] || []).map(item => toRow(item, def));
+
+  if (def.table === 'chapter_purchases') {
+    rows = rows
+      .map((row) => ({
+        ...row,
+        chapter_id: row.chapter_id || row.chapterId,
+        user_id: row.user_id || row.userId,
+      }))
+      .filter((row) => row.chapter_id && row.user_id);
   }
+
+  const onConflict = def.table === TABLES.chapters.table ? 'story_id,number' : 'id';
+  await upsertRows(def.table, rows, onConflict);
+}
 }
 
 async function loadDb() {
@@ -862,17 +978,30 @@ async function loadDb() {
 async function selectOneById(def, id) {
   if (!isSupabaseStore()) return null;
   const supabase = getSupabase();
+  const columns = tableColumns(def.table, true);
   const result = await supabase
     .from(def.table)
-    .select('*')
+    .select(columns)
     .eq('id', id)
     .maybeSingle();
   if (result.error) throw new Error(supabaseErrorMessage(result, `${def.table}:selectOneById`));
+  debugEgress({ table: def.table, method: 'selectOneById', columns, data: result.data });
   return result.data ? fromRow(result.data, def) : null;
 }
 
 async function selectUserById(id) {
   return selectOneById(TABLES.users, id);
+}
+
+async function selectUserByIdentifier(identifier) {
+  if (!isSupabaseStore()) return null;
+  const normalized = String(identifier || '').trim().toLowerCase();
+  if (!normalized) return null;
+  const users = (await selectAll(TABLES.users.table)).map(row => fromRow(row, TABLES.users));
+  return users.find(user => (
+    String(user.email || '').toLowerCase() === normalized ||
+    String(user.username || '').toLowerCase() === normalized
+  )) || null;
 }
 
 async function selectStoryById(id) {
@@ -882,32 +1011,38 @@ async function selectStoryById(id) {
 async function selectChaptersByStoryId(storyId) {
   if (!isSupabaseStore()) return [];
   const supabase = getSupabase();
-  const result = await supabase
-    .from(TABLES.chapters.table)
-    .select('*')
-    .eq('story_id', storyId)
-    .order('number', { ascending: true });
-  if (result.error) throw new Error(supabaseErrorMessage(result, 'chapters:selectByStoryId'));
-  return (result.data || []).map(row => fromRow(row, TABLES.chapters));
+  const rows = await safeRead({
+    table: TABLES.chapters.table,
+    method: 'chaptersByStory',
+    columns: TABLE_SELECTS.chaptersMetadata,
+    run: () => supabase
+      .from(TABLES.chapters.table)
+      .select(TABLE_SELECTS.chaptersMetadata)
+      .eq('story_id', storyId)
+      .order('number', { ascending: true })
+  });
+  return rows.map(row => fromRow(row, TABLES.chapters));
 }
 
 async function selectStoryFollowerUsers(storyId) {
   if (!isSupabaseStore()) return { follows: [], users: [] };
   const supabase = getSupabase();
-  const followsResult = await supabase
-    .from(TABLES.follows.table)
-    .select('*')
-    .eq('story_id', storyId);
-  if (followsResult.error) throw new Error(supabaseErrorMessage(followsResult, 'follows:selectByStoryId'));
-  const follows = (followsResult.data || []).map(row => fromRow(row, TABLES.follows));
+  const followsRows = await safeRead({
+    table: TABLES.follows.table,
+    method: 'followsByStory',
+    columns: TABLE_SELECTS.follows,
+    run: () => supabase.from(TABLES.follows.table).select(TABLE_SELECTS.follows).eq('story_id', storyId)
+  });
+  const follows = followsRows.map(row => fromRow(row, TABLES.follows));
   const userIds = Array.from(new Set(follows.map(item => item.userId).filter(Boolean)));
   if (!userIds.length) return { follows, users: [] };
-  const usersResult = await supabase
-    .from(TABLES.users.table)
-    .select('*')
-    .in('id', userIds);
-  if (usersResult.error) throw new Error(supabaseErrorMessage(usersResult, 'users:selectFollowers'));
-  return { follows, users: (usersResult.data || []).map(row => fromRow(row, TABLES.users)) };
+  const usersRows = await safeRead({
+    table: TABLES.users.table,
+    method: 'usersFollowers',
+    columns: TABLE_SELECTS.usersFollowers,
+    run: () => supabase.from(TABLES.users.table).select(TABLE_SELECTS.usersFollowers).in('id', userIds)
+  });
+  return { follows, users: usersRows.map(row => fromRow(row, TABLES.users)) };
 }
 
 async function storySlugExists(slug, currentStoryId = '') {
@@ -1055,11 +1190,24 @@ module.exports = {
   storeName,
   selectOneById,
   selectUserById,
+  selectUserByIdentifier,
   selectStoryById,
   selectChaptersByStoryId,
   selectStoryFollowerUsers,
   storySlugExists,
   createStoryWithRelations,
   saveStoryAndChapters,
+  updateChapterOrderSafely,
   withLock
+};
+
+const TABLE_COLUMNS_ALLOWLIST = Object.values(TABLES).reduce((acc, def) => {
+  acc[def.table] = Array.from(new Set([...Object.values(def.map), 'extra']));
+  return acc;
+}, {});
+
+const TABLE_SELECTS = {
+  follows: 'id,user_id,story_id,created_at',
+  usersFollowers: 'id,name,avatar_url,role,status',
+  chaptersMetadata: 'id,story_id,number,title,preview,is_premium,price,views,status,scheduled_at,word_count,rejection_reason,source_batch_id,notified_at,created_at,updated_at'
 };

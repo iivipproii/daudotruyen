@@ -54,6 +54,7 @@ create table if not exists public.stories (
   owner_id text references public.users(id) on delete set null,
   description text,
   cover text,
+  banner_image text,
   cover_path text,
   status text,
   approval_status text not null default 'draft' check (approval_status in ('draft', 'pending', 'approved', 'rejected')),
@@ -74,10 +75,14 @@ create table if not exists public.stories (
   hot boolean not null default false,
   recommended boolean not null default false,
   banner boolean not null default false,
+  home_trending boolean not null default false,
+  home_trending_order numeric not null default 0,
   type text,
   chapter_price numeric not null default 0,
   vip_from_chapter numeric not null default 0,
   combo_price numeric not null default 0,
+  combo_price_changed_at timestamptz,
+  combo_price_locked boolean not null default false,
   deleted_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz,
@@ -371,6 +376,8 @@ create index if not exists stories_owner_updated_idx on public.stories(owner_id,
 create index if not exists chapters_story_number_idx on public.chapters(story_id, number);
 create index if not exists chapters_story_created_idx on public.chapters(story_id, created_at desc);
 create index if not exists chapters_status_created_idx on public.chapters(status, created_at desc);
+create index if not exists chapters_story_status_updated_idx on public.chapters(story_id, status, updated_at desc);
+create index if not exists chapters_story_premium_updated_idx on public.chapters(story_id, is_premium, updated_at desc);
 create index if not exists users_role_idx on public.users(role);
 create index if not exists comments_story_idx on public.comments(story_id, created_at desc);
 create index if not exists coin_transactions_user_idx on public.coin_transactions(user_id, created_at desc);

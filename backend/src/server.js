@@ -6,7 +6,7 @@ const mammoth = require('mammoth');
 const dataStore = require('./db');
 const storage = require('./services/storage');
 const { normalizeRole, isAdmin, canPostStory } = require('./permissions');
-const { hasTestPlaceholder, validateTextFields, validateCleanText } = require('./text-quality');
+const { hasTestPlaceholder, repairMojibake, validateTextFields, validateCleanText } = require('./text-quality');
 
 const PORT = Number(process.env.PORT || 4000);
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
@@ -25,6 +25,8 @@ const DEFAULT_PRODUCTION_CORS_ORIGINS = ['https://daudotruyen.vercel.app'];
 const VERCEL_PREVIEW_ORIGIN_PATTERN = /^https:\/\/daudotruyen(?:-git-[a-z0-9-]+|-[-a-z0-9]+-iivipproiis-projects)\.vercel\.app$/i;
 const PUBLIC_CACHE_CONTROL = 'public, max-age=60, s-maxage=300, stale-while-revalidate=86400';
 const NO_STORE_CACHE_CONTROL = 'no-store, max-age=0';
+const publicResponseCache = new Map();
+const publicResponseInflight = new Map();
 const CORS_ORIGINS = resolveCorsOrigins();
 
 if (process.env.NODE_ENV === 'production' && (!process.env.JWT_SECRET || process.env.JWT_SECRET === 'dev-secret-change-me')) {
@@ -77,6 +79,12 @@ function uid(prefix = 'id') {
 
 async function persistDb(db, options = {}) {
   await dataStore.saveDb(ensureDbShape(db), options);
+}
+
+function persistDbInBackground(db, options = {}, label = 'background:persist') {
+  persistDb(db, options).catch(error => {
+    console.warn(`[${label}] ${error.message || error}`);
+  });
 }
 
 function base64url(input) {
@@ -178,6 +186,87 @@ function publicCacheHeaders() {
   return { 'Cache-Control': PUBLIC_CACHE_CONTROL };
 }
 
+function cachePolicyForPath(pathname) {
+  if (pathname === '/api/home') {
+    return {
+      'Cache-Control': 'public, max-age=30',
+      'CDN-Cache-Control': 'max-age=60, stale-while-revalidate=300',
+      'Vercel-CDN-Cache-Control': 'max-age=60, stale-while-revalidate=300'
+    };
+  }
+  if (pathname === '/api/stories' || pathname === '/api/categories' || pathname === '/api/rankings') {
+    return {
+      'Cache-Control': 'public, max-age=60',
+      'CDN-Cache-Control': 'max-age=900, stale-while-revalidate=86400',
+      'Vercel-CDN-Cache-Control': 'max-age=900, stale-while-revalidate=604800'
+    };
+  }
+  if (Boolean(match(pathname, '/api/stories/:slug'))) {
+    return {
+      'Cache-Control': 'public, max-age=300',
+      'CDN-Cache-Control': 'max-age=21600, stale-while-revalidate=86400',
+      'Vercel-CDN-Cache-Control': 'max-age=21600, stale-while-revalidate=604800'
+    };
+  }
+  if (Boolean(match(pathname, '/api/stories/:slug/chapters/:number'))) {
+    return {
+      'Cache-Control': 'public, max-age=86400',
+      'CDN-Cache-Control': 'max-age=2592000, stale-while-revalidate=604800',
+      'Vercel-CDN-Cache-Control': 'max-age=2592000, stale-while-revalidate=2592000'
+    };
+  }
+  if (Boolean(match(pathname, '/api/stories/:slug/chapters'))) {
+    return {
+      'Cache-Control': 'public, max-age=300',
+      'CDN-Cache-Control': 'max-age=21600, stale-while-revalidate=86400',
+      'Vercel-CDN-Cache-Control': 'max-age=21600, stale-while-revalidate=604800'
+    };
+  }
+  return null;
+}
+
+function clearPublicResponseCacheFor(paths = []) {
+  const normalized = new Set(paths);
+  for (const key of publicResponseCache.keys()) {
+    const pathname = key.split('?')[0];
+    if (normalized.has(pathname)) publicResponseCache.delete(key);
+  }
+  for (const key of publicResponseInflight.keys()) {
+    const pathname = key.split('?')[0];
+    if (normalized.has(pathname)) publicResponseInflight.delete(key);
+  }
+}
+
+function clearHomePublicCache() {
+  clearPublicResponseCacheFor(['/api/home', '/api/stories', '/api/categories', '/api/rankings']);
+}
+
+function buildEtag(payload) {
+  return `"${crypto.createHash('sha1').update(payload).digest('base64url')}"`;
+}
+
+function sendCachedJson(req, res, status, body, extraHeaders = {}) {
+  const payload = body === undefined ? '' : JSON.stringify(body);
+  const etag = buildEtag(payload);
+  if (req.headers['if-none-match'] === etag) {
+    res.writeHead(304, {
+      ...corsHeaders(req),
+      ...defaultCacheHeaders(req),
+      ETag: etag,
+      ...extraHeaders
+    });
+    return res.end();
+  }
+  res.writeHead(status, {
+    'Content-Type': 'application/json; charset=utf-8',
+    ...corsHeaders(req),
+    ...defaultCacheHeaders(req),
+    ETag: etag,
+    ...extraHeaders
+  });
+  return res.end(payload);
+}
+
 function send(res, status, body, extraHeaders = {}) {
   const payload = body === undefined ? '' : JSON.stringify(body);
   res.writeHead(status, {
@@ -192,6 +281,23 @@ function send(res, status, body, extraHeaders = {}) {
 function isDatabaseAvailabilityError(error) {
   const message = String(error?.message || error || '').toLowerCase();
   return /\b(supabase|database|schema cache|upstream request timeout|fetch failed|bad gateway|service unavailable|gateway timeout|econnreset|etimedout)\b/.test(message);
+}
+
+async function loadRequestDb(req, pathname) {
+  try {
+    const db = ensureDbShape(await dataStore.loadDb());
+    if (req.method === 'GET' && isPublicCacheablePath(pathname) && (!Array.isArray(db.stories) || db.stories.length === 0)) {
+      console.warn(`[DB_PUBLIC_FALLBACK] ${pathname}: empty public snapshot`);
+      return ensureDbShape(createSeedDb());
+    }
+    return db;
+  } catch (error) {
+    if (req.method === 'GET' && isPublicCacheablePath(pathname) && isDatabaseAvailabilityError(error)) {
+      console.warn(`[DB_PUBLIC_FALLBACK] ${pathname}: ${error.message}`);
+      return ensureDbShape(createSeedDb());
+    }
+    throw error;
+  }
 }
 
 function clientIp(req) {
@@ -372,7 +478,7 @@ function enrichStory(db, story, viewerId, includeAllChapters = false) {
   const ratingAvg = ratings.length
     ? Number((ratings.reduce((sum, item) => sum + item.value, 0) / ratings.length).toFixed(1))
     : story.rating;
-  return {
+  return repairStoryPayload({
     ...story,
     approvalStatus: story.approvalStatus || 'approved',
     rating: ratingAvg,
@@ -382,7 +488,85 @@ function enrichStory(db, story, viewerId, includeAllChapters = false) {
     latestChapter: chapters.at(-1) || null,
     bookmarked: viewerId ? db.bookmarks.some(item => item.userId === viewerId && item.storyId === story.id) : false,
     followed: viewerId ? db.follows.some(item => item.userId === viewerId && item.storyId === story.id) : false
+  });
+}
+
+function repairStoryPayload(story = {}) {
+  const next = { ...story };
+  ['title', 'author', 'translator', 'description', 'language', 'shortDescription', 'rejectionReason'].forEach(field => {
+    if (typeof next[field] === 'string') next[field] = repairMojibake(next[field]);
+  });
+  if (typeof next.cover === 'string') next.cover = storage.getPublicUrl(next.cover);
+  if (typeof next.coverUrl === 'string') next.coverUrl = storage.getPublicUrl(next.coverUrl);
+  if (typeof next.bannerImage === 'string') next.bannerImage = storage.getPublicUrl(next.bannerImage);
+  if (typeof next.bannerUrl === 'string') next.bannerUrl = storage.getPublicUrl(next.bannerUrl);
+  if (Array.isArray(next.categories)) next.categories = next.categories.map(repairMojibake);
+  if (Array.isArray(next.tags)) next.tags = next.tags.map(repairMojibake);
+  if (next.latestChapter) next.latestChapter = repairChapterPayload(next.latestChapter);
+  return next;
+}
+
+function repairChapterPayload(chapter = {}) {
+  const next = { ...chapter };
+  ['title', 'content', 'preview', 'rejectionReason', 'unavailableMessage'].forEach(field => {
+    if (typeof next[field] === 'string') next[field] = repairMojibake(next[field]);
+  });
+  return next;
+}
+
+function chapterMetadataSummary(chapter) {
+  return repairChapterPayload({
+    id: chapter.id,
+    storyId: chapter.storyId,
+    number: chapter.number,
+    title: chapter.title,
+    preview: chapter.preview,
+    isPremium: Boolean(chapter.isPremium),
+    price: chapter.price,
+    views: chapter.views,
+    status: chapterStatus(chapter),
+    scheduledAt: chapter.scheduledAt || '',
+    wordCount: chapter.wordCount || 0,
+    createdAt: chapter.createdAt,
+    updatedAt: chapter.updatedAt
+  });
+}
+
+function chapterIndexItem(story, chapter) {
+  return {
+    chapterNumber: chapter.number,
+    number: chapter.number,
+    title: repairMojibake(chapter.title || `Chương ${chapter.number}`),
+    slug: `/truyen/${story.slug}/chuong/${chapter.number}`
   };
+}
+
+function buildChapterPageData(story, chapter, chapters, unlocked) {
+  const sorted = (chapters || []).slice().sort((a, b) => a.number - b.number);
+  const currentNumber = Number(chapter.number);
+  const prev = sorted.filter(item => Number(item.number) < currentNumber).at(-1) || null;
+  const next = sorted.find(item => Number(item.number) > currentNumber) || null;
+  const visibleContent = unlocked
+    ? publicReaderChapter(chapter).content
+    : (chapter.preview || 'Chương trả phí. Vui lòng mở khóa để đọc đầy đủ.');
+  return {
+    storyTitle: repairMojibake(story.title || ''),
+    storySlug: story.slug,
+    chapterNumber: currentNumber,
+    chapterTitle: repairMojibake(chapter.title || `Chương ${currentNumber}`),
+    content: repairMojibake(visibleContent || ''),
+    prevChapterNumber: prev ? Number(prev.number) : null,
+    nextChapterNumber: next ? Number(next.number) : null
+  };
+}
+
+function repairCommentPayload(comment = {}) {
+  const next = { ...comment };
+  ['body', 'userName'].forEach(field => {
+    if (typeof next[field] === 'string') next[field] = repairMojibake(next[field]);
+  });
+  if (Array.isArray(next.replies)) next.replies = next.replies.map(repairCommentPayload);
+  return next;
 }
 
 function match(pathname, pattern) {
@@ -400,13 +584,14 @@ function match(pathname, pattern) {
 }
 
 function storySummary(story) {
-  return {
+  return repairStoryPayload({
     id: story.id,
     ownerId: story.ownerId,
     slug: story.slug,
     title: story.title,
     author: story.author,
     cover: story.cover,
+    bannerImage: story.bannerImage || '',
     description: story.description,
     status: story.status,
     premium: story.premium,
@@ -419,6 +604,8 @@ function storySummary(story) {
     hot: Boolean(story.hot),
     recommended: Boolean(story.recommended),
     banner: Boolean(story.banner),
+    homeTrending: Boolean(story.homeTrending),
+    homeTrendingOrder: Number(story.homeTrendingOrder || 0),
     isFeatured: Boolean(story.featured),
     isHot: Boolean(story.hot),
     isRecommended: Boolean(story.recommended),
@@ -436,13 +623,17 @@ function storySummary(story) {
     updatedAt: story.updatedAt,
     chapterCount: story.chapterCount,
     latestChapter: story.latestChapter,
+    rankScore: story.rankScore,
+    periodViews: story.periodViews,
+    rankDelta: story.rankDelta,
     bookmarked: story.bookmarked,
     followed: story.followed
-  };
+  });
 }
 
 function sortStories(items, sort = 'updated') {
   items.sort((a, b) => {
+    if (sort === 'homeTrending') return Number(a.homeTrendingOrder || 9999) - Number(b.homeTrendingOrder || 9999);
     if (sort === 'views') return b.views - a.views;
     if (sort === 'rating') return b.rating - a.rating;
     if (sort === 'follows') return b.follows - a.follows;
@@ -467,6 +658,7 @@ function queryPublicStories(db, viewerId, query = {}) {
     hot = false,
     recommended = false,
     banner = false,
+    homeTrending = false,
     limit = 100
   } = query;
 
@@ -480,8 +672,47 @@ function queryPublicStories(db, viewerId, query = {}) {
   if (hot) items = items.filter(story => story.hot);
   if (recommended) items = items.filter(story => story.recommended);
   if (banner) items = items.filter(story => story.banner);
+  if (homeTrending) items = items.filter(story => story.homeTrending);
   sortStories(items, sort);
   return items.slice(0, limit);
+}
+
+function promotedHomeStories(db, limit = 24) {
+  const activeStoryIds = new Set(db.promotions
+    .filter(promotion => {
+      const startsAt = promotion.startsAt ? new Date(promotion.startsAt).getTime() : 0;
+      const endsAt = promotion.endsAt ? new Date(promotion.endsAt).getTime() : Infinity;
+      const time = Date.now();
+      return promotion.status === 'active' && startsAt <= time && time <= endsAt;
+    })
+    .map(promotion => promotion.storyId));
+  const promoted = db.stories
+    .filter(story => activeStoryIds.has(story.id) && isPublicStory(story))
+    .map(story => enrichStory(db, story, null))
+    .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0));
+  if (promoted.length) return promoted.slice(0, limit);
+  return queryPublicStories(db, null, { recommended: true, sort: 'updated', limit });
+}
+
+function reviewHomeStories(db, limit = 12) {
+  return db.stories
+    .filter(isPublicStory)
+    .map(story => enrichStory(db, story, null))
+    .filter(story => Number(story.ratingCount || 0) > 0 || Number(story.rating || 0) > 0)
+    .sort((a, b) => {
+      if (Number(b.ratingCount || 0) !== Number(a.ratingCount || 0)) return Number(b.ratingCount || 0) - Number(a.ratingCount || 0);
+      if (Number(b.rating || 0) !== Number(a.rating || 0)) return Number(b.rating || 0) - Number(a.rating || 0);
+      return new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0);
+    })
+    .slice(0, limit);
+}
+
+function trendingHomeStories(db, limit = 10) {
+  return db.stories
+    .filter(story => isPublicStory(story) && story.homeTrending)
+    .map(story => enrichStory(db, story, null))
+    .sort((a, b) => Number(a.homeTrendingOrder || 9999) - Number(b.homeTrendingOrder || 9999))
+    .slice(0, limit);
 }
 
 function normalizeUsername(value) {
@@ -537,6 +768,7 @@ const VALID_CHAPTER_STATUSES = ['draft', 'pending', 'reviewing', 'approved', 'pu
 const VALID_ADMIN_USER_STATUSES = ['active', 'locked'];
 const VALID_ADMIN_USER_ROLES = ['user', 'mod', 'admin'];
 const VALID_MOD_MANAGEMENT_ROLES = ['user', 'mod'];
+const MAX_HOME_BANNERS = 6;
 const VALID_REPORT_STATUSES = ['open', 'reviewing', 'resolved', 'rejected'];
 const VALID_COMMENT_STATUSES = ['visible', 'hidden', 'deleted'];
 const VALID_TRANSACTION_TYPES = ['topup', 'purchase', 'bonus', 'admin_adjustment', 'refund', 'promotion', 'withdrawal', 'author_payout'];
@@ -1171,12 +1403,15 @@ function ensureDbShape(db) {
     if (!VALID_STORY_APPROVAL_STATUSES.includes(story.approvalStatus)) story.approvalStatus = story.hidden ? 'pending' : 'approved';
     story.status ||= 'ongoing';
     story.rejectionReason ||= '';
+    story.bannerImage = typeof story.bannerImage === 'string' ? story.bannerImage.trim() : '';
     story.categories ||= [];
     story.tags ||= [];
     story.featured = Boolean(story.featured);
     story.hot = Boolean(story.hot);
     story.recommended = Boolean(story.recommended);
     story.banner = Boolean(story.banner);
+    story.homeTrending = Boolean(story.homeTrending);
+    story.homeTrendingOrder = Number(story.homeTrendingOrder || 0);
     story.hidden = Boolean(story.hidden);
     story.views = Number(story.views || 0);
     story.chapterCountEstimate = Number(story.chapterCountEstimate || 0);
@@ -1243,7 +1478,7 @@ function cloneForLog(value) {
 
 function pageParams(url) {
   const page = Math.max(1, parsePositiveNumber(url.searchParams.get('page'), 1));
-  const limit = Math.min(100, Math.max(1, parsePositiveNumber(url.searchParams.get('limit'), 50)));
+  const limit = Math.min(100, Math.max(1, parsePositiveNumber(url.searchParams.get('limit'), 20)));
   return { page, limit };
 }
 
@@ -1322,6 +1557,7 @@ function adminStorySummary(db, story, viewerId) {
     author: story.author || '',
     description: story.description || '',
     coverUrl: story.cover || story.coverUrl || '',
+    bannerImage: story.bannerImage || '',
     genres: story.categories || [],
     tags: story.tags || [],
     status: story.approvalStatus || 'pending',
@@ -1338,12 +1574,15 @@ function adminStorySummary(db, story, viewerId) {
     updatedAt: story.updatedAt || story.createdAt || '',
     deletedAt: story.deletedAt || null,
     cover: story.cover || story.coverUrl || '',
+    bannerImage: story.bannerImage || '',
     approvalStatus: story.approvalStatus || 'pending',
     hidden: Boolean(story.hidden),
     featured: Boolean(story.featured),
     hot: Boolean(story.hot),
     recommended: Boolean(story.recommended),
     banner: Boolean(story.banner),
+    homeTrending: Boolean(story.homeTrending),
+    homeTrendingOrder: Number(story.homeTrendingOrder || 0),
     categories: story.categories || [],
     chapterCount,
     owner: safeUser(owner),
@@ -1354,8 +1593,15 @@ function adminStorySummary(db, story, viewerId) {
     banner: Boolean(story.banner),
     comments: db.comments.filter(comment => comment.storyId === story.id).length,
     totalChapters: allChapters.length,
-    pendingChapters: allChapters.filter(chapter => ['pending', 'reviewing'].includes(chapter.status)).length
+    pendingChapters: allChapters.filter(chapter => ['pending', 'reviewing'].includes(chapter.status)).length,
+    comboPrice: story.comboPrice ?? 0,
+    comboPriceChangedAt: story.comboPriceChangedAt || '',
+    comboPriceLocked: Boolean(story.comboPriceLocked)
   };
+}
+
+function canEnableHomeBanner(db, storyId = '') {
+  return db.stories.filter(story => story.banner && story.id !== storyId).length < MAX_HOME_BANNERS;
 }
 
 function adminTransactionSummary(db, transaction) {
@@ -1570,9 +1816,73 @@ function adminDashboard(db) {
   };
 }
 
+function adminBootstrapResponse(db, admin, url) {
+  const pageOf = (items) => {
+    const page = paginate(items, url);
+    return [page.items, page.pagination];
+  };
+
+  const users = db.users
+    .map(user => adminUserSummary(db, user))
+    .sort((a, b) => new Date(b.joinedAt || 0) - new Date(a.joinedAt || 0));
+  const stories = db.stories
+    .map(story => adminStorySummary(db, story, admin.id))
+    .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0));
+  const chapters = db.chapters
+    .map(chapter => chapterAdminSummary(db, chapter))
+    .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0));
+  const reports = db.reports
+    .map(report => adminReportSummary(db, report))
+    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+  const transactions = db.transactions
+    .map(item => adminTransactionSummary(db, item))
+    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+  const comments = db.comments
+    .map(comment => adminCommentSummary(db, comment))
+    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+  const notifications = db.adminNotifications
+    .slice()
+    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+  const logs = db.adminLogs
+    .slice()
+    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+
+  const [pagedUsers, usersPagination] = pageOf(users);
+  const [pagedStories, storiesPagination] = pageOf(stories);
+  const [pagedChapters, chaptersPagination] = pageOf(chapters);
+  const [pagedReports, reportsPagination] = pageOf(reports);
+  const [pagedTransactions, transactionsPagination] = pageOf(transactions);
+  const [pagedComments, commentsPagination] = pageOf(comments);
+  const [pagedNotifications, notificationsPagination] = pageOf(notifications);
+  const [pagedLogs, logsPagination] = pageOf(logs);
+
+  return {
+    stats: adminDashboard(db),
+    users: pagedUsers,
+    stories: pagedStories,
+    chapters: pagedChapters,
+    reports: pagedReports,
+    transactions: pagedTransactions,
+    comments: pagedComments,
+    taxonomy: taxonomyResponse(db),
+    notifications: pagedNotifications,
+    logs: pagedLogs,
+    pagination: {
+      users: usersPagination,
+      stories: storiesPagination,
+      chapters: chaptersPagination,
+      reports: reportsPagination,
+      transactions: transactionsPagination,
+      comments: commentsPagination,
+      notifications: notificationsPagination,
+      logs: logsPagination
+    }
+  };
+}
+
 function publicComment(db, comment) {
   const user = db.users.find(item => item.id === comment.userId);
-  return {
+  return repairCommentPayload({
     id: comment.id,
     storyId: comment.storyId,
     chapterId: comment.chapterId || null,
@@ -1582,7 +1892,7 @@ function publicComment(db, comment) {
     userAvatar: user?.avatar || '/images/logo.png',
     body: comment.body,
     createdAt: comment.createdAt
-  };
+  });
 }
 
 function publicCommentsForStory(db, storyId) {
@@ -1745,6 +2055,8 @@ function normalizeAuthorStoryInput(body, user, existingStory) {
     vipFromChapter: parsePositiveNumber(body.vipFromChapter ?? existingStory?.vipFromChapter, premium ? 1 : 0),
     chapterPrice: parsePositiveNumber(body.chapterPrice ?? existingStory?.chapterPrice ?? price, price),
     comboPrice: parsePositiveNumber(body.comboPrice ?? existingStory?.comboPrice, 0),
+    comboPriceChangedAt: existingStory?.comboPriceChangedAt || '',
+    comboPriceLocked: Boolean(existingStory?.comboPriceLocked),
     chapterCountEstimate: parsePositiveNumber(body.chapterCountEstimate ?? body.chapterCount ?? existingStory?.chapterCountEstimate, 0)
   };
 }
@@ -1897,6 +2209,8 @@ function authorStorySummary(db, story, viewerId) {
     chapterPrice: story.chapterPrice ?? story.price ?? 0,
     vipFromChapter: story.vipFromChapter ?? (story.premium ? 1 : 0),
     comboPrice: story.comboPrice ?? 0,
+    comboPriceChangedAt: story.comboPriceChangedAt || '',
+    comboPriceLocked: Boolean(story.comboPriceLocked),
     chapters: allChapters.length,
     approvedChapters: publicChapters.length,
     revenue,
@@ -2243,9 +2557,9 @@ async function handle(req, res) {
 
     if (req.method === 'GET' && pathname === '/') {
       return send(res, 200, {
-        name: 'Äáº­u Äá» Truyá»‡n API',
+        name: 'Đậu Đỏ Truyện API',
         status: 'ok',
-        message: 'Backend Ä‘ang hoáº¡t Ä‘á»™ng',
+        message: 'Backend đang hoạt động',
       });
     }
 
@@ -2295,6 +2609,18 @@ async function handle(req, res) {
       return await handleSupabaseCoverUpload(req, res);
     }
 
+    if (req.method === 'POST' && pathname === '/api/auth/login' && dataStore.storeName() !== 'memory') {
+      const body = await parseBody(req);
+      const identifier = String(body.identifier || body.email || '').trim().toLowerCase();
+      const password = String(body.password || '');
+      const user = await dataStore.selectUserByIdentifier(identifier);
+      if (!user) return badRequest(res, 'Tên đăng nhập/Gmail hoặc mật khẩu không đúng.');
+      if (user.status === 'deactivated' || user.status === 'locked') return forbidden(res);
+      const check = hashPassword(password, user.salt);
+      if (check.passwordHash !== user.passwordHash) return badRequest(res, 'Tên đăng nhập/Gmail hoặc mật khẩu không đúng.');
+      return send(res, 200, { token: createToken(user), user: safeUser(user) });
+    }
+
     const targetedAuthorStoryBulkParams = match(pathname, '/api/author/stories/:id/chapters/bulk');
     if (targetedAuthorStoryBulkParams && req.method === 'POST' && dataStore.storeName() !== 'memory') {
       return await handleSupabaseAuthorStoryBulkChapters(req, res, targetedAuthorStoryBulkParams.id);
@@ -2302,9 +2628,31 @@ async function handle(req, res) {
 
     const runDbRequest = async () => {
     const requestPerf = createPerf(perfLabel(req.method, pathname));
-    const db = ensureDbShape(await dataStore.loadDb());
+    const db = await loadRequestDb(req, pathname);
     requestPerf.mark('loadDb');
-    const viewer = getAuthUser(req, db);
+  const viewer = getAuthUser(req, db);
+  const cachePolicy = req.method === 'GET' && !viewer ? cachePolicyForPath(pathname) : null;
+  const cacheKey = cachePolicy ? `${pathname}?${url.searchParams.toString()}` : '';
+  if (cachePolicy && publicResponseCache.has(cacheKey)) {
+    const cached = publicResponseCache.get(cacheKey);
+    if (cached.expiresAt > Date.now()) {
+      if (req.headers['if-none-match'] === cached.etag) {
+        res.writeHead(304, { ...corsHeaders(req), ...cachePolicy, ETag: cached.etag });
+        res.end();
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', ...corsHeaders(req), ...cachePolicy, ETag: cached.etag });
+      res.end(cached.payload);
+      return;
+    }
+    publicResponseCache.delete(cacheKey);
+  }
+  if (cachePolicy && publicResponseInflight.has(cacheKey)) {
+    const inflight = await publicResponseInflight.get(cacheKey);
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', ...corsHeaders(req), ...cachePolicy, ETag: inflight.etag });
+    res.end(inflight.payload);
+    return;
+  }
 
     if (req.method === 'POST' && pathname === '/api/uploads/cover') {
       const user = requireStoryPublisher(req, res, db);
@@ -2546,26 +2894,43 @@ async function handle(req, res) {
     if (req.method === 'GET' && pathname === '/api/categories') {
       const limit = clampNumber(url.searchParams.get('limit'), 1, 100, 100);
       const categories = Array.from(new Set(db.stories.filter(isPublicStory).flatMap(story => story.categories))).sort().slice(0, limit);
-      return send(res, 200, { categories }, publicCacheHeaders());
+      return sendCachedJson(req, res, 200, { categories }, cachePolicyForPath(pathname) || publicCacheHeaders());
     }
 
     if (req.method === 'GET' && pathname === '/api/home') {
-      const updatedStories = queryPublicStories(db, null, { sort: 'updated', limit: 20 });
+      const updatedStories = queryPublicStories(db, null, { sort: 'updated', limit: 10 });
       const popularStories = queryPublicStories(db, null, { sort: 'views', limit: 20 });
-      const completedStories = queryPublicStories(db, null, { status: 'completed', sort: 'updated', limit: 20 });
-      const featuredStories = queryPublicStories(db, null, { featured: true, sort: 'rating', limit: 20 });
+      const completedStories = queryPublicStories(db, null, { status: 'completed', sort: 'updated', limit: 12 });
+      const featuredStories = queryPublicStories(db, null, { featured: true, sort: 'rating', limit: 24 });
       const recommendedStories = queryPublicStories(db, null, { recommended: true, sort: 'updated', limit: 20 });
-      const banners = queryPublicStories(db, null, { banner: true, sort: 'updated', limit: 10 });
-      const categories = Array.from(new Set(db.stories.filter(isPublicStory).flatMap(story => story.categories))).sort().slice(0, 30);
-      return send(res, 200, {
+      const banners = queryPublicStories(db, null, { banner: true, sort: 'updated', limit: MAX_HOME_BANNERS });
+      const promotedStories = promotedHomeStories(db, 24);
+      const reviewStories = reviewHomeStories(db, 12);
+      const trendingStories = trendingHomeStories(db, 10);
+      const rankingsByPeriod = RANKING_PERIODS.reduce((rankings, period) => {
+        rankings[period] = buildRankings(db, { period, metric: 'views', limit: 10 }).map(storySummary);
+        return rankings;
+      }, {});
+      const categories = Array.from(new Set(db.stories.filter(isPublicStory).flatMap(story => story.categories))).sort().slice(0, 14);
+      const body = {
         banners: banners.map(storySummary),
         updatedStories: updatedStories.map(storySummary),
         popularStories: popularStories.map(storySummary),
         completedStories: completedStories.map(storySummary),
         featuredStories: featuredStories.map(storySummary),
         recommendedStories: recommendedStories.map(storySummary),
+        promotedStories: promotedStories.map(storySummary),
+        reviewStories: reviewStories.map(storySummary),
+        trendingStories: trendingStories.map(storySummary),
+        rankingsByPeriod,
         categories
-      }, publicCacheHeaders());
+      };
+      if (!viewer && cachePolicy) {
+        const payload = JSON.stringify(body);
+        const etag = buildEtag(payload);
+        publicResponseCache.set(cacheKey, { payload, etag, expiresAt: Date.now() + 60 * 1000 });
+      }
+      return sendCachedJson(req, res, 200, body, cachePolicyForPath(pathname) || publicCacheHeaders());
     }
 
     if (req.method === 'POST' && pathname === '/api/newsletter') {
@@ -2601,15 +2966,23 @@ async function handle(req, res) {
       const status = url.searchParams.get('status') || '';
       const premium = url.searchParams.get('premium') || '';
       const ageRating = url.searchParams.get('ageRating') || '';
-      const sort = url.searchParams.get('sort') || 'updated';
+      const homeTrending = url.searchParams.get('homeTrending') === 'true' || url.searchParams.get('home_trending') === 'true';
+      const sort = url.searchParams.get('sort') || (homeTrending ? 'homeTrending' : 'updated');
       const featured = url.searchParams.get('featured') === 'true';
       const hot = url.searchParams.get('hot') === 'true' || url.searchParams.get('isHot') === 'true';
       const recommended = url.searchParams.get('recommended') === 'true' || url.searchParams.get('isRecommended') === 'true';
       const banner = url.searchParams.get('banner') === 'true' || url.searchParams.get('isBanner') === 'true';
-      const limit = clampNumber(url.searchParams.get('limit'), 1, 100, 100);
-      const items = queryPublicStories(db, viewer && viewer.id, { q, category, status, premium, ageRating, sort, featured, hot, recommended, banner, limit });
-      const storyListCacheHeaders = viewer || sort === 'created' || sort === 'new' ? privateCacheHeaders() : publicCacheHeaders();
-      return send(res, 200, { stories: items.map(storySummary) }, storyListCacheHeaders);
+      const { page, limit } = pageParams(url);
+      const fetchLimit = Math.min(100, page * limit);
+      const items = queryPublicStories(db, viewer && viewer.id, { q, category, status, premium, ageRating, sort, featured, hot, recommended, banner, homeTrending, limit: fetchLimit });
+      const total = items.length;
+      const start = (page - 1) * limit;
+      const pagedItems = items.slice(start, start + limit);
+      const storyListCacheHeaders = viewer || sort === 'created' || sort === 'new' ? privateCacheHeaders() : (cachePolicyForPath(pathname) || publicCacheHeaders());
+      return sendCachedJson(res.req || req, res, 200, {
+        stories: pagedItems.map(storySummary),
+        pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) }
+      }, storyListCacheHeaders);
     }
 
     if (req.method === 'GET' && pathname === '/api/rankings') {
@@ -2617,7 +2990,7 @@ async function handle(req, res) {
       const metric = url.searchParams.get('metric') || 'views';
       const limit = url.searchParams.get('limit') || 100;
       const stories = buildRankings(db, { period, metric, limit });
-      return send(res, 200, { stories });
+      return sendCachedJson(req, res, 200, { stories }, cachePolicyForPath(pathname) || publicCacheHeaders());
     }
 
     const storyParams = match(pathname, '/api/stories/:slug');
@@ -2627,14 +3000,36 @@ async function handle(req, res) {
       if (!isPublicStory(story) && (!viewer || viewer.role !== 'admin')) return notFound(res);
       story.views += 1;
       db.viewEvents.push({ id: uid('view'), storyId: story.id, userId: viewer?.id || null, createdAt: now() });
-      await persistDb(db);
+      if (viewer) {
+        await persistDb(db);
+      } else {
+        persistDbInBackground(db, {}, 'story:view-track');
+      }
       const enriched = enrichStory(db, story, viewer && viewer.id, viewer?.role === 'admin');
       const chapters = db.chapters
         .filter(chapter => chapter.storyId === story.id)
         .filter(chapter => viewer?.role === 'admin' || isPublicChapter(chapter))
         .sort((a, b) => a.number - b.number);
       const comments = publicCommentsForStory(db, story.id);
-      return send(res, 200, { story: enriched, chapters, comments }, viewer?.role === 'admin' || viewer ? privateCacheHeaders() : publicCacheHeaders());
+      const body = { story: enriched, chapters: chapters.map(chapterMetadataSummary), comments };
+      return sendCachedJson(req, res, 200, body, viewer?.role === 'admin' || viewer ? privateCacheHeaders() : (cachePolicyForPath(pathname) || publicCacheHeaders()));
+    }
+
+    const chapterListParams = match(pathname, '/api/stories/:slug/chapters');
+    if (req.method === 'GET' && chapterListParams) {
+      const story = db.stories.find(item => item.slug === chapterListParams.slug || item.id === chapterListParams.slug);
+      if (!story) return notFound(res);
+      if (!isPublicStory(story) && (!viewer || viewer.role !== 'admin')) return notFound(res);
+      const chapters = db.chapters
+        .filter(chapter => chapter.storyId === story.id)
+        .filter(chapter => viewer?.role === 'admin' || isPublicChapter(chapter))
+        .sort((a, b) => a.number - b.number);
+      const page = paginate(chapters, url);
+      return sendCachedJson(req, res, 200, {
+        story: { title: repairMojibake(story.title || ''), slug: story.slug },
+        chapters: page.items.map(chapter => chapterIndexItem(story, chapter)),
+        pagination: page.pagination
+      }, viewer?.role === 'admin' || viewer ? privateCacheHeaders() : (cachePolicyForPath(pathname) || publicCacheHeaders()));
     }
 
     const chapterParams = match(pathname, '/api/stories/:slug/chapters/:number');
@@ -2642,24 +3037,51 @@ async function handle(req, res) {
       const story = db.stories.find(item => item.slug === chapterParams.slug || item.id === chapterParams.slug);
       if (!story) return notFound(res);
       if (!isPublicStory(story) && (!viewer || viewer.role !== 'admin')) return notFound(res);
-      const chapter = db.chapters.find(item => item.storyId === story.id && item.number === Number(chapterParams.number));
+      const allChapters = db.chapters
+        .filter(item => item.storyId === story.id)
+        .filter(item => viewer?.role === 'admin' || isPublicChapter(item))
+        .sort((a, b) => a.number - b.number);
+      const chapter = allChapters.find(item => item.number === Number(chapterParams.number));
       if (!chapter) return notFound(res);
       if (!isPublicChapter(chapter) && viewer?.role !== 'admin') return notFound(res);
       const unlocked = !chapter.isPremium || (viewer && db.purchases.some(item => item.userId === viewer.id && (item.chapterId === chapter.id || (item.storyId === story.id && item.combo))));
-      const payloadChapter = unlocked ? publicReaderChapter(chapter) : { ...chapter, content: chapter.preview || 'Chương trả phí. Vui lòng mở khóa để đọc đầy đủ.' };
       chapter.views += 1;
       story.views += 1;
       db.viewEvents.push({ id: uid('view'), storyId: story.id, chapterId: chapter.id, userId: viewer?.id || null, createdAt: now() });
       if (viewer) {
         upsertReadingProgress(db, { userId: viewer.id, storyId: story.id, chapterId: chapter.id, chapterNumber: chapter.number });
       }
-      await persistDb(db);
-      return send(
-        res,
-        200,
-        { story: enrichStory(db, story, viewer && viewer.id, viewer?.role === 'admin'), chapter: payloadChapter, unlocked },
-        viewer?.role === 'admin' || viewer ? privateCacheHeaders() : publicCacheHeaders()
-      );
+      if (viewer) {
+        await persistDb(db);
+      } else {
+        persistDbInBackground(db, {}, 'chapter:view-track');
+      }
+      const chapterPageData = buildChapterPageData(story, chapter, allChapters, Boolean(unlocked));
+      return sendCachedJson(req, res, 200, {
+        chapterPageData,
+        story: {
+          id: story.id,
+          slug: story.slug,
+          title: repairMojibake(story.title || ''),
+          cover: story.cover,
+          author: repairMojibake(story.author || ''),
+          chapterCount: allChapters.length
+        },
+        chapter: repairChapterPayload({
+          id: chapter.id,
+          number: chapter.number,
+          title: chapter.title,
+          content: chapterPageData.content,
+          preview: chapter.preview,
+          isPremium: Boolean(chapter.isPremium),
+          price: chapter.price,
+          views: chapter.views,
+          updatedAt: chapter.updatedAt
+        }),
+        unlocked,
+        prevChapterNumber: chapterPageData.prevChapterNumber,
+        nextChapterNumber: chapterPageData.nextChapterNumber
+      }, viewer?.role === 'admin' || viewer ? privateCacheHeaders() : (cachePolicyForPath(pathname) || publicCacheHeaders()));
     }
 
     const bookmarkParams = match(pathname, '/api/stories/:id/bookmark');
@@ -3153,6 +3575,8 @@ async function handle(req, res) {
         chapterPrice: payload.chapterPrice,
         vipFromChapter: payload.vipFromChapter,
         comboPrice: payload.comboPrice,
+        comboPriceChangedAt: '',
+        comboPriceLocked: false,
         featured: false,
         views: 0,
         rating: 4.5,
@@ -3195,10 +3619,34 @@ async function handle(req, res) {
       const body = await parseBody(req);
       const hasApprovalInput = body.approvalStatus !== undefined || body.statusApproval !== undefined || body.mode !== undefined;
       const approvalStatus = hasApprovalInput ? authorStoryApprovalStatus(body, story.approvalStatus || 'draft') : (story.approvalStatus || 'draft');
+      const role = normalizeRole(user.role);
+      const hasComboPriceInput = body.comboPrice !== undefined;
+      const bodyKeys = Object.keys(body || {});
+      const comboOnlyUpdate = hasComboPriceInput && bodyKeys.length > 0 && bodyKeys.every(key => key === 'comboPrice');
       const payload = normalizeAuthorStoryInput(body, user, story);
-      const inputError = validateAuthorStoryPayload(payload, approvalStatus);
+      const inputError = comboOnlyUpdate ? '' : validateAuthorStoryPayload(payload, approvalStatus);
       if (inputError) return badRequest(res, inputError);
+      if (hasComboPriceInput && role !== 'admin') {
+        const currentComboPrice = Number(story.comboPrice || 0);
+        const nextComboPrice = Number(payload.comboPrice || 0);
+        const changed = currentComboPrice !== nextComboPrice;
+        if (changed && story.comboPriceLocked) return badRequest(res, 'Giá combo chỉ được đổi 1 lần sau khi tạo. Vui lòng liên hệ admin.');
+        if (changed && currentComboPrice > 0) {
+          payload.comboPriceChangedAt = now();
+          payload.comboPriceLocked = true;
+        }
+      }
       requestPerf.mark('validate');
+      if (comboOnlyUpdate) {
+        story.comboPrice = payload.comboPrice;
+        story.comboPriceChangedAt = payload.comboPriceChangedAt ?? story.comboPriceChangedAt ?? '';
+        story.comboPriceLocked = payload.comboPriceLocked ?? Boolean(story.comboPriceLocked);
+        story.updatedAt = now();
+        await persistDb(db, { prune: false, only: ['stories'], relationStoryIds: [story.id] });
+        requestPerf.mark('db');
+        requestPerf.log();
+        return send(res, 200, { story: authorStorySummary(db, story, user.id), user: safeUser(user) });
+      }
       if (story.coverPath && payload.coverPath && story.coverPath !== payload.coverPath) {
         await storage.deleteImage(story.coverPath).catch(error => console.warn(`Could not delete old cover ${story.coverPath}: ${error.message}`));
       }
@@ -3222,6 +3670,8 @@ async function handle(req, res) {
         chapterPrice: payload.chapterPrice,
         vipFromChapter: payload.vipFromChapter,
         comboPrice: payload.comboPrice,
+        comboPriceChangedAt: payload.comboPriceChangedAt ?? story.comboPriceChangedAt ?? '',
+        comboPriceLocked: payload.comboPriceLocked ?? Boolean(story.comboPriceLocked),
         categories: payload.categories,
         tags: payload.tags,
         updatedAt: now()
@@ -3264,6 +3714,9 @@ async function handle(req, res) {
       const user = requireStoryPublisher(req, res, db);
       if (!user) return;
       const storyId = String(url.searchParams.get('storyId') || '').trim();
+      const query = String(url.searchParams.get('q') || url.searchParams.get('query') || '').trim();
+      const access = String(url.searchParams.get('access') || '').trim();
+      const status = String(url.searchParams.get('status') || '').trim();
       let storyIds;
       if (storyId) {
         const story = db.stories.find(item => item.id === storyId);
@@ -3273,11 +3726,92 @@ async function handle(req, res) {
       } else {
         storyIds = new Set(db.stories.filter(story => getStoryOwnerId(story) === user.id).map(story => story.id));
       }
-      const chapters = db.chapters
+      const allOwnedChapters = db.chapters
         .filter(chapter => storyIds.has(chapter.storyId))
-        .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0))
         .map(chapter => authorChapterSummary(db, chapter));
-      return send(res, 200, { chapters });
+      const stats = {
+        total: allOwnedChapters.length,
+        free: allOwnedChapters.filter(chapter => chapter.access === 'free').length,
+        vip: allOwnedChapters.filter(chapter => chapter.access === 'vip').length,
+        views: allOwnedChapters.reduce((sum, chapter) => sum + Number(chapter.views || 0), 0)
+      };
+      const filtered = allOwnedChapters
+        .filter(chapter => matchesSearch([chapter.number, chapter.title, chapter.preview, chapter.storyTitle], query))
+        .filter(chapter => !access || chapter.access === access)
+        .filter(chapter => !status || chapter.status === status)
+        .sort((a, b) => {
+          if (storyId) return Number(a.number || 0) - Number(b.number || 0);
+          return new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0);
+        });
+      if (!url.searchParams.has('limit')) url.searchParams.set('limit', '20');
+      const page = paginate(filtered, url);
+      return send(res, 200, { chapters: page.items, pagination: page.pagination, stats });
+    }
+
+    if (req.method === 'DELETE' && pathname === '/api/author/chapters/bulk') {
+      const user = requireStoryPublisher(req, res, db);
+      if (!user) return;
+      const body = await parseBody(req);
+      const ids = Array.isArray(body.ids) ? Array.from(new Set(body.ids.map(id => String(id)))) : [];
+      if (!ids.length) return badRequest(res, 'Danh sach chuong can xoa rong.');
+      const chapters = ids.map(id => db.chapters.find(chapter => chapter.id === id));
+      if (chapters.some(chapter => !chapter)) return notFound(res);
+      if (chapters.some(chapter => !canEditChapter(db, user, chapter))) return forbidden(res);
+      const deletedStoryIds = new Set(chapters.map(chapter => chapter.storyId));
+      const idSet = new Set(ids);
+      db.chapters = db.chapters.filter(chapter => !idSet.has(chapter.id));
+      db.purchases = db.purchases.filter(item => !idSet.has(item.chapterId));
+      db.history = db.history.filter(item => !idSet.has(item.chapterId));
+      db.comments = db.comments.filter(item => !idSet.has(item.chapterId));
+      deletedStoryIds.forEach(id => refreshStoryChapterMetadata(db, db.stories.find(story => story.id === id)));
+      await persistDb(db);
+      return send(res, 200, { ok: true, deleted: ids.length });
+    }
+
+    const authorStoryReorderParams = match(pathname, '/api/author/stories/:id/chapters/reorder');
+    if (authorStoryReorderParams && req.method === 'PATCH') {
+      const user = requireStoryPublisher(req, res, db);
+      if (!user) return;
+      const story = db.stories.find(item => item.id === authorStoryReorderParams.id);
+      if (!story) return notFound(res);
+      if (!canEditStory(user, story)) return forbidden(res);
+      const body = await parseBody(req);
+      const incoming = Array.isArray(body.chapters) ? body.chapters : [];
+      if (!incoming.length) return badRequest(res, 'Danh sach sap xep rong.');
+      const updates = incoming.map(item => ({ id: String(item.id || ''), number: Number(item.number) }));
+      if (updates.some(item => !item.id || !Number.isFinite(item.number) || item.number <= 0)) return badRequest(res, 'Thu tu chuong khong hop le.');
+      const updateIds = new Set(updates.map(item => item.id));
+      const targetChapters = db.chapters.filter(chapter => updateIds.has(chapter.id));
+      if (targetChapters.length !== updates.length) return notFound(res);
+      if (targetChapters.some(chapter => chapter.storyId !== story.id)) return forbidden(res);
+      const duplicateNumbers = new Set();
+      if (updates.some(item => {
+        if (duplicateNumbers.has(item.number)) return true;
+        duplicateNumbers.add(item.number);
+        return false;
+      })) return badRequest(res, 'Thu tu chuong bi trung.');
+      const existingConflict = db.chapters.some(chapter => chapter.storyId === story.id && !updateIds.has(chapter.id) && duplicateNumbers.has(Number(chapter.number)));
+      if (existingConflict) return badRequest(res, 'So chuong da ton tai trong truyen nay.');
+      const timestamp = now();
+      updates.forEach(item => {
+        const chapter = db.chapters.find(entry => entry.id === item.id);
+        chapter.number = item.number;
+        chapter.updatedAt = timestamp;
+      });
+      refreshStoryChapterMetadata(db, story);
+      if (dataStore.storeName() === 'supabase') {
+        await dataStore.updateChapterOrderSafely(updates.map(item => ({ ...item, updatedAt: timestamp })));
+        await persistDb(db, { prune: false, only: ['stories'], relationStoryIds: [story.id] });
+      } else {
+        await persistDb(db, { prune: false, only: ['stories', 'chapters'] });
+      }
+      return send(res, 200, {
+        chapters: db.chapters
+          .filter(chapter => chapter.storyId === story.id)
+          .sort((a, b) => Number(a.number || 0) - Number(b.number || 0))
+          .map(chapter => authorChapterSummary(db, chapter)),
+        story: authorStorySummary(db, story, user.id)
+      });
     }
 
     const authorStoryImportParams = match(pathname, '/api/author/stories/:id/chapters/import');
@@ -3611,6 +4145,12 @@ async function handle(req, res) {
       const admin = requireAdmin(req, res, db);
       if (!admin) return;
       return send(res, 200, { stats: adminDashboard(db) });
+    }
+
+    if (req.method === 'GET' && pathname === '/api/admin/bootstrap') {
+      const admin = requireAdmin(req, res, db);
+      if (!admin) return;
+      return send(res, 200, adminBootstrapResponse(db, admin, url));
     }
 
     if (req.method === 'GET' && pathname === '/api/admin/users') {
@@ -4052,6 +4592,36 @@ async function handle(req, res) {
       return send(res, 200, { logs: page.items, pagination: page.pagination });
     }
 
+    if (req.method === 'PUT' && pathname === '/api/admin/home/trending') {
+      const admin = requireAdmin(req, res, db);
+      if (!admin) return;
+      const body = await parseBody(req);
+      const ids = Array.isArray(body.storyIds) ? body.storyIds.map(id => String(id)).filter(Boolean).slice(0, 10) : [];
+      const uniqueIds = Array.from(new Set(ids));
+      const selected = uniqueIds.map(id => db.stories.find(story => story.id === id)).filter(Boolean);
+      if (selected.length !== uniqueIds.length) return badRequest(res, 'Danh sach truyen xu huong co truyen khong ton tai.');
+      const before = db.stories
+        .filter(story => story.homeTrending)
+        .map(story => ({ id: story.id, homeTrendingOrder: story.homeTrendingOrder || 0 }));
+      const orderById = new Map(uniqueIds.map((id, index) => [id, index + 1]));
+      db.stories.forEach(story => {
+        if (orderById.has(story.id)) {
+          story.homeTrending = true;
+          story.homeTrendingOrder = orderById.get(story.id);
+          story.updatedAt = now();
+        } else if (story.homeTrending) {
+          story.homeTrending = false;
+          story.homeTrendingOrder = 0;
+          story.updatedAt = now();
+        }
+      });
+      const after = selected.map(story => adminStorySummary(db, story, admin.id));
+      logAdminAction(db, admin, 'update_home_trending', 'home', 'trending', before, after, '');
+      await persistDb(db, { prune: false, only: ['stories', 'adminLogs'], relationStoryIds: uniqueIds });
+      clearHomePublicCache();
+      return send(res, 200, { stories: trendingHomeStories(db, 10).map(story => adminStorySummary(db, story, admin.id)) });
+    }
+
     if (req.method === 'GET' && pathname === '/api/admin/stories') {
       const admin = requireAdmin(req, res, db);
       if (!admin) return;
@@ -4080,6 +4650,7 @@ async function handle(req, res) {
       if (inputError) return badRequest(res, inputError);
       const slug = slugify(body.slug || body.title);
       if (db.stories.some(story => story.slug === slug)) return badRequest(res, 'Slug da ton tai.');
+      if (body.banner && !canEnableHomeBanner(db)) return badRequest(res, 'Trang chu chi duoc bat toi da 6 banner. Hay tat bot 1 banner roi bat banner moi.');
       requestPerf.mark('validate');
       const approvalStatus = VALID_STORY_APPROVAL_STATUSES.includes(body.approvalStatus) ? body.approvalStatus : 'approved';
       const timestamp = now();
@@ -4091,6 +4662,7 @@ async function handle(req, res) {
         author: String(body.author).trim(),
         translator: String(body.translator || '').trim(),
         cover: body.cover || '/images/cover-1.jpg',
+        bannerImage: String(body.bannerImage || '').trim(),
         description: body.description || '',
         status: body.status || 'ongoing',
         language: String(body.language || 'Tieng Viet').trim(),
@@ -4119,6 +4691,7 @@ async function handle(req, res) {
       ensureTaxonomy(db);
       logAdminAction(db, admin, 'create_story', 'story', story.id, null, story, '');
       await persistDb(db, { prune: false, only: ['stories', 'adminLogs'], relationStoryIds: [story.id] });
+      clearHomePublicCache();
       requestPerf.mark('db');
       requestPerf.log();
       return send(res, 201, { story: adminStorySummary(db, story, admin.id) });
@@ -4138,6 +4711,7 @@ async function handle(req, res) {
       const after = adminStorySummary(db, story, admin.id);
       logAdminAction(db, admin, 'approve_story', 'story', story.id, before, after, '');
       await persistDb(db, { prune: false, only: ['stories', 'adminLogs'], relationStoryIds: [story.id] });
+      clearHomePublicCache();
       return send(res, 200, { story: after });
     }
 
@@ -4158,6 +4732,7 @@ async function handle(req, res) {
       const after = adminStorySummary(db, story, admin.id);
       logAdminAction(db, admin, 'reject_story', 'story', story.id, before, after, story.rejectionReason);
       await persistDb(db, { prune: false, only: ['stories', 'adminLogs'], relationStoryIds: [story.id] });
+      clearHomePublicCache();
       return send(res, 200, { story: after });
     }
 
@@ -4176,6 +4751,7 @@ async function handle(req, res) {
       const after = adminStorySummary(db, story, admin.id);
       logAdminAction(db, admin, story.hidden ? 'hide_story' : 'show_story', 'story', story.id, before, after, '');
       await persistDb(db, { prune: false, only: ['stories', 'adminLogs'], relationStoryIds: [story.id] });
+      clearHomePublicCache();
       return send(res, 200, { story: after });
     }
 
@@ -4209,6 +4785,7 @@ async function handle(req, res) {
       const action = story.approvalStatus === 'rejected' ? 'reject_story' : story.hidden ? 'hide_story' : story.approvalStatus === 'approved' ? 'approve_story' : 'update_story_status';
       logAdminAction(db, admin, action, 'story', story.id, before, after, story.rejectionReason || '');
       await persistDb(db, { prune: false, only: ['stories', 'adminLogs'], relationStoryIds: [story.id] });
+      clearHomePublicCache();
       requestPerf.mark('db');
       requestPerf.log();
       return send(res, 200, { story: after });
@@ -4224,6 +4801,8 @@ async function handle(req, res) {
       const body = await parseBody(req);
       requestPerf.mark('validate');
       const before = adminStorySummary(db, story, admin.id);
+      const nextBanner = body.isBanner !== undefined ? Boolean(body.isBanner) : body.banner !== undefined ? Boolean(body.banner) : story.banner;
+      if (nextBanner && !story.banner && !canEnableHomeBanner(db, story.id)) return badRequest(res, 'Trang chu chi duoc bat toi da 6 banner. Hay tat bot 1 banner roi bat banner moi.');
       if (body.isFeatured !== undefined) story.featured = Boolean(body.isFeatured);
       if (body.isHot !== undefined) story.hot = Boolean(body.isHot);
       if (body.isRecommended !== undefined) story.recommended = Boolean(body.isRecommended);
@@ -4231,10 +4810,17 @@ async function handle(req, res) {
       ['featured', 'hot', 'recommended', 'banner'].forEach(key => {
         if (body[key] !== undefined) story[key] = Boolean(body[key]);
       });
+      if (body.bannerImage !== undefined) story.bannerImage = String(body.bannerImage || '').trim();
+      if (story.banner && !String(story.bannerImage || '').trim() && story.cover) {
+        story.bannerImage = String(story.cover || '').trim();
+      }
+      if (body.homeTrending !== undefined) story.homeTrending = Boolean(body.homeTrending);
+      if (body.homeTrendingOrder !== undefined) story.homeTrendingOrder = Number(body.homeTrendingOrder || 0);
       story.updatedAt = now();
       const after = adminStorySummary(db, story, admin.id);
       logAdminAction(db, admin, 'update_story_flags', 'story', story.id, before, after, '');
       await persistDb(db, { prune: false, only: ['stories', 'adminLogs'], relationStoryIds: [story.id] });
+      clearHomePublicCache();
       requestPerf.mark('db');
       requestPerf.log();
       return send(res, 200, { story: after });
@@ -4255,10 +4841,10 @@ async function handle(req, res) {
         story.slug = nextSlug;
       }
       try {
-        ['title','author','translator','cover','description','status','language','ageRating','type'].forEach(key => {
+        ['title','author','translator','cover','bannerImage','description','status','language','ageRating','type'].forEach(key => {
           if (body[key] !== undefined) {
             const value = String(body[key]);
-            story[key] = ['cover', 'status', 'ageRating', 'type'].includes(key) ? value : validateCleanText(value, `story.${key}`);
+            story[key] = ['cover', 'bannerImage', 'status', 'ageRating', 'type'].includes(key) ? value.trim() : validateCleanText(value, `story.${key}`);
           }
         });
       } catch (error) {
@@ -4284,7 +4870,13 @@ async function handle(req, res) {
       if (body.featured !== undefined) story.featured = Boolean(body.featured);
       if (body.hot !== undefined) story.hot = Boolean(body.hot);
       if (body.recommended !== undefined) story.recommended = Boolean(body.recommended);
-      if (body.banner !== undefined) story.banner = Boolean(body.banner);
+      if (body.banner !== undefined) {
+        const nextBanner = Boolean(body.banner);
+        if (nextBanner && !story.banner && !canEnableHomeBanner(db, story.id)) return badRequest(res, 'Trang chu chi duoc bat toi da 6 banner. Hay tat bot 1 banner roi bat banner moi.');
+        story.banner = nextBanner;
+      }
+      if (body.homeTrending !== undefined) story.homeTrending = Boolean(body.homeTrending);
+      if (body.homeTrendingOrder !== undefined) story.homeTrendingOrder = Number(body.homeTrendingOrder || 0);
       if (body.price !== undefined) story.price = Number(body.price);
       if (body.chapterPrice !== undefined) story.chapterPrice = Number(body.chapterPrice);
       if (body.rating !== undefined) story.rating = Number(body.rating);
@@ -4296,6 +4888,7 @@ async function handle(req, res) {
       const after = adminStorySummary(db, story, admin.id);
       logAdminAction(db, admin, 'update_story', 'story', story.id, before, after, '');
       await persistDb(db, { prune: false, only: ['stories', 'adminLogs'], relationStoryIds: [story.id] });
+      clearHomePublicCache();
       requestPerf.mark('db');
       requestPerf.log();
       return send(res, 200, { story: after });
@@ -4318,6 +4911,7 @@ async function handle(req, res) {
       db.promotions = db.promotions.filter(item => item.storyId !== adminStoryParams.id);
       logAdminAction(db, admin, 'delete_story', 'story', story.id, story, null, '');
       await persistDb(db);
+      clearHomePublicCache();
       return send(res, 200, { ok: true });
     }
 

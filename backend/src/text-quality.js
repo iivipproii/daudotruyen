@@ -1,4 +1,4 @@
-const CORRUPT_TEXT_PATTERN = /[\uFFFD]|\u00C3|\u00C2(?:[\s\u00a0.,;:!?'"”’)]|$)|\u00E2\u20AC|\u00C4[\u2018\u0090]?|\u00E1[\u00BA\u00BB]|\u00C6[\u00B0\u00A1]|\u00C5|\u02DC/;
+const CORRUPT_TEXT_PATTERN = /[\uFFFD]|\u00C3|\u00C2(?:[\s\u00a0.,;:!?\"'\u201D\u2019)]|$)|\u00E2\u20AC|\u00C4[\u2018\u0090]?|\u00E1[\u00BA\u00BB]|\u00C6[\u00B0\u00A1]|\u00C5|\u02DC|\u00E1\u00BA|\u00E1\u00BB|\u00C3|\u00C4|\u00C6|\u00C5|\u00CB|\u00EF\u00BC/;
 const REPLACEMENT_PATTERN = /[\uFFFD]/;
 const TEST_PLACEHOLDER_PATTERN = /test\s+từ\s+supabase/i;
 
@@ -53,10 +53,17 @@ function repairMojibake(value) {
       return CP1252_BYTES[char] || code;
     });
     const repaired = new TextDecoder('utf-8', { fatal: false }).decode(new Uint8Array(bytes)).normalize('NFC');
-    return hasCorruptText(repaired) ? value : repaired;
+    return corruptionScore(repaired) < corruptionScore(value) ? repaired : value;
   } catch {
     return value;
   }
+}
+
+function corruptionScore(value = '') {
+  if (typeof value !== 'string') return 0;
+  const markers = value.match(/\u00C3|\u00C4|\u00C6|\u00C5|\u00E1\u00BA|\u00E1\u00BB|\u00E2\u20AC|\u00CB|\u00EF\u00BC/g) || [];
+  const replacements = value.match(REPLACEMENT_PATTERN) || [];
+  return markers.length + replacements.length * 20;
 }
 
 function validateCleanText(value, context = 'text') {
@@ -96,6 +103,7 @@ module.exports = {
   hasReplacementChar,
   hasTestPlaceholder,
   repairMojibake,
+  corruptionScore,
   validateCleanText,
   validateNoTestPlaceholder,
   validateTextFields
