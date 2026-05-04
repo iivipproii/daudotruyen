@@ -1228,7 +1228,7 @@ const TABLE_SELECTS = {
   bookmarks: 'id,user_id,story_id,created_at',
   ratings: 'id,user_id,story_id,value,created_at,updated_at',
   comments: 'id,user_id,story_id,chapter_id,parent_id,content,status,created_at,updated_at',
-  purchases: 'id,user_id,story_id,chapter_id,price,created_at',
+  purchases: 'id,user_id,story_id,chapter_id,price,purchased_at',
   promotions: 'id,story_id,owner_id,package_id,package_name,cost,status,starts_at,ends_at,created_at,updated_at',
   viewEvents: 'id,user_id,story_id,chapter_id,created_at',
   usersFollowers: 'id,name,avatar_url,role,status',
