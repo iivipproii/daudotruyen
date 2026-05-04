@@ -203,7 +203,7 @@ export function ReaderPage({ apiClient, user, updateUser }) {
     setLoading(true);
     setError('');
     const [chapterResult, chapterIndexResult] = await Promise.all([
-      fetchSafe(apiClient, `/stories/${slug}/chapters/${number}`),
+      fetchSafe(apiClient, `/stories/${slug}/chapters/${number}`, { auth: Boolean(user) }),
       fetchSafe(apiClient, `/stories/${slug}/chapters?limit=200`)
     ]);
 

@@ -278,6 +278,7 @@ function sendCachedJson(req, res, status, body, extraHeaders = {}) {
     ETag: etag,
     ...extraHeaders
   });
+  if (req.isHeadRequest) return res.end();
   return res.end(payload);
 }
 
@@ -767,6 +768,29 @@ function storySummary(story) {
     bookmarked: story.bookmarked,
     followed: story.followed
   });
+}
+
+function compactStorySummary(story) {
+  const summary = storySummary(story);
+  const shortDescription = String(summary.shortDescription || summary.description || '').trim();
+  return {
+    ...summary,
+    description: shortDescription ? shortDescription.slice(0, 220) : '',
+    shortDescription: shortDescription ? shortDescription.slice(0, 220) : ''
+  };
+}
+
+function compactRankingSummary(story) {
+  return {
+    ...compactStorySummary(story),
+    rankScore: story.rankScore,
+    rankDelta: story.rankDelta,
+    commentsCount: story.commentsCount,
+    revenueSeeds: story.revenueSeeds,
+    periodViews: story.periodViews,
+    periodFollows: story.periodFollows,
+    ratingCount: story.ratingCount
+  };
 }
 
 function sortStories(items, sort = 'updated') {
@@ -2807,6 +2831,10 @@ async function handle(req, res) {
 
   const url = new URL(req.url, `http://${req.headers.host}`);
   const pathname = url.pathname;
+  if (req.method === 'HEAD' && isPublicCacheablePath(pathname)) {
+    req.isHeadRequest = true;
+    req.method = 'GET';
+  }
 
   try {
     if (!checkRateLimit(req, pathname)) {
@@ -2906,20 +2934,20 @@ async function handle(req, res) {
         const reviewStories = reviewHomeStories(db, 12);
         const trendingStories = trendingHomeStories(db, 10);
         const rankingsByPeriod = RANKING_PERIODS.reduce((rankings, period) => {
-          rankings[period] = buildRankings(db, { period, metric: 'views', limit: 10 }).map(storySummary);
+          rankings[period] = buildRankings(db, { period, metric: 'views', limit: 10 }).map(compactRankingSummary);
           return rankings;
         }, {});
         const categories = Array.from(new Set(db.stories.filter(isPublicStory).flatMap(story => story.categories))).sort().slice(0, 14);
         return sendCachedJson(req, res, 200, {
-          banners: banners.map(storySummary),
-          updatedStories: updatedStories.map(storySummary),
-          popularStories: popularStories.map(storySummary),
-          completedStories: completedStories.map(storySummary),
-          featuredStories: featuredStories.map(storySummary),
-          recommendedStories: recommendedStories.map(storySummary),
-          promotedStories: promotedStories.map(storySummary),
-          reviewStories: reviewStories.map(storySummary),
-          trendingStories: trendingStories.map(storySummary),
+          banners: banners.map(compactStorySummary),
+          updatedStories: updatedStories.map(compactStorySummary),
+          popularStories: popularStories.map(compactStorySummary),
+          completedStories: completedStories.map(compactStorySummary),
+          featuredStories: featuredStories.map(compactStorySummary),
+          recommendedStories: recommendedStories.map(compactStorySummary),
+          promotedStories: promotedStories.map(compactStorySummary),
+          reviewStories: reviewStories.map(compactStorySummary),
+          trendingStories: trendingStories.map(compactStorySummary),
           rankingsByPeriod,
           categories
         }, cachePolicyForPath(pathname) || publicCacheHeaders());
@@ -2954,7 +2982,7 @@ async function handle(req, res) {
         const pagedItems = items.slice(start, start + limit);
         const storyListCacheHeaders = viewer || sort === 'created' || sort === 'new' ? privateCacheHeaders() : (cachePolicyForPath(pathname) || publicCacheHeaders());
         return sendCachedJson(req, res, 200, {
-          stories: pagedItems.map(storySummary),
+          stories: pagedItems.map(compactStorySummary),
           pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) }
         }, storyListCacheHeaders);
       }
@@ -4098,20 +4126,20 @@ async function handle(req, res) {
       const reviewStories = reviewHomeStories(db, 12);
       const trendingStories = trendingHomeStories(db, 10);
       const rankingsByPeriod = RANKING_PERIODS.reduce((rankings, period) => {
-        rankings[period] = buildRankings(db, { period, metric: 'views', limit: 10 }).map(storySummary);
+        rankings[period] = buildRankings(db, { period, metric: 'views', limit: 10 }).map(compactRankingSummary);
         return rankings;
       }, {});
       const categories = Array.from(new Set(db.stories.filter(isPublicStory).flatMap(story => story.categories))).sort().slice(0, 14);
       const body = {
-        banners: banners.map(storySummary),
-        updatedStories: updatedStories.map(storySummary),
-        popularStories: popularStories.map(storySummary),
-        completedStories: completedStories.map(storySummary),
-        featuredStories: featuredStories.map(storySummary),
-        recommendedStories: recommendedStories.map(storySummary),
-        promotedStories: promotedStories.map(storySummary),
-        reviewStories: reviewStories.map(storySummary),
-        trendingStories: trendingStories.map(storySummary),
+        banners: banners.map(compactStorySummary),
+        updatedStories: updatedStories.map(compactStorySummary),
+        popularStories: popularStories.map(compactStorySummary),
+        completedStories: completedStories.map(compactStorySummary),
+        featuredStories: featuredStories.map(compactStorySummary),
+        recommendedStories: recommendedStories.map(compactStorySummary),
+        promotedStories: promotedStories.map(compactStorySummary),
+        reviewStories: reviewStories.map(compactStorySummary),
+        trendingStories: trendingStories.map(compactStorySummary),
         rankingsByPeriod,
         categories
       };
@@ -4170,7 +4198,7 @@ async function handle(req, res) {
       const pagedItems = items.slice(start, start + limit);
       const storyListCacheHeaders = viewer || sort === 'created' || sort === 'new' ? privateCacheHeaders() : (cachePolicyForPath(pathname) || publicCacheHeaders());
       return sendCachedJson(res.req || req, res, 200, {
-        stories: pagedItems.map(storySummary),
+        stories: pagedItems.map(compactStorySummary),
         pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) }
       }, storyListCacheHeaders);
     }
@@ -4179,7 +4207,7 @@ async function handle(req, res) {
       const period = url.searchParams.get('period') || 'week';
       const metric = url.searchParams.get('metric') || 'views';
       const limit = url.searchParams.get('limit') || 100;
-      const stories = buildRankings(db, { period, metric, limit });
+      const stories = buildRankings(db, { period, metric, limit }).map(compactRankingSummary);
       return sendCachedJson(req, res, 200, { stories }, cachePolicyForPath(pathname) || publicCacheHeaders());
     }
 

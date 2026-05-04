@@ -94,11 +94,12 @@ function sanitizeApiImages(value) {
 }
 
 function isPrivateApiPath(path) {
-  return /^(\/auth\/me|\/me\/|\/wallet(?:\/|$)|\/notifications(?:\/|$)|\/admin(?:\/|$))/i.test(String(path || ''));
+  const pathname = apiPathname(path);
+  return /^(\/auth\/me|\/me\/|\/wallet(?:\/|$)|\/notifications(?:\/|$)|\/admin(?:\/|$)|\/author(?:\/|$))/i.test(pathname);
 }
 
 function isPublicCacheableApiPath(path) {
-  const value = String(path || '');
+  const value = apiPathname(path);
   return value === '/home'
     || value === '/categories'
     || value === '/rankings'
@@ -108,8 +109,17 @@ function isPublicCacheableApiPath(path) {
     || /^\/stories\/[^/]+\/chapters\/\d+$/.test(value);
 }
 
-function publicGetCacheTtlMs(path, queryString = '') {
+function apiPathname(path) {
   const value = String(path || '');
+  try {
+    return new URL(value, window.location.origin).pathname.replace(/\/+$/, '') || '/';
+  } catch {
+    return value.split('?')[0].replace(/\/+$/, '') || '/';
+  }
+}
+
+function publicGetCacheTtlMs(path, queryString = '') {
+  const value = apiPathname(path);
   if (value === '/home') return 45_000;
   if (value === '/categories') return 10 * 60_000;
   if (value === '/rankings') return 45_000;
@@ -129,17 +139,19 @@ function clearPublicGetCache() {
 
 async function api(path, options = {}) {
   const token = localStorage.getItem('daudo_token');
-  const { headers: optionHeaders = {}, noStore = false, ...fetchOptions } = options;
+  const { headers: optionHeaders = {}, noStore = false, auth, ...fetchOptions } = options;
   const isFormData = fetchOptions.body instanceof FormData;
+  const method = String(fetchOptions.method || 'GET').toUpperCase();
+  const isPublicCacheableGet = method === 'GET' && isPublicCacheableApiPath(path);
+  const shouldSendAuth = Boolean(token) && (auth === true || (auth !== false && (method !== 'GET' || isPrivateApiPath(path) || !isPublicCacheableGet)));
   const headers = {
     Accept: 'application/json',
     ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
     ...optionHeaders
   };
-  if (token) headers.Authorization = `Bearer ${token}`;
+  if (shouldSendAuth) headers.Authorization = `Bearer ${token}`;
   const url = buildApiUrl(path);
-  const method = String(fetchOptions.method || 'GET').toUpperCase();
-  const shouldUseNoStore = noStore || (method === 'GET' && isPrivateApiPath(path));
+  const shouldUseNoStore = noStore || (method === 'GET' && (isPrivateApiPath(path) || shouldSendAuth));
   const queryString = (() => {
     try {
       return new URL(url, window.location.origin).search;
@@ -147,7 +159,7 @@ async function api(path, options = {}) {
       return '';
     }
   })();
-  const publicCacheKey = method === 'GET' && !shouldUseNoStore && !token && isPublicCacheableApiPath(path)
+  const publicCacheKey = method === 'GET' && !shouldUseNoStore && !shouldSendAuth && isPublicCacheableGet
     ? `${url}|${JSON.stringify(headers)}`
     : '';
   const requestKey = method === 'GET' ? `${url}|${JSON.stringify(headers)}` : '';
@@ -2276,7 +2288,7 @@ function Admin() {
   };
   useEffect(() => { load().catch(err => setError(err.message)); }, []);
   async function selectStory(story) {
-    const detail = await api(`/stories/${story.id}`);
+    const detail = await api(`/stories/${story.id}`, { auth: true });
     setSelectedStory(detail.story);
     setChapters(detail.chapters || []);
   }
@@ -2463,7 +2475,7 @@ function BulkChapterPublish() {
   useEffect(() => {
     setStoryDetail(null);
     if (!selectedStoryId) return;
-    api(`/stories/${selectedStoryId}`)
+    api(`/stories/${selectedStoryId}`, { auth: true })
       .then(data => setStoryDetail(data))
       .catch(() => setStoryDetail(null));
   }, [selectedStoryId]);
@@ -2580,7 +2592,7 @@ function BulkChapterPublish() {
       setSuccess(`Đã đăng ${validChapters.length} chương.`);
       setRawText('');
       setChecked(false);
-      const detail = await api(`/stories/${selectedStoryId}`).catch(() => null);
+      const detail = await api(`/stories/${selectedStoryId}`, { auth: true }).catch(() => null);
       if (detail) setStoryDetail(detail);
     } catch (err) {
       setError(err.message);
