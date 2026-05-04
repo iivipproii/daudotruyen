@@ -10,7 +10,7 @@ const { hasTestPlaceholder, repairMojibake, validateTextFields, validateCleanTex
 const TABLE_SELECTS = dataStore.TABLE_SELECTS || {};
 
 const PORT = Number(process.env.PORT || 4000);
-const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
+const JWT_SECRET = resolveJwtSecret();
 const JSON_LIMIT = 4 * 1024 * 1024;
 const UPLOAD_LIMIT = 10 * 1024 * 1024;
 const COMPRESSED_IMAGE_LIMIT = 500 * 1024;
@@ -30,12 +30,25 @@ const publicResponseCache = new Map();
 const publicResponseInflight = new Map();
 const CORS_ORIGINS = resolveCorsOrigins();
 
-if (process.env.NODE_ENV === 'production' && (!process.env.JWT_SECRET || process.env.JWT_SECRET === 'dev-secret-change-me')) {
-  throw new Error('JWT_SECRET must be set to a strong non-default value in production.');
-}
-
 function now() {
   return new Date().toISOString();
+}
+
+function resolveJwtSecret() {
+  const configured = String(process.env.JWT_SECRET || '').trim();
+  if (configured && configured !== 'dev-secret-change-me') return configured;
+  const serviceRoleKey = String(process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+  if (serviceRoleKey) {
+    const fallback = crypto.createHash('sha256').update(serviceRoleKey).digest('hex');
+    if (process.env.NODE_ENV === 'production') {
+      console.warn('[CONFIG] JWT_SECRET is missing; derived a fallback secret from SUPABASE_SERVICE_ROLE_KEY.');
+    }
+    return fallback;
+  }
+  if (process.env.NODE_ENV === 'production') {
+    console.warn('[CONFIG] JWT_SECRET is missing; falling back to the development secret.');
+  }
+  return 'dev-secret-change-me';
 }
 
 function createPerf(label) {

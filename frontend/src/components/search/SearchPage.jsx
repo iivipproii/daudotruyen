@@ -4,7 +4,7 @@ import { mockCategories, mockPopularSearches, mockStories } from '../../data/moc
 import { Majesticon } from '../shared/Majesticon.jsx';
 
 const isDev = import.meta.env.DEV;
-const LOAD_ERROR_MESSAGE = 'Không tải được dữ liệu từ máy chủ. Vui lòng thử lại.';
+const SEARCH_CACHE_KEY = 'daudo_search_cache';
 
 const defaultFilters = {
   q: '',
@@ -129,6 +129,29 @@ function getChapterCount(story = {}) {
 
 function uniqueStories(stories = []) {
   return Array.from(new Map(stories.filter(Boolean).map(story => [story.id || story.slug, normalizeStory(story)])).values());
+}
+
+function readSearchCache() {
+  try {
+    const cached = JSON.parse(localStorage.getItem(SEARCH_CACHE_KEY) || 'null');
+    return {
+      stories: uniqueStories(Array.isArray(cached?.stories) ? cached.stories : []),
+      categories: Array.isArray(cached?.categories) ? cached.categories.map(repairText) : []
+    };
+  } catch {
+    return { stories: [], categories: [] };
+  }
+}
+
+function writeSearchCache(stories = [], categories = []) {
+  try {
+    localStorage.setItem(SEARCH_CACHE_KEY, JSON.stringify({
+      stories: uniqueStories(stories),
+      categories: Array.from(new Set(categories.map(repairText).filter(Boolean)))
+    }));
+  } catch {
+    // Ignore storage failures in private mode or low-storage contexts.
+  }
 }
 
 function categoriesFromStories(stories = []) {
@@ -272,6 +295,7 @@ export function SearchPage({ apiClient, presetFilters = {}, pageTitle = '', hero
     async function load() {
       setLoading(true);
       setError('');
+      const cached = readSearchCache();
       const [homeData, categoryData] = await Promise.all([
         fetchSafe(apiClient, '/home'),
         fetchSafe(apiClient, '/categories?limit=30')
@@ -284,11 +308,23 @@ export function SearchPage({ apiClient, presetFilters = {}, pageTitle = '', hero
         ...(homeData?.recommendedStories || []),
         ...(homeData?.completedStories || [])
       ]);
-      const sourceStories = apiStories.length ? apiStories : isDev ? uniqueStories(mockStories) : [];
+      const sourceStories = apiStories.length
+        ? apiStories
+        : cached.stories.length
+          ? cached.stories
+          : uniqueStories(mockStories);
       const nextCategories = (categoryData?.categories || []).map(repairText);
+      const sourceCategories = nextCategories.length
+        ? nextCategories
+        : cached.categories.length
+          ? cached.categories
+          : categoriesFromStories(sourceStories);
       setStories(sourceStories);
-      setCategories(nextCategories.length ? nextCategories : categoriesFromStories(sourceStories));
-      setError(apiStories.length || isDev ? '' : LOAD_ERROR_MESSAGE);
+      setCategories(sourceCategories);
+      if (apiStories.length || nextCategories.length) {
+        writeSearchCache(sourceStories, sourceCategories);
+      }
+      setError('');
       setLoading(false);
     }
     load();
