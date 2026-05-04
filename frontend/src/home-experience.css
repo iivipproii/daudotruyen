@@ -2912,6 +2912,17 @@ body[data-theme='light'] .home-hero .prod-hero-content h1 {
   scroll-snap-align: start;
 }
 
+.home-rail-empty {
+  grid-column: 1 / -1;
+  min-height: 120px;
+  display: grid;
+  place-items: center;
+  color: var(--prod-muted);
+  font-weight: 800;
+  border: 1px dashed var(--prod-border);
+  border-radius: 8px;
+}
+
 .home-rail-arrow {
   position: absolute;
   top: 42%;

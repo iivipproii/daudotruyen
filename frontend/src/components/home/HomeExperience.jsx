@@ -1009,15 +1009,17 @@ function PagedStoryRail({ title, subtitle, stories = [], to, icon = 'star', prom
   const [page, setPage] = useState(0);
   const [paused, setPaused] = useState(false);
   const railRef = useRef(null);
-  const current = list.slice(page * perPage, page * perPage + perPage);
+  const listKey = list.map(story => story.id || story.slug).join('|');
+  const safePage = Math.min(Math.max(page, 0), pages - 1);
+  const current = list.slice(safePage * perPage, safePage * perPage + perPage);
 
-  useEffect(() => setPage(0), [list.length, perPage]);
+  useEffect(() => setPage(0), [listKey, perPage]);
   useEffect(() => {
     setPage(value => Math.min(value, pages - 1));
   }, [pages]);
   useEffect(() => {
     railRef.current?.scrollTo({ left: 0, behavior: 'smooth' });
-  }, [page]);
+  }, [safePage]);
   useEffect(() => {
     if (!isMobile || paused || pages <= 1) return undefined;
     const timer = window.setInterval(() => {
@@ -1039,12 +1041,13 @@ function PagedStoryRail({ title, subtitle, stories = [], to, icon = 'star', prom
         {pages > 1 && <button type="button" className="home-rail-arrow prev" onClick={() => go(-1)} aria-label="Trang trước">‹</button>}
         <div className="home-rail-page" ref={railRef}>
           {current.map(story => <StoryCard key={story.id || story.slug} story={story} />)}
+          {!list.length && <div className="home-rail-empty">Chua co truyen de hien thi.</div>}
         </div>
         {pages > 1 && <button type="button" className="home-rail-arrow next" onClick={() => go(1)} aria-label="Trang sau">›</button>}
       </div>
       {pages > 1 && (
         <div className="home-rail-dots">
-          {Array.from({ length: pages }).map((_, index) => <button key={index} type="button" className={index === page ? 'active' : ''} onClick={() => setPageManually(index)} aria-label={`Trang ${index + 1}`} />)}
+          {Array.from({ length: pages }).map((_, index) => <button key={index} type="button" className={index === safePage ? 'active' : ''} onClick={() => setPageManually(index)} aria-label={`Trang ${index + 1}`} />)}
         </div>
       )}
     </RevealSection>
