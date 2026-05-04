@@ -60,12 +60,22 @@ function repairText(value) {
 }
 
 function normalizeStory(story = {}) {
+  const fallbackStory = mockStories.find(item => (story.slug && item.slug === story.slug) || (story.id && item.id === story.id));
+  const title = repairText(story.title);
   return {
     ...story,
-    title: repairText(story.title),
+    title: typeof title === 'string' && title.includes('\uFFFD') && fallbackStory?.title ? repairText(fallbackStory.title) : title,
     author: repairText(story.author),
     description: repairText(story.description),
     categories: Array.isArray(story.categories) ? story.categories.map(repairText) : []
+  };
+}
+
+function normalizeChapter(chapter = {}, fallbackNumber = 1) {
+  return {
+    ...chapter,
+    number: chapter.number || fallbackNumber,
+    title: repairText(chapter.title || `Ch\u01b0\u01a1ng ${fallbackNumber}`)
   };
 }
 
@@ -78,7 +88,7 @@ function formatCurrency(value = 0) {
 }
 
 function formatDate(value) {
-  if (!value) return 'Đang cập nhật';
+  if (!value) return '\u0110ang c\u1eadp nh\u1eadt';
   return new Date(value).toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric' });
 }
 
@@ -132,7 +142,15 @@ function normalizeLibrary(data) {
     chapter: item.chapter || item.latestChapter || { number: item.chapterNumber || 1, title: 'Chương đang đọc' },
     progress: item.progress || Math.min(95, Math.max(12, Math.round(((item.chapterNumber || item.chapter?.number || 1) / Math.max(getChapterCount(item.story || item), 1)) * 100)))
   }));
-  return { bookmarks, follows, history };
+  const repairedHistory = history.map(item => {
+    const chapterNumber = item.chapterNumber || item.chapter?.number || item.latestChapter?.number || 1;
+    return {
+      ...item,
+      chapter: normalizeChapter(item.chapter, chapterNumber),
+      progress: item.progress || Math.min(95, Math.max(12, Math.round((chapterNumber / Math.max(getChapterCount(item.story || item), 1)) * 100)))
+    };
+  });
+  return { bookmarks, follows, history: repairedHistory };
 }
 
 function chapterBookmarksFrom(library) {
@@ -491,14 +509,14 @@ export function ReadingHistoryPage({ apiClient }) {
   if (!items) return <AccountLoading />;
   function remove(id) {
     setItems(current => current.filter(item => item.id !== id));
-    setNotice('Đã xóa lịch sử khỏi phiên hiện tại.');
+    setNotice('\u0110\u00e3 x\u00f3a l\u1ecbch s\u1eed kh\u1ecfi phi\u00ean hi\u1ec7n t\u1ea1i.');
   }
   return (
     <div className="acct-page">
       {notice && <div className="acct-success">{notice}</div>}
-      <PageHead title="Reading history" subtitle="Theo dõi truyện/chương đã đọc và tiến trình đọc gần đây." />
+      <PageHead title={'L\u1ecbch s\u1eed \u0111\u1ecdc'} subtitle={'Theo d\u00f5i truy\u1ec7n, ch\u01b0\u01a1ng \u0111\u00e3 \u0111\u1ecdc v\u00e0 ti\u1ebfn tr\u00ecnh \u0111\u1ecdc g\u1ea7n \u0111\u00e2y.'} />
       <ReadingStatsChart items={items} />
-      {items.length ? <div className="acct-history-list">{items.map(item => <HistoryRow key={item.id} item={item} onRemove={() => remove(item.id)} />)}</div> : <EmptyState title="Chưa có lịch sử đọc" text="Lịch sử sẽ được lưu tự động khi bạn đọc chương." />}
+      {items.length ? <div className="acct-history-list">{items.map(item => <HistoryRow key={item.id} item={item} onRemove={() => remove(item.id)} />)}</div> : <EmptyState title={'Ch\u01b0a c\u00f3 l\u1ecbch s\u1eed \u0111\u1ecdc'} text={'L\u1ecbch s\u1eed s\u1ebd \u0111\u01b0\u1ee3c l\u01b0u t\u1ef1 \u0111\u1ed9ng khi b\u1ea1n \u0111\u1ecdc ch\u01b0\u01a1ng.'} />}
     </div>
   );
 }
@@ -509,28 +527,43 @@ function HistoryRow({ item, onRemove }) {
               <img src={item.story.cover || coverFallback} alt={item.story.title} decoding="async" loading="lazy" onError={handleImageError} />
       <div>
         <h3>{item.story.title}</h3>
-        <p>{item.chapter?.title || `Chương ${item.chapterNumber || 1}`}</p>
+        <p>{item.chapter?.title || `Ch\u01b0\u01a1ng ${item.chapterNumber || 1}`}</p>
         <span><i style={{ width: `${Math.min(100, item.progress || 12)}%` }} /></span>
         <small>{item.progress || 12}% · {formatDate(item.updatedAt)}</small>
       </div>
-      <Link to={`/truyen/${item.story.slug}/chuong/${item.chapter?.number || item.chapterNumber || 1}`}>Tiếp tục đọc</Link>
-      <button type="button" onClick={onRemove}>Xóa</button>
+      <Link to={`/truyen/${item.story.slug}/chuong/${item.chapter?.number || item.chapterNumber || 1}`}>{'Ti\u1ebfp t\u1ee5c \u0111\u1ecdc'}</Link>
+      <button type="button" onClick={onRemove}>{'X\u00f3a'}</button>
     </article>
   );
 }
 
 export function ReadingStatsChart({ items }) {
   const bars = useMemo(() => {
+    const today = new Date();
+    const dayOfWeek = today.getDay();
+    const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+    const weekStart = new Date(today);
+    weekStart.setHours(0, 0, 0, 0);
+    weekStart.setDate(today.getDate() + mondayOffset);
+
     return Array.from({ length: 7 }).map((_, index) => {
-      const value = Math.max(1, items.filter((_, itemIndex) => itemIndex % 7 === index).length + index % 3);
+      const dayStart = new Date(weekStart);
+      dayStart.setDate(weekStart.getDate() + index);
+      const dayEnd = new Date(dayStart);
+      dayEnd.setDate(dayStart.getDate() + 1);
+      const value = items.filter(item => {
+        const updatedAt = new Date(item.updatedAt);
+        return !Number.isNaN(updatedAt.getTime()) && updatedAt >= dayStart && updatedAt < dayEnd;
+      }).length;
       return { label: ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'][index], value };
     });
   }, [items]);
+  const totalThisWeek = bars.reduce((total, item) => total + item.value, 0);
   const max = Math.max(...bars.map(item => item.value), 1);
   return (
     <section className="acct-panel">
-      <div className="acct-chart-head"><h2>Thống kê đọc tuần này</h2><p>{items.length} chương/truyện trong lịch sử</p></div>
-      <div className="acct-chart">{bars.map(item => <span key={item.label}><i style={{ height: `${Math.max(18, item.value / max * 100)}%` }} /><b>{item.label}</b></span>)}</div>
+      <div className="acct-chart-head"><h2>{'Th\u1ed1ng k\u00ea \u0111\u1ecdc tu\u1ea7n n\u00e0y'}</h2><p>{totalThisWeek} {'l\u01b0\u1ee3t \u0111\u1ecdc trong tu\u1ea7n n\u00e0y'}</p></div>
+      <div className="acct-chart">{bars.map(item => <span key={item.label} title={`${item.value} ${'l\u01b0\u1ee3t \u0111\u1ecdc'}`}><i style={{ height: item.value ? `${item.value / max * 100}%` : '0%' }} /><b>{item.label}</b></span>)}</div>
     </section>
   );
 }
