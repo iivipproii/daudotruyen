@@ -21,6 +21,13 @@ function normalizeStory(story = {}) {
     author: repairText(story.author),
     translator: repairText(story.translator),
     description: repairText(story.description),
+    coverImage: repairText(story.coverImage),
+    cover: repairText(story.cover),
+    bannerImage: repairText(story.bannerImage),
+    bannerUrl: repairText(story.bannerUrl),
+    heroLink: repairText(story.heroLink),
+    detailUrl: repairText(story.detailUrl),
+    url: repairText(story.url),
     categories: repairTextArray(story.categories),
     tags: repairTextArray(story.tags)
   };
@@ -140,7 +147,7 @@ function buildHomeSlices(sourceStories = []) {
 
   return {
     all: stories,
-    hero: (banner.length ? banner : featured).slice(0, 6),
+    hero: banner.slice(0, 6),
     hot: (hot.length ? hot : byViews).slice(0, 12),
     featuredStories: featured.slice(0, 24),
     promotedStories: (recommended.length ? recommended : featured).slice(0, 24),
@@ -830,9 +837,9 @@ export function ProductionHome({ apiClient, currentUser }) {
       const homeTrending = normalizeStories(home?.trendingStories || []);
       const fallbackTrending = normalizeStories((homeTrendingFallback || fallback?.[6])?.stories || []);
       const bannerStories = normalizeStories(home?.banners || []);
-      const heroStories = bannerStories.length >= 3
+      const heroStories = bannerStories.length
         ? bannerStories
-        : uniqueStories([...bannerStories, ...(home?.featuredStories ? normalizeStories(home.featuredStories) : nextData.featuredStories), ...nextData.hero]).slice(0, 6);
+        : nextData.featuredStories.slice(0, 6);
       setHomeData({
         ...nextData,
         hero: heroStories.length ? heroStories : nextData.hero,
