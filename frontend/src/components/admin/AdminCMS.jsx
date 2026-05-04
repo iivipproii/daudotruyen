@@ -104,6 +104,7 @@ function normalizeStory(story = {}) {
     hot: Boolean(story.hot ?? story.isHot),
     recommended: Boolean(story.recommended ?? story.isRecommended),
     banner: Boolean(story.banner ?? story.isBanner),
+    promoted: Boolean(story.promoted ?? story.isPromoted),
     homeTrending: Boolean(story.homeTrending),
     homeTrendingOrder: Number(story.homeTrendingOrder || 0),
     categories: asArray(story.categories?.length ? story.categories : story.genres),
@@ -872,10 +873,30 @@ function StoriesTab({ apiClient, busy = false, stories, taxonomy, onLoadStories,
   const bannerCount = stories.filter(story => story.banner).length;
   const bannerLimitMessage = 'Trang chu chi duoc bat toi da 6 banner. Hay tat bot 1 banner roi bat banner moi.';
   const canEnableBanner = story => story.banner || bannerCount < 6;
+  const quickTabs = [
+    { key: 'all', label: 'Tất cả', count: stories.length, active: approval === 'all' && hidden === 'all', apply: () => { setApproval('all'); setHidden('all'); } },
+    { key: 'pending', label: 'Chờ duyệt', count: stories.filter(story => story.approvalStatus === 'pending').length, active: approval === 'pending' && hidden === 'all', apply: () => { setApproval('pending'); setHidden('all'); } },
+    { key: 'approved', label: 'Đã duyệt', count: stories.filter(story => story.approvalStatus === 'approved').length, active: approval === 'approved' && hidden === 'all', apply: () => { setApproval('approved'); setHidden('all'); } },
+    { key: 'rejected', label: 'Từ chối', count: stories.filter(story => story.approvalStatus === 'rejected').length, active: approval === 'rejected' && hidden === 'all', apply: () => { setApproval('rejected'); setHidden('all'); } },
+    { key: 'hidden', label: 'Đã ẩn', count: stories.filter(story => story.hidden).length, active: approval === 'all' && hidden === 'true', apply: () => { setApproval('all'); setHidden('true'); } }
+  ];
 
   return (
-    <div className="cms-stack">
-      <PageHead eyebrow="Stories" title="Truyện" text="Duyệt, từ chối, ẩn/hiện, gắn featured/hot/recommended/banner và sửa metadata." action={<button type="button" onClick={() => setEditing({})}>Tạo truyện</button>} />
+    <div className="cms-stack cms-story-manager">
+      <PageHead eyebrow="Stories" title="Truyện" text="Duyệt, từ chối, ẩn/hiện, gắn featured/hot/recommended/banner/quảng bá và sửa metadata." action={<button type="button" onClick={() => setEditing({})}>Tạo truyện</button>} />
+      <div className="cms-story-tabs" aria-label="Lọc nhanh truyện">
+        {quickTabs.map(tab => (
+          <button
+            key={tab.key}
+            type="button"
+            className={tab.active ? 'active' : ''}
+            onClick={tab.apply}
+          >
+            <span>{tab.label}</span>
+            <b>{formatNumber(tab.count)}</b>
+          </button>
+        ))}
+      </div>
       <FilterBar>
         <input value={query} onChange={event => setQuery(event.target.value)} placeholder="Tìm truyện, tác giả, tag..." />
         <select value={approval} onChange={event => setApproval(event.target.value)}><option value="all">Tất cả duyệt</option><option value="pending">Chờ duyệt</option><option value="approved">Đã duyệt</option><option value="rejected">Từ chối</option><option value="draft">Nháp</option></select>
@@ -885,41 +906,24 @@ function StoriesTab({ apiClient, busy = false, stories, taxonomy, onLoadStories,
       </FilterBar>
       {filterError && <div className="cms-alert"><span>{filterError}</span></div>}
       {filterLoading && <div className="cms-state cms-loading">Đang lọc truyện...</div>}
-      <AdminTable columns={['Truyện', 'Duyệt', 'Hiển thị', 'Nhãn', 'Chỉ số', 'Thao tác']} empty={!pageItems.length}>
+      <section className="cms-story-grid" aria-label="Danh sách truyện">
         {pageItems.map(story => (
-          <tr key={story.id}>
-            <td data-label="Truyện"><StoryCell story={story} /></td>
-            <td data-label="Duyệt"><Badge tone={toneForStatus(story.approvalStatus)}>{statusLabel(story.approvalStatus)}</Badge></td>
-            <td data-label="Hiển thị"><Badge tone={story.hidden ? 'dark' : 'success'}>{story.hidden ? 'Đã ẩn' : 'Public'}</Badge></td>
-            <td data-label="Nhãn"><FlagBadges item={story} /></td>
-            <td data-label="Chỉ số">{formatNumber(story.views)} đọc · {formatNumber(story.chapterCount)} chương</td>
-            <td data-label="Thao tác">
-              <div className="cms-row-actions">
-                <button type="button" disabled={busy || story.approvalStatus === 'approved'} onClick={() => onStatus(story, { approvalStatus: 'approved', hidden: false })}>{story.approvalStatus === 'approved' ? 'Đã duyệt' : busy ? 'Đang xử lý...' : 'Duyệt'}</button>
-                <button type="button" disabled={busy || story.approvalStatus === 'rejected'} onClick={() => setRejecting(story)}>{story.approvalStatus === 'rejected' ? 'Đã từ chối' : 'Từ chối'}</button>
-                <button type="button" disabled={busy} onClick={() => onConfirm({ title: story.hidden ? 'Hiện truyện?' : 'Ẩn truyện?', text: story.title, action: () => onStatus(story, { hidden: !story.hidden }) })}>{story.hidden ? 'Hiện' : 'Ẩn'}</button>
-                <button type="button" disabled={busy} onClick={() => onFlags(story, { featured: !story.featured })}>{story.featured ? 'Bỏ featured' : 'Featured'}</button>
-                <button type="button" disabled={busy} onClick={() => onFlags(story, { hot: !story.hot })}>{story.hot ? 'Bỏ hot' : 'Hot'}</button>
-                <button type="button" disabled={busy} onClick={() => onFlags(story, { recommended: !story.recommended })}>{story.recommended ? 'Bỏ đề cử' : 'Đề cử'}</button>
-                <button type="button" disabled={busy} title={canEnableBanner(story) ? '' : bannerLimitMessage} onClick={() => {
-                  const nextBanner = !story.banner;
-                  if (nextBanner && !canEnableBanner(story)) {
-                    window.alert(bannerLimitMessage);
-                    return;
-                  }
-                  onFlags(story, {
-                    banner: nextBanner,
-                    ...(nextBanner ? { bannerImage: story.bannerImage || story.cover || '' } : {})
-                  });
-                }}>{story.banner ? 'Bỏ banner' : 'Banner'}</button>
-                <button type="button" disabled={busy} onClick={() => setEditing(story)}>Sửa</button>
-                {story.slug && <Link className="cms-link-button" to={`/truyen/${story.slug}`}>Preview</Link>}
-                <button type="button" className="danger" disabled={busy} onClick={() => onConfirm({ title: 'Xóa truyện?', text: 'Toàn bộ chương, bình luận, lịch sử liên quan sẽ bị xóa.', action: () => onDelete(story) })}>Xóa</button>
-              </div>
-            </td>
-          </tr>
+          <StoryManagementCard
+            key={story.id}
+            story={story}
+            busy={busy}
+            canEnableBanner={canEnableBanner(story)}
+            bannerLimitMessage={bannerLimitMessage}
+            onApprove={() => onStatus(story, { approvalStatus: 'approved', hidden: false })}
+            onReject={() => setRejecting(story)}
+            onToggleHidden={() => onConfirm({ title: story.hidden ? 'Hiện truyện?' : 'Ẩn truyện?', text: story.title, action: () => onStatus(story, { hidden: !story.hidden }) })}
+            onToggleFlag={patch => onFlags(story, patch)}
+            onEdit={() => setEditing(story)}
+            onDelete={() => onConfirm({ title: 'Xóa truyện?', text: 'Toàn bộ chương, bình luận, lịch sử liên quan sẽ bị xóa.', action: () => onDelete(story) })}
+          />
         ))}
-      </AdminTable>
+        {!pageItems.length && <EmptyState title="Không có dữ liệu" text="Thử đổi bộ lọc hoặc bấm tải lại." />}
+      </section>
       <Pagination page={page} totalPages={totalPages} onPage={setPage} />
       {editing && <StoryFormModal apiClient={apiClient} story={editing.id ? editing : null} taxonomy={taxonomy} onClose={() => setEditing(null)} onSave={payload => { onSave(editing.id ? editing : null, payload); setEditing(null); }} />}
       {rejecting && <ReasonModal title="Từ chối truyện" target={rejecting.title} onClose={() => setRejecting(null)} onSubmit={reason => { onStatus(rejecting, { approvalStatus: 'rejected', rejectionReason: reason }); setRejecting(null); }} />}
@@ -939,11 +943,74 @@ function StoryCell({ story }) {
   );
 }
 
+function StoryManagementCard({ story, busy, canEnableBanner, bannerLimitMessage, onApprove, onReject, onToggleHidden, onToggleFlag, onEdit, onDelete }) {
+  const categories = asArray(story.categories).slice(0, 2);
+  const reads = Number(story.views ?? story.reads ?? 0);
+  const previewTo = story.slug ? `/truyen/${story.slug}` : '';
+  return (
+    <article className="cms-story-card">
+      <div className="cms-story-cover">
+        <img src={story.cover || '/images/cover-1.jpg'} alt={story.title} decoding="async" loading="lazy" />
+        <Badge tone={toneForStatus(story.approvalStatus)}>{statusLabel(story.approvalStatus)}</Badge>
+      </div>
+      <div className="cms-story-body">
+        <div className="cms-story-title-row">
+          <h2>{story.title}</h2>
+          <Badge tone={story.hidden ? 'dark' : 'success'}>{story.hidden ? 'Ẩn' : 'Hiện'}</Badge>
+        </div>
+        {(story.author || categories.length > 0) && (
+          <p>{[story.author, categories.join(', ')].filter(Boolean).join(' · ')}</p>
+        )}
+        <div className="cms-story-metrics">
+          <StoryMetric label="Chương" value={formatNumber(story.chapterCount)} />
+          <StoryMetric label="Đọc" value={formatNumber(reads)} />
+        </div>
+        <FlagBadges item={story} />
+        <div className="cms-story-actions primary">
+          <button type="button" disabled={busy} onClick={onEdit}>Sửa</button>
+          {previewTo && <Link className="cms-link-button" to={previewTo}>Preview</Link>}
+          <button type="button" disabled={busy || story.approvalStatus === 'approved'} onClick={onApprove}>{story.approvalStatus === 'approved' ? 'Đã duyệt' : 'Duyệt'}</button>
+          <button type="button" className="danger" disabled={busy} onClick={onDelete}>Xóa</button>
+        </div>
+        <div className="cms-story-actions secondary">
+          <button type="button" disabled={busy || story.approvalStatus === 'rejected'} onClick={onReject}>{story.approvalStatus === 'rejected' ? 'Đã từ chối' : 'Từ chối'}</button>
+          <button type="button" disabled={busy} onClick={onToggleHidden}>{story.hidden ? 'Hiện' : 'Ẩn'}</button>
+          <button type="button" disabled={busy} onClick={() => onToggleFlag({ featured: !story.featured })}>{story.featured ? 'Bỏ featured' : 'Featured'}</button>
+          <button type="button" disabled={busy} onClick={() => onToggleFlag({ hot: !story.hot })}>{story.hot ? 'Bỏ hot' : 'Hot'}</button>
+          <button type="button" disabled={busy} onClick={() => onToggleFlag({ recommended: !story.recommended })}>{story.recommended ? 'Bỏ đề cử' : 'Đề cử'}</button>
+          <button type="button" disabled={busy} onClick={() => onToggleFlag({ promoted: !story.promoted })}>{story.promoted ? 'Bỏ quảng bá' : 'Quảng bá'}</button>
+          <button type="button" disabled={busy} title={canEnableBanner ? '' : bannerLimitMessage} onClick={() => {
+            const nextBanner = !story.banner;
+            if (nextBanner && !canEnableBanner) {
+              window.alert(bannerLimitMessage);
+              return;
+            }
+            onToggleFlag({
+              banner: nextBanner,
+              ...(nextBanner ? { bannerImage: story.bannerImage || story.cover || '' } : {})
+            });
+          }}>{story.banner ? 'Bỏ banner' : 'Banner'}</button>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function StoryMetric({ label, value }) {
+  return (
+    <span>
+      <b>{value}</b>
+      <small>{label}</small>
+    </span>
+  );
+}
+
 function FlagBadges({ item }) {
   const flags = [
     ['featured', 'Featured'],
     ['hot', 'Hot'],
     ['recommended', 'Đề cử'],
+    ['promoted', 'Quảng bá'],
     ['banner', 'Banner']
   ].filter(([key]) => item[key]);
   if (!flags.length) return <span className="cms-muted">Không</span>;
