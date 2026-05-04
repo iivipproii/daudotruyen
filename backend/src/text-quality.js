@@ -1,4 +1,4 @@
-const CORRUPT_TEXT_PATTERN = /[\uFFFD]|\u00C3|\u00C2(?:[\s\u00a0.,;:!?\"'\u201D\u2019)]|$)|\u00E2\u20AC|\u00C4[\u2018\u0090]?|\u00E1[\u00BA\u00BB]|\u00C6[\u00B0\u00A1]|\u00C5|\u02DC|\u00E1\u00BA|\u00E1\u00BB|\u00C3|\u00C4|\u00C6|\u00C5|\u00CB|\u00EF\u00BC/;
+const CORRUPT_TEXT_PATTERN = /[\uFFFD]|\u00C3[\u0080-\u00BF]|\u00C2(?:[\s\u00a0.,;:!?\"'\u201D\u2019)]|$)|\u00E2\u20AC|\u00C4[\u0080-\u00BF\u2018\u0090]?|\u00E1[\u00BA\u00BB]|\u00C6[\u00B0\u00A1]|\u00C5[\u0080-\u00BF]?|\u02DC|\u00E1\u00BA|\u00E1\u00BB|\u00CB[\u0080-\u00BF]?|\u00EF\u00BC/;
 const REPLACEMENT_PATTERN = /[\uFFFD]/;
 const TEST_PLACEHOLDER_PATTERN = /test\s+từ\s+supabase/i;
 
@@ -37,7 +37,7 @@ function normalizeText(value) {
 }
 
 function hasCorruptText(value) {
-  return typeof value === 'string' && CORRUPT_TEXT_PATTERN.test(value);
+  return corruptionScore(value) > 0;
 }
 
 function hasReplacementChar(value) {
@@ -61,7 +61,8 @@ function repairMojibake(value) {
 
 function corruptionScore(value = '') {
   if (typeof value !== 'string') return 0;
-  const markers = value.match(/\u00C3|\u00C4|\u00C6|\u00C5|\u00E1\u00BA|\u00E1\u00BB|\u00E2\u20AC|\u00CB|\u00EF\u00BC/g) || [];
+  const normalized = normalizeText(value);
+  const markers = normalized.match(CORRUPT_TEXT_PATTERN) || [];
   const replacements = value.match(REPLACEMENT_PATTERN) || [];
   return markers.length + replacements.length * 20;
 }
@@ -69,11 +70,29 @@ function corruptionScore(value = '') {
 function validateCleanText(value, context = 'text') {
   if (typeof value !== 'string') return normalizeText(value);
   const normalized = normalizeText(value);
-  if (hasCorruptText(normalized)) {
-    const preview = normalized.slice(0, 120).replace(/\s+/g, ' ');
+  const repaired = repairMojibake(normalized);
+  if (corruptionScore(repaired) > 0) {
+    const preview = repaired.slice(0, 120).replace(/\s+/g, ' ');
     throw new Error(`Corrupt Vietnamese text in ${context}: ${preview}`);
   }
-  return normalized;
+  return repaired;
+}
+
+function sanitizeChapterTextForBulk(value, context = 'chapter.content') {
+  const source = normalizeText(String(value || ''));
+  const repaired = repairMojibake(source);
+  const warnings = [];
+  let sanitized = repaired
+    .replace(REPLACEMENT_PATTERN, ' ')
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, ' ')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{4,}/g, '\n\n\n')
+    .trim();
+
+  if (repaired !== source) warnings.push(`${context}: Da tu sua ma tieng Viet.`);
+  if (REPLACEMENT_PATTERN.test(repaired)) warnings.push(`${context}: Da loai ky tu hong.`);
+  if (corruptionScore(sanitized) > 0) warnings.push(`${context}: Noi dung co dau hieu loi ma hoa nhung van duoc luu.`);
+  return { text: sanitized.normalize('NFC'), warnings };
 }
 
 function hasTestPlaceholder(value) {
@@ -105,6 +124,7 @@ module.exports = {
   repairMojibake,
   corruptionScore,
   validateCleanText,
+  sanitizeChapterTextForBulk,
   validateNoTestPlaceholder,
   validateTextFields
 };

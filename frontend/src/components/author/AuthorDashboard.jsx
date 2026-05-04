@@ -360,6 +360,50 @@ function ErrorNotice({ message }) {
   return <div className="ad-error">{message}</div>;
 }
 
+function WarningNotice({ message, warnings = [] }) {
+  if (!message && !warnings.length) return null;
+  const visibleWarnings = warnings.slice(0, 12);
+  return (
+    <div className="ad-warning-notice">
+      {message && <strong>{message}</strong>}
+      {visibleWarnings.length > 0 && (
+        <ul>
+          {visibleWarnings.map((item, index) => (
+            <li key={`${item.number || item.index || index}-${index}`}>
+              <b>#{item.number || Number(item.index || 0) + 1}</b>
+              {item.title ? ` - ${item.title}: ` : ': '}
+              {item.reason || item}
+            </li>
+          ))}
+        </ul>
+      )}
+      {warnings.length > visibleWarnings.length && <small>Và {warnings.length - visibleWarnings.length} cảnh báo khác.</small>}
+    </div>
+  );
+}
+
+function BulkChapterErrorNotice({ message, errors = [] }) {
+  if (!message && !errors.length) return null;
+  const visibleErrors = errors.slice(0, 20);
+  return (
+    <div className="ad-error ad-bulk-error">
+      {message && <strong>{message}</strong>}
+      {visibleErrors.length > 0 && (
+        <ul>
+          {visibleErrors.map((item, index) => (
+            <li key={`${item.number || item.index || index}-${index}`}>
+              <b>#{item.number || Number(item.index || 0) + 1}</b>
+              {item.title ? ` - ${item.title}: ` : ': '}
+              {item.reason}
+            </li>
+          ))}
+        </ul>
+      )}
+      {errors.length > visibleErrors.length && <small>Và {errors.length - visibleErrors.length} chương khác cần sửa.</small>}
+    </div>
+  );
+}
+
 function EmptyState({ children }) {
   return <div className="ad-empty">{children}</div>;
 }
@@ -2206,6 +2250,8 @@ function BulkChapterPage({ story, stories, chapters, loading, apiClient, usingMo
   const [processing, setProcessing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const [bulkErrors, setBulkErrors] = useState([]);
+  const [bulkWarnings, setBulkWarnings] = useState([]);
   const [auditOpen, setAuditOpen] = useState(false);
   const [previewPage, setPreviewPage] = useState(1);
   const selectedStory = story || stories.find(item => item.id === selectedStoryId);
@@ -2269,6 +2315,8 @@ function BulkChapterPage({ story, stories, chapters, loading, apiClient, usingMo
       return;
     }
     setError('');
+    setBulkErrors([]);
+    setBulkWarnings([]);
     setParsedChapters(parseBulkChapterText(rawText, Number(startNumber || nextNumber)));
     setAuditOpen(true);
   }
@@ -2290,6 +2338,8 @@ function BulkChapterPage({ story, stories, chapters, loading, apiClient, usingMo
     if (!file || !selectedStory) return;
     setProcessing(true);
     setError('');
+    setBulkErrors([]);
+    setBulkWarnings([]);
     setFileInfo({ name: file.name, size: file.size, status: 'Đang xử lý...' });
     try {
       const extension = file.name.split('.').pop().toLowerCase();
@@ -2316,6 +2366,8 @@ function BulkChapterPage({ story, stories, chapters, loading, apiClient, usingMo
   }
 
   async function submitBatch(modeOverride) {
+    setBulkErrors([]);
+    setBulkWarnings([]);
     if (!selectedStory) {
       setError('Vui lòng chọn truyện.');
       return;
@@ -2336,6 +2388,8 @@ function BulkChapterPage({ story, stories, chapters, loading, apiClient, usingMo
     }
     setSubmitting(true);
     setError('');
+    setBulkErrors([]);
+    setBulkWarnings([]);
     try {
       const result = await onSaveBulk(selectedStory.id, {
         chapters: selected.map(chapter => ({ number: chapter.number, title: chapter.title, content: chapter.content, wordCount: chapter.wordCount })),
@@ -2346,13 +2400,21 @@ function BulkChapterPage({ story, stories, chapters, loading, apiClient, usingMo
         scheduledAt
       });
       if (result.errors?.length) {
-        setError(`${result.skipped || result.errors.length} chương không lưu được: ${result.errors.map(item => `#${item.number || item.index}: ${item.reason}`).join(', ')}`);
+        setError(`Chưa lưu chương nào vì còn lỗi ở ${result.skipped || result.errors.length} chương.`);
+        setBulkErrors(result.errors || []);
         setAuditOpen(true);
+      } else if (result.warnings?.length) {
+        setBulkWarnings(result.warnings || []);
+        setError('');
       } else {
         navigate('/author/chapters');
       }
     } catch (err) {
-      setError(err.message || 'Không thể lưu batch chương.');
+      const details = Array.isArray(err.data?.errors) ? err.data.errors : [];
+      setError(details.length ? `Chưa lưu chương nào vì còn lỗi ở ${err.data?.skipped || details.length} chương.` : err.message || 'Không thể lưu batch chương.');
+      setBulkErrors(details);
+      setBulkWarnings(Array.isArray(err.data?.warnings) ? err.data.warnings : []);
+      if (details.length) setAuditOpen(true);
     } finally {
       setSubmitting(false);
     }
@@ -2374,7 +2436,8 @@ function BulkChapterPage({ story, stories, chapters, loading, apiClient, usingMo
         )}
       </section>
 
-      {error && <ErrorNotice message={error} />}
+      {bulkErrors.length ? <BulkChapterErrorNotice message={error} errors={bulkErrors} /> : <ErrorNotice message={error} />}
+      {!bulkErrors.length && bulkWarnings.length > 0 && <WarningNotice message="Đã lưu chương. Một số nội dung được tự sửa mã tiếng Việt." warnings={bulkWarnings} />}
 
       <section className="ad-panel">
         <div className="ad-bulk-tabs">

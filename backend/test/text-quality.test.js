@@ -6,6 +6,7 @@ const {
   normalizeText,
   repairMojibake,
   validateCleanText,
+  sanitizeChapterTextForBulk,
   validateNoTestPlaceholder
 } = require('../src/text-quality');
 const { decodeHtmlBytes } = require('../src/html-decoder');
@@ -18,6 +19,8 @@ test('Vietnamese text remains valid NFC after import validation', () => {
   assert.equal(hasCorruptText(cleanVietnamese), false);
   assert.equal(hasCorruptText('th\u00e2n ph\u1eadn m\u1edbi v\u00e0 \u00e2m m\u01b0u'), false);
   assert.equal(hasCorruptText('\u00c2n nh\u00e2n c\u1ee7a Qu\u1ed1c C\u00f4ng Ph\u1ee7'), false);
+  assert.equal(hasCorruptText('C\u1eeda an ninh t\u1ea1i l\u1ed1i v\u00e0o \u0111\u01b0\u1eddng cao t\u1ed1c h\u00f4m nay ki\u1ec3m tra \u0111\u1eb7c bi\u1ec7t nghi\u00eam ng\u1eb7t.'), false);
+  assert.equal(hasCorruptText('\u201cSau n\u00e0y t\u00f4i s\u1ebd kh\u00f4ng t\u00ecm c\u00f4 n\u1eefa.\u201d'), false);
 });
 
 test('mojibake can be detected and repaired before storing', () => {
@@ -47,6 +50,13 @@ test('replacement character is rejected and must be re-crawled', () => {
   const broken = 'B\uFFFDi Hi';
   assert.equal(hasCorruptText(broken), true);
   assert.throws(() => validateCleanText(broken, 'story.description'), /Corrupt Vietnamese text/);
+});
+
+test('bulk chapter sanitizer keeps upload moving and reports warnings', () => {
+  const result = sanitizeChapterTextForBulk('Doan Tu Than \uFFFD noi chuyen voi Co.', 'chapters[0].content');
+  assert.equal(result.text.includes('\uFFFD'), false);
+  assert.ok(result.text.includes('Doan Tu Than'));
+  assert.ok(result.warnings.length > 0);
 });
 
 test('Supabase test placeholders are rejected before publishing', () => {

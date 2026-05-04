@@ -1659,6 +1659,111 @@ test('author can create draft and pending stories with ownerId', async () => {
   assert.equal(pending.data.story.hidden, true);
 });
 
+test('author bulk chapter create rejects whole batch when one chapter is invalid', async () => {
+  resetDataStore(createSeedDb());
+  const headers = { Authorization: `Bearer ${await loginToken()}` };
+  const story = await request('/api/author/stories', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      title: 'Bulk Atomic Story',
+      author: 'Bulk Author',
+      description: 'Mo ta truyen du dai de tao truyen test them nhieu chuong.',
+      categories: ['Do thi'],
+      mode: 'draft'
+    })
+  });
+  assert.equal(story.response.status, 201);
+
+  const bulk = await request(`/api/author/stories/${story.data.story.id}/chapters/bulk`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      mode: 'draft',
+      renumber: false,
+      chapters: [
+        { number: 1, title: 'Chuong 1', content: 'Cua an ninh tai loi vao duong cao toc hom nay kiem tra dac biet nghiem ngat.' },
+        { number: 2, title: 'Chuong 2', content: '' }
+      ]
+    })
+  });
+
+  assert.equal(bulk.response.status, 422);
+  assert.equal(bulk.data.created, 0);
+  assert.equal(bulk.data.skipped, 1);
+  assert.equal(bulk.data.code, 'BULK_CHAPTER_VALIDATION_FAILED');
+  const list = await request(`/api/author/chapters?storyId=${story.data.story.id}`, { headers });
+  assert.equal(list.response.status, 200);
+  assert.equal(list.data.chapters.length, 0);
+});
+
+test('author bulk chapter create repairs mojibake before validation', async () => {
+  resetDataStore(createSeedDb());
+  const headers = { Authorization: `Bearer ${await loginToken()}` };
+  const story = await request('/api/author/stories', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      title: 'Bulk Vietnamese Story',
+      author: 'Bulk Author',
+      description: 'Mo ta truyen du dai de tao truyen test sua loi tieng Viet.',
+      categories: ['Do thi'],
+      mode: 'draft'
+    })
+  });
+  assert.equal(story.response.status, 201);
+
+  const bulk = await request(`/api/author/stories/${story.data.story.id}/chapters/bulk`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      mode: 'draft',
+      chapters: [
+        { title: 'Chuong 1', content: 'C\u00e1\u00bb\u00ada an ninh t\u00e1\u00ba\u00a1i l\u00e1\u00bb\u2018i v\u00c3\u00a0o \u00c4\u2018\u00c6\u00b0\u00e1\u00bb\u009dng cao t\u00e1\u00bb\u2018c h\u00c3\u00b4m nay ki\u00e1\u00bb\u0192m tra \u00c4\u2018\u00e1\u00ba\u00b7c bi\u00e1\u00bb\u2021t nghi\u00c3\u00aam ng\u00e1\u00ba\u00b7t.' }
+      ]
+    })
+  });
+
+  assert.equal(bulk.response.status, 201);
+  assert.equal(bulk.data.created, 1);
+  assert.match(bulk.data.chapters[0].content, /Cua|C\u1eeda/);
+  assert.doesNotMatch(bulk.data.chapters[0].content, /C\u00e1\u00bb/);
+});
+
+test('author bulk chapter create saves sanitized corrupt-looking text with warnings', async () => {
+  resetDataStore(createSeedDb());
+  const headers = { Authorization: `Bearer ${await loginToken()}` };
+  const story = await request('/api/author/stories', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      title: 'Bulk Warning Story',
+      author: 'Bulk Author',
+      description: 'Mo ta truyen du dai de tao truyen test canh bao encoding.',
+      categories: ['Do thi'],
+      mode: 'draft'
+    })
+  });
+  assert.equal(story.response.status, 201);
+
+  const bulk = await request(`/api/author/stories/${story.data.story.id}/chapters/bulk`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      mode: 'draft',
+      chapters: [
+        { title: 'Chuong 1', content: 'Doan Tu Than \uFFFD hoi Lam Diec ve cuoc gap trong phong bao.' }
+      ]
+    })
+  });
+
+  assert.equal(bulk.response.status, 201);
+  assert.equal(bulk.data.created, 1);
+  assert.ok(Array.isArray(bulk.data.warnings));
+  assert.ok(bulk.data.warnings.length > 0);
+  assert.doesNotMatch(bulk.data.chapters[0].content, /\uFFFD/);
+});
+
 test('author can update combo price without resubmitting story categories', async () => {
   const author = await registerMod('combo.patch.author@gmail.com', 'Combo Patch Author');
   const headers = { Authorization: `Bearer ${author.token}` };

@@ -535,6 +535,45 @@
   font-weight: 900;
 }
 
+.ad-bulk-error {
+  display: grid;
+  gap: 8px;
+  max-height: 280px;
+  overflow: auto;
+}
+
+.ad-bulk-error ul {
+  margin: 0;
+  padding-left: 18px;
+  font-weight: 700;
+}
+
+.ad-bulk-error li {
+  margin: 4px 0;
+}
+
+.ad-warning-notice {
+  display: grid;
+  gap: 8px;
+  max-height: 240px;
+  overflow: auto;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(245, 158, 11, .14);
+  color: #f59e0b;
+  font-weight: 900;
+}
+
+.ad-warning-notice ul {
+  margin: 0;
+  padding-left: 18px;
+  font-weight: 700;
+}
+
+.ad-warning-notice li {
+  margin: 4px 0;
+}
+
 .ad-empty {
   background: var(--prod-soft);
   color: var(--prod-muted);

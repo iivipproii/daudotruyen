@@ -136,6 +136,7 @@ async function api(path, options = {}) {
       error.statusText = response.statusText;
       error.url = url;
       error.path = path;
+      error.data = data;
       throw error;
     }
     return sanitizeApiImages(data);

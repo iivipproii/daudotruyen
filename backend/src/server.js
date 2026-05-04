@@ -6,7 +6,7 @@ const mammoth = require('mammoth');
 const dataStore = require('./db');
 const storage = require('./services/storage');
 const { normalizeRole, isAdmin, canPostStory } = require('./permissions');
-const { hasTestPlaceholder, repairMojibake, validateTextFields, validateCleanText } = require('./text-quality');
+const { hasTestPlaceholder, repairMojibake, validateTextFields, validateCleanText, validateNoTestPlaceholder, sanitizeChapterTextForBulk } = require('./text-quality');
 
 const PORT = Number(process.env.PORT || 4000);
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
@@ -366,6 +366,49 @@ function parseBody(req) {
 
 function normalizeIncomingTextFields(target, fields, context) {
   return validateTextFields(target, fields, context);
+}
+
+function cleanIncomingText(value, context = 'text') {
+  if (typeof value !== 'string') return value;
+  return validateNoTestPlaceholder(validateCleanText(repairMojibake(value).normalize('NFC'), context), context);
+}
+
+function sanitizeBulkText(value, context = 'chapter.content') {
+  const result = sanitizeChapterTextForBulk(value, context);
+  return {
+    text: validateNoTestPlaceholder(result.text, context),
+    warnings: result.warnings || []
+  };
+}
+
+function bulkChapterErrorResponse({ total = 0, errors = [], skipped = errors.length, warnings = [] } = {}) {
+  const normalizedErrors = (errors || []).map(error => ({
+    index: error.index,
+    number: error.number ?? null,
+    title: error.title || '',
+    reason: error.reason || 'Chuong khong hop le'
+  }));
+  const label = normalizedErrors
+    .slice(0, 8)
+    .map(error => `#${error.number || Number(error.index || 0) + 1}${error.title ? ` ${error.title}` : ''}: ${error.reason}`)
+    .join('; ');
+  const suffix = normalizedErrors.length > 8 ? `; va ${normalizedErrors.length - 8} chuong khac` : '';
+  return {
+    message: `Chua luu chuong nao vi con loi o ${skipped} chuong.${label ? ` ${label}${suffix}` : ''}`,
+    code: 'BULK_CHAPTER_VALIDATION_FAILED',
+    total,
+    created: 0,
+    skipped,
+    errors: normalizedErrors,
+    warnings,
+    report: {
+      total,
+      created: 0,
+      skipped,
+      errors: normalizedErrors,
+      warnings
+    }
+  };
 }
 
 function readRawBody(req, limit = UPLOAD_LIMIT) {
@@ -1227,7 +1270,7 @@ function parseChapterHeading(line) {
 }
 
 function parseChaptersFromText(text, { startNumber = 1 } = {}) {
-  const source = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+  const source = repairMojibake(String(text || '')).normalize('NFC').replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
   if (!source) return { chapters: [], warnings: ['Noi dung rong.'] };
   const lines = source.split('\n');
   const sections = [];
@@ -2465,6 +2508,7 @@ function buildBulkChapters({ body, story, existingChapters }) {
   const batchId = uid('batch');
   const createdChapters = [];
   const errors = [];
+  const warnings = [];
   let skipped = 0;
 
   incoming.forEach((item, index) => {
@@ -2477,33 +2521,61 @@ function buildBulkChapters({ body, story, existingChapters }) {
       return;
     }
     let title = String(item.title || `Chuong ${number}`).trim();
+    try {
+      const titleResult = sanitizeBulkText(title, `chapters[${index}].title`);
+      title = titleResult.text;
+      warnings.push(...titleResult.warnings.map(reason => ({ index, number, title, reason })));
+    } catch (error) {
+      skipped += 1;
+      errors.push({ index, number, title, reason: error.message });
+      return;
+    }
     if (!title) {
       skipped += 1;
-      errors.push({ index, number, reason: 'Ten chuong rong' });
+      errors.push({ index, number, title, reason: 'Ten chuong rong' });
+      return;
+    }
+    try {
+      const contentResult = sanitizeBulkText(content, `chapters[${index}].content`);
+      content = contentResult.text;
+      warnings.push(...contentResult.warnings.map(reason => ({ index, number, title, reason })));
+    } catch (error) {
+      skipped += 1;
+      errors.push({ index, number, title, reason: error.message });
       return;
     }
     if (!content) {
       skipped += 1;
-      errors.push({ index, number, reason: 'Noi dung chuong rong' });
+      errors.push({ index, number, title, reason: 'Noi dung chuong rong' });
       return;
     }
     try {
-      title = validateCleanText(title, `chapters[${index}].title`);
-      content = validateCleanText(content, `chapters[${index}].content`);
+      validateNoTestPlaceholder(title, `chapters[${index}].title`);
+      validateNoTestPlaceholder(content, `chapters[${index}].content`);
     } catch (error) {
       skipped += 1;
-      errors.push({ index, number, reason: error.message });
+      errors.push({ index, number, title, reason: error.message });
       return;
     }
     const publishError = isPublishChapterStatus(status) ? publicChapterContentError(content) : '';
     if (publishError) {
       skipped += 1;
-      errors.push({ index, number, reason: publishError });
+      errors.push({ index, number, title, reason: publishError });
       return;
     }
     if (chapterNumberExists(db, story.id, number) || createdChapters.some(chapter => Number(chapter.number) === Number(number))) {
       skipped += 1;
-      errors.push({ index, number, reason: 'Trung so chuong' });
+      errors.push({ index, number, title, reason: 'Trung so chuong' });
+      return;
+    }
+    let preview = '';
+    try {
+      const previewResult = sanitizeBulkText(String(item.preview || content.slice(0, 320)).trim(), `chapters[${index}].preview`);
+      preview = previewResult.text;
+      warnings.push(...previewResult.warnings.map(reason => ({ index, number, title, reason })));
+    } catch (error) {
+      skipped += 1;
+      errors.push({ index, number, title, reason: error.message });
       return;
     }
     const timestamp = now();
@@ -2513,7 +2585,7 @@ function buildBulkChapters({ body, story, existingChapters }) {
       number,
       title,
       content,
-      preview: String(item.preview || content.slice(0, 320)).trim(),
+      preview,
       isPremium,
       price,
       status,
@@ -2527,7 +2599,8 @@ function buildBulkChapters({ body, story, existingChapters }) {
     });
   });
 
-  return { createdChapters, errors, skipped };
+  if (errors.length) return { createdChapters: [], errors, skipped, warnings };
+  return { createdChapters, errors, skipped, warnings };
 }
 
 async function handleSupabaseAuthorStoryBulkChapters(req, res, storyId) {
@@ -2548,6 +2621,10 @@ async function handleSupabaseAuthorStoryBulkChapters(req, res, storyId) {
   const built = buildBulkChapters({ body, story, existingChapters });
   if (built.error) return badRequest(res, built.error);
   requestPerf.mark('validate');
+  if (built.errors?.length) {
+    requestPerf.log(`created=0 skipped=${built.skipped}`);
+    return send(res, 422, bulkChapterErrorResponse({ total: Array.isArray(body.chapters) ? body.chapters.length : 0, errors: built.errors, skipped: built.skipped, warnings: built.warnings || [] }));
+  }
 
   const db = emptyAuthorDb(story);
   db.users = [user];
@@ -2568,6 +2645,7 @@ async function handleSupabaseAuthorStoryBulkChapters(req, res, storyId) {
     created: built.createdChapters.length,
     skipped: built.skipped,
     errors: built.errors,
+    warnings: built.warnings || [],
     chapters: built.createdChapters.map(chapter => authorChapterSummary(db, chapter)),
     story: authorStorySummary(db, story, user.id)
   });
@@ -3941,101 +4019,38 @@ async function handle(req, res) {
       if (!story) return notFound(res);
       if (!canEditStory(user, story)) return forbidden(res);
       const body = await parseBody(req);
-      const incoming = Array.isArray(body.chapters) ? body.chapters : [];
-      if (!incoming.length) return badRequest(res, 'Danh sach chuong rong.');
-      const status = normalizeAuthorChapterStatus(body.mode || body.status, 'draft');
-      if (status === 'scheduled' && !body.scheduledAt) return badRequest(res, 'Vui long chon thoi gian len lich.');
-      const access = String(body.access || 'free').trim();
-      const inheritedPremium = Boolean(story.premium || ['vip', 'mixed'].includes(story.type));
-      const isPremium = access === 'inherit' ? inheritedPremium : access === 'vip' || access === 'paid';
-      const price = isPremium ? parsePositiveNumber(body.price ?? story.chapterPrice ?? story.price, 0) : 0;
-      if (isPremium && price <= 0) return badRequest(res, 'Gia chuong VIP phai lon hon 0.');
-      requestPerf.mark('validate');
-      const renumber = body.renumber !== false;
-      let cursor = parsePositiveNumber(body.startNumber, nextChapterNumber(db, story.id));
-      const batchId = uid('batch');
-      const createdChapters = [];
-      const errors = [];
-      let skipped = 0;
-
-      incoming.forEach((item, index) => {
-        let content = String(item.content || '').trim();
-        const number = renumber ? cursor : Number(item.number || cursor);
-        if (renumber) cursor += 1;
-        if (!Number.isFinite(number) || number <= 0) {
-          skipped += 1;
-          errors.push({ index, number: item.number || null, reason: 'So chuong khong hop le' });
-          return;
-        }
-        let title = String(item.title || `Chuong ${number}`).trim();
-        if (!title) {
-          skipped += 1;
-          errors.push({ index, number, reason: 'Ten chuong rong' });
-          return;
-        }
-        if (!content) {
-          skipped += 1;
-          errors.push({ index, number, reason: 'Noi dung chuong rong' });
-          return;
-        }
-        try {
-          title = validateCleanText(title, `chapters[${index}].title`);
-          content = validateCleanText(content, `chapters[${index}].content`);
-        } catch (error) {
-          skipped += 1;
-          errors.push({ index, number, reason: error.message });
-          return;
-        }
-        const publishError = isPublishChapterStatus(status) ? publicChapterContentError(content) : '';
-        if (publishError) {
-          skipped += 1;
-          errors.push({ index, number, reason: publishError });
-          return;
-        }
-        if (chapterNumberExists(db, story.id, number) || createdChapters.some(chapter => Number(chapter.number) === Number(number))) {
-          skipped += 1;
-          errors.push({ index, number, reason: 'Trung so chuong' });
-          return;
-        }
-        const timestamp = now();
-        const chapter = {
-          id: uid('chap'),
-          storyId: story.id,
-          number,
-          title,
-          content,
-          preview: String(item.preview || content.slice(0, 320)).trim(),
-          isPremium,
-          price,
-          status,
-          scheduledAt: status === 'scheduled' ? String(body.scheduledAt) : '',
-          password: body.password ? String(body.password) : '',
-          wordCount: wordCount(content),
-          sourceBatchId: batchId,
-          views: 0,
-          createdAt: timestamp,
-          updatedAt: timestamp
-        };
-        createdChapters.push(chapter);
+      const built = buildBulkChapters({
+        body,
+        story,
+        existingChapters: db.chapters.filter(chapter => chapter.storyId === story.id)
       });
+      if (built.error) return badRequest(res, built.error);
+      requestPerf.mark('validate');
+      if (built.errors?.length) {
+        requestPerf.log(`created=0 skipped=${built.skipped}`);
+        return send(res, 422, bulkChapterErrorResponse({ total: Array.isArray(body.chapters) ? body.chapters.length : 0, errors: built.errors, skipped: built.skipped, warnings: built.warnings || [] }));
+      }
 
+      const createdChapters = built.createdChapters;
       db.chapters.push(...createdChapters);
       refreshStoryChapterMetadata(db, story);
       createdChapters.forEach(chapter => notifyChapterPublished(db, story, chapter, user.id));
       await persistDb(db, { prune: false, only: ['stories', 'chapters', 'notifications'] });
       requestPerf.mark('db');
-      requestPerf.log(`created=${createdChapters.length} skipped=${skipped}`);
+      requestPerf.log(`created=${createdChapters.length} skipped=0`);
       return send(res, 201, {
         created: createdChapters.length,
-        skipped,
-        errors,
+        skipped: 0,
+        errors: [],
+        warnings: built.warnings || [],
         chapters: createdChapters.map(chapter => authorChapterSummary(db, chapter)),
         story: authorStorySummary(db, story, user.id),
         report: {
-          total: incoming.length,
+          total: Array.isArray(body.chapters) ? body.chapters.length : 0,
           created: createdChapters.length,
-          skipped,
-          errors
+          skipped: 0,
+          errors: [],
+          warnings: built.warnings || []
         }
       });
     }
