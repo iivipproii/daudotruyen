@@ -19,7 +19,7 @@ services:
       - key: SUPABASE_LOAD_TIMEOUT_MS
         value: 25000
       - key: SUPABASE_CACHE_TTL_MS
-        value: 120000
+        value: 300000
       - key: FRONTEND_ORIGIN
         value: https://daudotruyen.vercel.app
       - key: JWT_SECRET

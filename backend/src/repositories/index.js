@@ -1217,6 +1217,24 @@ async function withLock(fn) {
   return run;
 }
 
+const TABLE_COLUMNS_ALLOWLIST = Object.values(TABLES).reduce((acc, def) => {
+  acc[def.table] = Array.from(new Set([...Object.values(def.map), 'extra']));
+  return acc;
+}, {});
+
+const TABLE_SELECTS = {
+  storiesPublic: 'id,slug,title,author,owner_id,description,cover,banner_image,status,approval_status,hidden,rejection_reason,premium,price,views,follows,rating,translator,language,age_rating,chapter_count_estimate,short_description,cover_position,featured,hot,recommended,banner,home_trending,home_trending_order,type,chapter_price,vip_from_chapter,combo_price,deleted_at,created_at,updated_at,extra',
+  follows: 'id,user_id,story_id,created_at',
+  bookmarks: 'id,user_id,story_id,created_at',
+  ratings: 'id,user_id,story_id,value,created_at,updated_at',
+  comments: 'id,user_id,story_id,chapter_id,parent_id,content,status,created_at,updated_at',
+  purchases: 'id,user_id,story_id,chapter_id,price,created_at',
+  promotions: 'id,story_id,owner_id,package_id,package_name,cost,status,starts_at,ends_at,created_at,updated_at',
+  viewEvents: 'id,user_id,story_id,chapter_id,created_at',
+  usersFollowers: 'id,name,avatar_url,role,status',
+  chaptersMetadata: 'id,story_id,number,title,preview,is_premium,price,views,status,scheduled_at,word_count,rejection_reason,source_batch_id,notified_at,created_at,updated_at'
+};
+
 module.exports = {
   loadDb,
   saveDb,
@@ -1239,16 +1257,6 @@ module.exports = {
   createStoryWithRelations,
   saveStoryAndChapters,
   updateChapterOrderSafely,
-  withLock
-};
-
-const TABLE_COLUMNS_ALLOWLIST = Object.values(TABLES).reduce((acc, def) => {
-  acc[def.table] = Array.from(new Set([...Object.values(def.map), 'extra']));
-  return acc;
-}, {});
-
-const TABLE_SELECTS = {
-  follows: 'id,user_id,story_id,created_at',
-  usersFollowers: 'id,name,avatar_url,role,status',
-  chaptersMetadata: 'id,story_id,number,title,preview,is_premium,price,views,status,scheduled_at,word_count,rejection_reason,source_batch_id,notified_at,created_at,updated_at'
+  withLock,
+  TABLE_SELECTS
 };

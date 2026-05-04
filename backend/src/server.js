@@ -7,6 +7,7 @@ const dataStore = require('./db');
 const storage = require('./services/storage');
 const { normalizeRole, isAdmin, canPostStory } = require('./permissions');
 const { hasTestPlaceholder, repairMojibake, validateTextFields, validateCleanText, validateNoTestPlaceholder, sanitizeChapterTextForBulk } = require('./text-quality');
+const TABLE_SELECTS = dataStore.TABLE_SELECTS || {};
 
 const PORT = Number(process.env.PORT || 4000);
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
@@ -315,6 +316,7 @@ async function loadSupabaseTable(table, options = {}) {
 async function selectSupabaseStoryBySlug(slug) {
   return loadSupabaseTable('stories', {
     single: true,
+    columns: TABLE_SELECTS.storiesPublic || undefined,
     buildQuery: query => query.eq('slug', slug).limit(1)
   });
 }
@@ -2872,16 +2874,14 @@ async function handle(req, res) {
     if (dataStore.storeName() !== 'memory') {
       if (req.method === 'GET' && pathname === '/api/home') {
         const db = await loadSupabaseDbFromQueries({
-          stories: () => loadSupabaseTable('stories'),
-          chapters: () => loadSupabaseTable('chapters'),
-          ratings: () => loadSupabaseTable('ratings'),
-          bookmarks: () => loadSupabaseTable('bookmarks'),
-          follows: () => loadSupabaseTable('follows'),
-          comments: () => loadSupabaseTable('comments'),
-          purchases: () => loadSupabaseTable('chapter_purchases'),
-          transactions: () => loadSupabaseTable('coin_transactions'),
-          promotions: () => loadSupabaseTable('promotions'),
-          viewEvents: () => loadSupabaseTable('view_events')
+          stories: () => loadSupabaseTable('stories', { columns: TABLE_SELECTS.storiesPublic || undefined }),
+          chapters: () => loadSupabaseTable('chapters', { columns: TABLE_SELECTS.chaptersMetadata || undefined }),
+          ratings: () => loadSupabaseTable('ratings', { columns: TABLE_SELECTS.ratings || undefined }),
+          follows: () => loadSupabaseTable('follows', { columns: TABLE_SELECTS.follows || undefined }),
+          comments: () => loadSupabaseTable('comments', { columns: TABLE_SELECTS.comments || undefined }),
+          purchases: () => loadSupabaseTable('chapter_purchases', { columns: TABLE_SELECTS.purchases || undefined }),
+          promotions: () => loadSupabaseTable('promotions', { columns: TABLE_SELECTS.promotions || undefined }),
+          viewEvents: () => loadSupabaseTable('view_events', { columns: TABLE_SELECTS.viewEvents || undefined })
         });
         const updatedStories = queryPublicStories(db, null, { sort: 'updated', limit: 10 });
         const popularStories = queryPublicStories(db, null, { sort: 'views', limit: 20 });
@@ -2927,11 +2927,12 @@ async function handle(req, res) {
         const banner = url.searchParams.get('banner') === 'true' || url.searchParams.get('isBanner') === 'true';
         const { page, limit } = pageParams(url);
         const db = await loadSupabaseDbFromQueries({
-          stories: () => loadSupabaseTable('stories'),
-          chapters: () => loadSupabaseTable('chapters'),
-          ratings: () => loadSupabaseTable('ratings'),
-          bookmarks: () => loadSupabaseTable('bookmarks'),
-          follows: () => loadSupabaseTable('follows')
+          stories: () => loadSupabaseTable('stories', { columns: TABLE_SELECTS.storiesPublic || undefined }),
+          chapters: () => loadSupabaseTable('chapters', { columns: TABLE_SELECTS.chaptersMetadata || undefined }),
+          ratings: () => loadSupabaseTable('ratings', { columns: TABLE_SELECTS.ratings || undefined }),
+          bookmarks: () => loadSupabaseTable('bookmarks', { columns: TABLE_SELECTS.bookmarks || undefined }),
+          follows: () => loadSupabaseTable('follows', { columns: TABLE_SELECTS.follows || undefined }),
+          users: () => loadSupabaseTable('users', { columns: TABLE_SELECTS.usersFollowers || undefined })
         });
         const fetchLimit = Math.min(100, page * limit);
         const items = queryPublicStories(db, viewer && viewer.id, { q, category, status, premium, ageRating, sort, featured, hot, recommended, banner, homeTrending, limit: fetchLimit });
@@ -2950,18 +2951,19 @@ async function handle(req, res) {
         const viewer = await getSupabaseAuthUser(req);
         const story = await selectSupabaseStoryBySlug(storyParamsFast.slug) || await loadSupabaseTable('stories', {
           single: true,
+          columns: TABLE_SELECTS.storiesPublic || undefined,
           buildQuery: query => query.eq('id', storyParamsFast.slug).limit(1)
         });
         if (!story) return notFound(res);
         if (!isPublicStory(story) && (!viewer || viewer.role !== 'admin')) return notFound(res);
         const [chapters, comments, ratings, bookmarks, follows, purchases, users] = await Promise.all([
-          loadSupabaseTable('chapters', { buildQuery: query => query.eq('story_id', story.id).order('number', { ascending: true }) }),
-          loadSupabaseTable('comments', { buildQuery: query => query.eq('story_id', story.id).order('created_at', { ascending: true }) }),
-          loadSupabaseTable('ratings', { buildQuery: query => query.eq('story_id', story.id) }),
-          loadSupabaseTable('bookmarks', { buildQuery: query => query.eq('story_id', story.id) }),
-          loadSupabaseTable('follows', { buildQuery: query => query.eq('story_id', story.id) }),
-          loadSupabaseTable('chapter_purchases', { buildQuery: query => query.eq('story_id', story.id) }),
-          loadSupabaseTable('users')
+          loadSupabaseTable('chapters', { columns: TABLE_SELECTS.chaptersMetadata || undefined, buildQuery: query => query.eq('story_id', story.id).order('number', { ascending: true }) }),
+          loadSupabaseTable('comments', { columns: TABLE_SELECTS.comments || undefined, buildQuery: query => query.eq('story_id', story.id).order('created_at', { ascending: true }) }),
+          loadSupabaseTable('ratings', { columns: TABLE_SELECTS.ratings || undefined, buildQuery: query => query.eq('story_id', story.id) }),
+          loadSupabaseTable('bookmarks', { columns: TABLE_SELECTS.bookmarks || undefined, buildQuery: query => query.eq('story_id', story.id) }),
+          loadSupabaseTable('follows', { columns: TABLE_SELECTS.follows || undefined, buildQuery: query => query.eq('story_id', story.id) }),
+          loadSupabaseTable('chapter_purchases', { columns: TABLE_SELECTS.purchases || undefined, buildQuery: query => query.eq('story_id', story.id) }),
+          loadSupabaseTable('users', { columns: TABLE_SELECTS.usersFollowers || undefined })
         ]);
         const db = partialDbFromTables({ stories: [story], chapters, comments, ratings, bookmarks, follows, purchases, users });
         const enriched = enrichStory(db, story, viewer && viewer.id, viewer?.role === 'admin');
@@ -2976,12 +2978,13 @@ async function handle(req, res) {
       if (req.method === 'GET' && chapterListParamsFast) {
         const story = await selectSupabaseStoryBySlug(chapterListParamsFast.slug) || await loadSupabaseTable('stories', {
           single: true,
+          columns: TABLE_SELECTS.storiesPublic || undefined,
           buildQuery: query => query.eq('id', chapterListParamsFast.slug).limit(1)
         });
         if (!story) return notFound(res);
         const viewer = await getSupabaseAuthUser(req);
         if (!isPublicStory(story) && (!viewer || viewer.role !== 'admin')) return notFound(res);
-        const chapters = await loadSupabaseTable('chapters', { buildQuery: query => query.eq('story_id', story.id).order('number', { ascending: true }) });
+        const chapters = await loadSupabaseTable('chapters', { columns: TABLE_SELECTS.chaptersMetadata || undefined, buildQuery: query => query.eq('story_id', story.id).order('number', { ascending: true }) });
         const page = paginate(chapters.filter(chapter => viewer?.role === 'admin' || isPublicChapter(chapter)), url);
         return sendCachedJson(req, res, 200, {
           story: { title: repairMojibake(story.title || ''), slug: story.slug },
@@ -2995,13 +2998,14 @@ async function handle(req, res) {
         const viewer = await getSupabaseAuthUser(req);
         const story = await selectSupabaseStoryBySlug(chapterParamsFast.slug) || await loadSupabaseTable('stories', {
           single: true,
+          columns: TABLE_SELECTS.storiesPublic || undefined,
           buildQuery: query => query.eq('id', chapterParamsFast.slug).limit(1)
         });
         if (!story) return notFound(res);
         if (!isPublicStory(story) && (!viewer || viewer.role !== 'admin')) return notFound(res);
-        const chapters = await loadSupabaseTable('chapters', { buildQuery: query => query.eq('story_id', story.id).order('number', { ascending: true }) });
+        const chapters = await loadSupabaseTable('chapters', { columns: TABLE_SELECTS.chaptersMetadata || undefined, buildQuery: query => query.eq('story_id', story.id).order('number', { ascending: true }) });
         const purchases = viewer
-          ? await loadSupabaseTable('chapter_purchases', { buildQuery: query => query.eq('story_id', story.id) })
+          ? await loadSupabaseTable('chapter_purchases', { columns: TABLE_SELECTS.purchases || undefined, buildQuery: query => query.eq('story_id', story.id) })
           : [];
         const chapter = chapters
           .filter(item => viewer?.role === 'admin' || isPublicChapter(item))

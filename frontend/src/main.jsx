@@ -38,6 +38,7 @@ const ThemeContext = createContext(null);
 const STORY_CATEGORIES = AUTHOR_CATEGORIES;
 const PUBLISH_STORY_CATEGORIES = AUTHOR_CATEGORIES;
 const inFlightGetRequests = new Map();
+const publicGetCache = new Map();
 const BROKEN_SUPABASE_HOSTS = new Set(['tqddgqwlamivptlddnlp.supabase.co']);
 const IMAGE_FALLBACK = '/images/cover-1.jpg';
 const AUTH_EXPIRED_EVENT = 'daudo:auth-expired';
@@ -92,6 +93,40 @@ function sanitizeApiImages(value) {
   }));
 }
 
+function isPrivateApiPath(path) {
+  return /^(\/auth\/me|\/me\/|\/wallet(?:\/|$)|\/notifications(?:\/|$)|\/admin(?:\/|$))/i.test(String(path || ''));
+}
+
+function isPublicCacheableApiPath(path) {
+  const value = String(path || '');
+  return value === '/home'
+    || value === '/categories'
+    || value === '/rankings'
+    || value === '/stories'
+    || /^\/stories\/[^/]+$/.test(value)
+    || /^\/stories\/[^/]+\/chapters$/.test(value)
+    || /^\/stories\/[^/]+\/chapters\/\d+$/.test(value);
+}
+
+function publicGetCacheTtlMs(path, queryString = '') {
+  const value = String(path || '');
+  if (value === '/home') return 45_000;
+  if (value === '/categories') return 10 * 60_000;
+  if (value === '/rankings') return 45_000;
+  if (value === '/stories') {
+    if (/([?&](q|category|status|premium|ageRating|featured|hot|recommended|banner|homeTrending|sort)=)/i.test(queryString)) return 30_000;
+    return 60_000;
+  }
+  if (/^\/stories\/[^/]+\/chapters\/\d+$/.test(value)) return 2 * 60_000;
+  if (/^\/stories\/[^/]+\/chapters$/.test(value)) return 2 * 60_000;
+  if (/^\/stories\/[^/]+$/.test(value)) return 90_000;
+  return 0;
+}
+
+function clearPublicGetCache() {
+  publicGetCache.clear();
+}
+
 async function api(path, options = {}) {
   const token = localStorage.getItem('daudo_token');
   const { headers: optionHeaders = {}, noStore = false, ...fetchOptions } = options;
@@ -104,8 +139,24 @@ async function api(path, options = {}) {
   if (token) headers.Authorization = `Bearer ${token}`;
   const url = buildApiUrl(path);
   const method = String(fetchOptions.method || 'GET').toUpperCase();
-  const shouldUseNoStore = noStore || (method === 'GET' && /^(\/auth\/me|\/me\/|\/wallet(?:\/|$)|\/notifications(?:\/|$)|\/admin(?:\/|$))/.test(String(path)));
+  const shouldUseNoStore = noStore || (method === 'GET' && isPrivateApiPath(path));
+  const queryString = (() => {
+    try {
+      return new URL(url, window.location.origin).search;
+    } catch {
+      return '';
+    }
+  })();
+  const publicCacheKey = method === 'GET' && !shouldUseNoStore && !token && isPublicCacheableApiPath(path)
+    ? `${url}|${JSON.stringify(headers)}`
+    : '';
   const requestKey = method === 'GET' ? `${url}|${JSON.stringify(headers)}` : '';
+  if (publicCacheKey) {
+    const cached = publicGetCache.get(publicCacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.data;
+    }
+  }
   if (method === 'GET' && !shouldUseNoStore && inFlightGetRequests.has(requestKey)) {
     return inFlightGetRequests.get(requestKey);
   }
@@ -139,7 +190,20 @@ async function api(path, options = {}) {
       error.data = data;
       throw error;
     }
-    return sanitizeApiImages(data);
+    const sanitized = sanitizeApiImages(data);
+    if (!shouldUseNoStore && method === 'GET' && !token) {
+      const ttl = publicGetCacheTtlMs(path, queryString);
+      if (ttl > 0 && publicCacheKey) {
+        publicGetCache.set(publicCacheKey, {
+          data: sanitized,
+          expiresAt: Date.now() + ttl
+        });
+      }
+    }
+    if (method !== 'GET') {
+      clearPublicGetCache();
+    }
+    return sanitized;
   } catch (error) {
     const status = Number(error?.status || response?.status || 0);
     const isExpectedAuthFailure = status === 401 || status === 403;
