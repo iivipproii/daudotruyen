@@ -1002,7 +1002,7 @@ function SectionHeader({ icon = 'book', kicker, title, subtitle, to, actionLabel
 }
 
 function PagedStoryRail({ title, subtitle, stories = [], to, icon = 'star', promoted = false }) {
-  const list = normalizeStories(stories).filter(isDisplaySafeStory);
+  const list = normalizeStories(stories).filter(promoted ? isHeroDisplayStory : isDisplaySafeStory);
   const isMobile = useMediaQuery('(max-width: 720px)');
   const perPage = isMobile ? (promoted ? 2 : 3) : 8;
   const pages = Math.max(1, Math.ceil(list.length / perPage));
