@@ -192,7 +192,7 @@ Production runtime requires Supabase env vars and does not fall back to `backend
 
 ## Deploy online
 
-Deploy the backend and frontend as two separate services.
+Deploy the backend and frontend as two separate services. The repo includes `render.yaml` for the Render backend blueprint and `.github/workflows/ci.yml` for GitHub CI checks.
 
 Backend service:
 
@@ -232,11 +232,11 @@ Publish/output directory: dist
 For local frontend development, `frontend/.env` points to `http://localhost:4000/api`. For production builds, `frontend/.env.production` points to:
 
 ```text
-VITE_API_URL=https://api-daudo-truyen.onrender.com/api
+VITE_API_BASE_URL=https://api-daudo-truyen.onrender.com/api
 ```
 
-Change that value to the real backend domain before building if the backend is deployed somewhere else. Do not reuse an old `frontend/dist` after changing `VITE_API_URL`; rebuild the frontend so the public bundle calls the correct API.
+Change that value to the real backend domain before building if the backend is deployed somewhere else. Do not reuse an old `frontend/dist` after changing `VITE_API_BASE_URL`; rebuild the frontend so the public bundle calls the correct API.
 
-The frontend uses React Router with `BrowserRouter`. `frontend/vercel.json` rewrites all routes to `index.html` so direct refreshes on routes such as `/admin`, `/ho-so`, and `/truyen/...` do not return 404 on Vercel.
+The frontend uses React Router with `BrowserRouter`. `frontend/vercel.json` rewrites all routes to `index.html` so direct refreshes on routes such as `/admin`, `/ho-so`, and `/truyen/...` do not return 404 on Vercel. It also proxies `/api/*` to the Render backend so direct checks such as `/api/health` keep working on the Vercel domain.
 
 The current backend stores runtime data in Supabase. Keep `backend/data/db.json` only as a local export/seed source for `npm run migrate:supabase` or `npm run reset-db`.
