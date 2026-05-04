@@ -30,5 +30,14 @@ export default defineConfig({
         manualChunks
       }
     }
+  },
+  server: {
+    proxy: {
+      '/api': {
+        target: 'https://backend-two-wine-79.vercel.app',
+        changeOrigin: true,
+        secure: true
+      }
+    }
   }
 });

@@ -5,6 +5,65 @@
   padding-bottom: 36px;
 }
 
+.cms-home-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(320px, .8fr);
+  gap: 20px;
+}
+
+.cms-home-panel {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.cms-home-panel h3 {
+  margin: 0;
+}
+
+.cms-home-selected,
+.cms-home-candidates {
+  display: grid;
+  gap: 10px;
+}
+
+.cms-home-trending-row,
+.cms-home-candidates button {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.cms-home-candidates button {
+  grid-template-columns: minmax(0, 1fr);
+  text-align: left;
+}
+
+.cms-home-trending-row > b {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: var(--primary);
+  color: #fff;
+}
+
+@media (max-width: 960px) {
+  .cms-home-layout,
+  .cms-home-trending-row {
+    grid-template-columns: 1fr;
+  }
+}
+
 .cms-stack {
   display: grid;
   gap: 18px;
@@ -624,23 +683,31 @@
   z-index: 360;
   display: grid;
   place-items: center;
-  padding: 18px;
+  padding: 16px;
   background: rgba(15, 23, 42, .42);
   backdrop-filter: blur(8px);
   cursor: pointer;
+  overflow: hidden;
 }
 
 .cms-modal {
-  width: min(560px, 100%);
+  width: min(920px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
   display: grid;
-  gap: 14px;
-  padding: 22px;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 12px;
+  padding: 22px 22px 0;
   border: 1px solid var(--prod-line);
   border-radius: 18px;
   background: var(--prod-surface-strong);
   box-shadow: var(--prod-shadow);
   color: var(--prod-text);
   cursor: auto;
+  overflow: hidden;
+}
+
+.cms-modal > h2 {
+  margin: 0;
 }
 
 .cms-modal label {
@@ -922,6 +989,12 @@
   gap: 12px;
 }
 
+.cms-modal > .cms-form {
+  min-height: 0;
+  overflow: auto;
+  padding: 0 2px 18px;
+}
+
 .cms-form + .cms-form {
   margin-top: 6px;
   padding-top: 14px;
@@ -950,6 +1023,74 @@
 
 .cms-form .cms-modal-actions {
   grid-column: 1 / -1;
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  margin: 8px -2px -18px;
+  padding: 14px 0 18px;
+  background: linear-gradient(180deg, transparent, var(--prod-surface-strong) 24%, var(--prod-surface-strong));
+}
+
+.cms-banner-upload {
+  display: grid;
+  gap: 8px;
+  color: var(--prod-muted);
+  font-weight: 850;
+}
+
+.cms-banner-hint {
+  font-size: .82rem;
+  font-weight: 650;
+  line-height: 1.35;
+  color: var(--prod-muted);
+}
+
+.cms-banner-toggle {
+  align-self: start;
+}
+
+.cms-banner-drop {
+  min-height: 132px;
+  display: grid;
+  place-items: center;
+  gap: 7px;
+  padding: 10px;
+  border: 1px dashed var(--prod-line);
+  border-radius: 14px;
+  background: var(--prod-surface);
+  text-align: center;
+  cursor: pointer;
+  transition: border-color .16s ease, background .16s ease, box-shadow .16s ease;
+}
+
+.cms-banner-drop.dragging,
+.cms-banner-drop:hover,
+.cms-banner-drop:focus-within {
+  border-color: rgba(239, 63, 95, .46);
+  background: var(--prod-soft);
+  box-shadow: 0 12px 28px rgba(239, 63, 95, .12);
+}
+
+.cms-banner-drop img {
+  width: 100%;
+  height: 92px;
+  object-fit: cover;
+  border-radius: 10px;
+}
+
+.cms-banner-drop input {
+  display: none;
+}
+
+.cms-banner-drop strong,
+.cms-banner-drop small {
+  overflow-wrap: anywhere;
+}
+
+.cms-upload-error {
+  color: #fca5a5;
+  font-style: normal;
+  font-size: .86rem;
 }
 
 .cms-report-detail p {
@@ -1086,4 +1227,338 @@
   .cms-table td:last-child {
     border-bottom: 0;
   }
+}
+
+/* Global theme coverage. This file is imported last, so these rules normalize
+   hard-coded surfaces across public, reader, account, author, publish and CMS. */
+body[data-theme] {
+  background:
+    radial-gradient(circle at 12% 0, color-mix(in srgb, var(--orange) 16%, transparent), transparent 30rem),
+    var(--app-bg);
+  color: var(--text);
+}
+
+body[data-theme] .app-shell,
+body[data-theme] .public-shell,
+body[data-theme] .publish-shell,
+body[data-theme] .reader-page,
+body[data-theme] .account-page,
+body[data-theme] .author-page,
+body[data-theme] .cms-page,
+body[data-theme] .admin-page {
+  background: var(--app-bg);
+  color: var(--text);
+}
+
+body[data-theme] .container,
+body[data-theme] main {
+  color: var(--text);
+}
+
+body[data-theme] .prod-brand strong {
+  color: var(--text);
+}
+
+body[data-theme] .prod-brand small,
+body[data-theme] .prod-nav a:not(.active),
+body[data-theme] .prod-nav-button:not(.active),
+body[data-theme] .prod-search-box input::placeholder {
+  color: var(--muted);
+}
+
+body[data-theme] .prod-search-panel,
+body[data-theme] .prod-mega-menu,
+body[data-theme] .prod-notification-menu,
+body[data-theme] .prod-user-menu {
+  border-color: var(--line);
+  background: var(--surface-strong);
+  box-shadow: var(--shadow-soft);
+}
+
+body[data-theme] .prod-nav a:hover,
+body[data-theme] .prod-nav a:focus-visible,
+body[data-theme] .prod-nav a.active,
+body[data-theme] .prod-nav-button:hover,
+body[data-theme] .prod-nav-button:focus-visible,
+body[data-theme] .prod-nav-button.active,
+body[data-theme] .prod-user-links a:hover,
+body[data-theme] .prod-user-links button:hover {
+  background: var(--soft);
+  color: var(--primary) !important;
+}
+
+body[data-theme] .prod-footer {
+  background: color-mix(in srgb, #171729 82%, var(--surface-strong));
+  color: #f8fafc;
+}
+
+body[data-theme] .prod-footer a,
+body[data-theme] .prod-footer p,
+body[data-theme] .prod-footer label,
+body[data-theme] .prod-footer-bottom {
+  color: #aeb5c5;
+}
+
+body[data-theme] input,
+body[data-theme] select,
+body[data-theme] textarea {
+  border-color: var(--line) !important;
+  background: var(--input-bg) !important;
+  color: var(--input-text) !important;
+}
+
+body[data-theme] input::placeholder,
+body[data-theme] textarea::placeholder {
+  color: var(--subtle) !important;
+}
+
+body[data-theme] input:focus,
+body[data-theme] input:focus-visible,
+body[data-theme] select:focus,
+body[data-theme] select:focus-visible,
+body[data-theme] textarea:focus,
+body[data-theme] textarea:focus-visible {
+  border-color: color-mix(in srgb, var(--primary) 56%, var(--line)) !important;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary) 14%, transparent) !important;
+  outline: 0;
+}
+
+body[data-theme] .button,
+body[data-theme] .prod-primary-button,
+body[data-theme] .sr-empty-state button,
+body[data-theme] .sr-retry-button,
+body[data-theme] .prod-newsletter-col button,
+body[data-theme] .acct-settings-form > button,
+body[data-theme] .acct-avatar-actions button:first-child,
+body[data-theme] .cms-primary-button,
+body[data-theme] .author-primary-button {
+  background: linear-gradient(135deg, var(--primary), var(--orange));
+  color: #fff !important;
+  border-color: transparent;
+}
+
+body[data-theme] .ghost,
+body[data-theme] .prod-soft-button,
+body[data-theme] .pill,
+body[data-theme] .toggle,
+body[data-theme] .chip,
+body[data-theme] .status-card,
+body[data-theme] .acct-avatar-actions button,
+body[data-theme] .cms-secondary-button,
+body[data-theme] .author-secondary-button {
+  border-color: var(--line);
+  background: var(--surface-soft);
+  color: var(--text);
+}
+
+body[data-theme] .panel,
+body[data-theme] .center-card,
+body[data-theme] .auth-card,
+body[data-theme] .detail,
+body[data-theme] .reader,
+body[data-theme] .story-card,
+body[data-theme] .list-panel,
+body[data-theme] .publish-title,
+body[data-theme] .publish-main,
+body[data-theme] .publish-side,
+body[data-theme] .publish-footer,
+body[data-theme] .mini-panel,
+body[data-theme] .guide-box,
+body[data-theme] .category-block,
+body[data-theme] .acct-panel,
+body[data-theme] .acct-stat-card,
+body[data-theme] .acct-library-card,
+body[data-theme] .acct-history-row,
+body[data-theme] .acct-wallet-card,
+body[data-theme] .acct-settings-card,
+body[data-theme] .author-panel,
+body[data-theme] .author-card,
+body[data-theme] .cms-card,
+body[data-theme] .cms-panel,
+body[data-theme] .cms-stat-card,
+body[data-theme] .cms-table-wrap,
+body[data-theme] .cms-form,
+body[data-theme] .cms-report-detail,
+body[data-theme] .rk-table-card,
+body[data-theme] .rk-podium-card,
+body[data-theme] .sr-filter-panel,
+body[data-theme] .sr-empty-state {
+  border-color: var(--line);
+  background: var(--surface-strong);
+  color: var(--text);
+  box-shadow: var(--shadow-soft);
+}
+
+body[data-theme] .publish-page,
+body[data-theme] .acct-page,
+body[data-theme] .acct-shell,
+body[data-theme] .reader-shell,
+body[data-theme] .story-detail-page,
+body[data-theme] .sr-page,
+body[data-theme] .rk-page {
+  color: var(--text);
+}
+
+body[data-theme] h1,
+body[data-theme] h2,
+body[data-theme] h3,
+body[data-theme] h4,
+body[data-theme] strong,
+body[data-theme] .price,
+body[data-theme] .stat strong,
+body[data-theme] .story-info h3,
+body[data-theme] .sr-filter-head h2,
+body[data-theme] .sr-filter-block h3,
+body[data-theme] .sr-result-title h3,
+body[data-theme] .sr-results-head strong,
+body[data-theme] .cms-table th,
+body[data-theme] .cms-table td,
+body[data-theme] .acct-settings-section-head h2,
+body[data-theme] .author-section-head h2 {
+  color: var(--text) !important;
+}
+
+body[data-theme] p,
+body[data-theme] small,
+body[data-theme] .muted,
+body[data-theme] .hint,
+body[data-theme] .meta,
+body[data-theme] .stat span,
+body[data-theme] .story-info p,
+body[data-theme] .detail p,
+body[data-theme] .page-title p,
+body[data-theme] .sr-result-author,
+body[data-theme] .sr-results-head p,
+body[data-theme] .sr-results-head span,
+body[data-theme] .sr-radio-list label,
+body[data-theme] .cms-muted,
+body[data-theme] .cms-table th,
+body[data-theme] .acct-muted,
+body[data-theme] .acct-settings-section-head span,
+body[data-theme] .author-muted {
+  color: var(--muted) !important;
+}
+
+body[data-theme] .sr-filter-panel,
+body[data-theme] .sr-sort-select select,
+body[data-theme] .sr-category-chips button,
+body[data-theme] .sr-tag-cloud button {
+  border-color: var(--line);
+  background: var(--surface-strong) !important;
+  color: var(--muted);
+}
+
+body[data-theme] .sr-category-chips button,
+body[data-theme] .sr-tag-cloud button,
+body[data-theme] .sr-result-tags a,
+body[data-theme] .prod-hero-tags span,
+body[data-theme] .prod-card-tags span,
+body[data-theme] .rk-podium-card em {
+  background: var(--soft) !important;
+  color: var(--primary) !important;
+}
+
+body[data-theme] .sr-category-chips button.active,
+body[data-theme] .sr-category-chips button:hover,
+body[data-theme] .sr-tag-cloud button:hover {
+  background: color-mix(in srgb, var(--primary) 18%, var(--surface-strong)) !important;
+  color: var(--primary) !important;
+}
+
+body[data-theme] .sr-hero,
+body[data-theme] .prod-primary-button,
+body[data-theme] .prod-hero-arrow,
+body[data-theme] .rk-podium-card b {
+  color: #fff;
+}
+
+body[data-theme] .sr-search-main label {
+  background: #fff !important;
+  color: #8992a6;
+}
+
+body[data-theme] .sr-search-main input {
+  background: transparent !important;
+  color: #242836 !important;
+  box-shadow: none !important;
+}
+
+body[data-theme] .cover-wrap,
+body[data-theme] .sr-result-cover,
+body[data-theme] .story-cover-panel,
+body[data-theme] .cover-drop {
+  background: var(--surface-soft);
+}
+
+body[data-theme] .chapter-list a,
+body[data-theme] .list-panel > a,
+body[data-theme] .list-panel > div,
+body[data-theme] .quick-links a,
+body[data-theme] .acct-toggle-row,
+body[data-theme] .acct-settings-nav a,
+body[data-theme] .author-table-row,
+body[data-theme] .cms-table tr,
+body[data-theme] .cms-list-row,
+body[data-theme] .rk-table-row {
+  border-color: var(--line);
+  background: var(--surface);
+  color: var(--text);
+}
+
+body[data-theme] .error,
+body[data-theme] .acct-error,
+body[data-theme] .cms-error,
+body[data-theme] .rk-warning {
+  border-color: color-mix(in srgb, var(--danger) 42%, transparent);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
+}
+
+body[data-theme] .success-box,
+body[data-theme] .acct-success,
+body[data-theme] .cms-success {
+  border-color: color-mix(in srgb, var(--success) 38%, transparent);
+  background: color-mix(in srgb, var(--success) 13%, transparent);
+  color: var(--success);
+}
+
+body[data-theme] .acct-warning,
+body[data-theme] .cms-warning,
+body[data-theme] .paywall {
+  border-color: color-mix(in srgb, var(--warning) 38%, transparent);
+  background: color-mix(in srgb, var(--warning) 13%, transparent);
+  color: var(--warning);
+}
+
+body[data-theme='dark'] .public-shell,
+body[data-theme='dark'] .sr-page,
+body[data-theme='dark'] .rk-page {
+  background: var(--app-bg);
+}
+
+body[data-theme='dark'] .prod-footer {
+  background: #11121c;
+  border-top: 1px solid var(--line);
+}
+
+body[data-theme='dark'] .prod-newsletter-col input {
+  background: var(--input-bg) !important;
+  color: var(--input-text) !important;
+}
+
+body[data-theme='dark'] .hero,
+body[data-theme='dark'] .detail,
+body[data-theme='dark'] .reader,
+body[data-theme='dark'] .catalog-hero-readdy,
+body[data-theme='dark'] .prod-hero-slider {
+  box-shadow: var(--shadow);
+}
+
+body[data-theme='dark'] table,
+body[data-theme='dark'] thead,
+body[data-theme='dark'] tbody,
+body[data-theme='dark'] tr,
+body[data-theme='dark'] td,
+body[data-theme='dark'] th {
+  border-color: var(--line);
 }

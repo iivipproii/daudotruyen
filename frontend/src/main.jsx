@@ -10,6 +10,7 @@ import './account.css';
 import './author.css';
 import './admin-cms.css';
 import { ProductionFooter, ProductionHeader, ProductionHome } from './components/home/HomeExperience.jsx';
+import { Majesticon } from './components/shared/Majesticon.jsx';
 import { PageSeo } from './components/shared/Seo.jsx';
 import { AUTHOR_CATEGORIES } from './data/storyCategories.js';
 import { canPostStory, isAdmin, normalizeRole } from './lib/permissions.js';
@@ -17,14 +18,18 @@ import { canPostStory, isAdmin, normalizeRole } from './lib/permissions.js';
 const API_BASE = (() => {
   const configured = String(import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || '').trim();
   if (configured) {
+    if (configured.startsWith('/')) {
+      const cleanPathBase = configured.replace(/\/+$/, '').replace(/\/api$/i, '');
+      return `${cleanPathBase || ''}/api`;
+    }
     const cleanBase = configured.replace(/\/+$/, '').replace(/\/api$/i, '');
+    if (import.meta.env.PROD && /\/\/daudotruyen\.onrender\.com$/i.test(cleanBase)) {
+      return '/api';
+    }
     if (import.meta.env.PROD && /^https?:\/\/(?:localhost|127\.0\.0\.1)(?::|\/|$)/i.test(cleanBase)) {
       throw new Error(`Invalid production API base URL: ${cleanBase}`);
     }
     return `${cleanBase}/api`;
-  }
-  if (import.meta.env.PROD) {
-    throw new Error('Missing VITE_API_URL or VITE_API_BASE_URL for production build.');
   }
   return '/api';
 })();
@@ -32,6 +37,10 @@ const AuthContext = createContext(null);
 const ThemeContext = createContext(null);
 const STORY_CATEGORIES = AUTHOR_CATEGORIES;
 const PUBLISH_STORY_CATEGORIES = AUTHOR_CATEGORIES;
+const inFlightGetRequests = new Map();
+const BROKEN_SUPABASE_HOSTS = new Set(['tqddgqwlamivptlddnlp.supabase.co']);
+const IMAGE_FALLBACK = '/images/cover-1.jpg';
+const AUTH_EXPIRED_EVENT = 'daudo:auth-expired';
 const lazyNamed = (loader, exportName) => lazy(() => loader().then(module => ({ default: module[exportName] })));
 const SearchPage = lazyNamed(() => import('./components/search/SearchPage.jsx'), 'SearchPage');
 const RankingExperiencePage = lazyNamed(() => import('./components/ranking/RankingPage.jsx'), 'RankingPage');
@@ -59,6 +68,30 @@ function buildApiUrl(path) {
   return `${API_BASE}${cleanPath}`;
 }
 
+function normalizeRemoteImageUrl(value) {
+  if (typeof value !== 'string') return value;
+  const text = value.trim();
+  if (!/^https?:\/\//i.test(text)) return value;
+  try {
+    const parsed = new URL(text);
+    if (BROKEN_SUPABASE_HOSTS.has(parsed.hostname)) return IMAGE_FALLBACK;
+  } catch {
+    return value;
+  }
+  return value;
+}
+
+function sanitizeApiImages(value) {
+  if (!value || typeof value !== 'object') return value;
+  if (Array.isArray(value)) return value.map(sanitizeApiImages);
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => {
+    if (['cover', 'coverUrl', 'bannerImage', 'bannerUrl', 'banner', 'avatar', 'avatarUrl', 'image'].includes(key)) {
+      return [key, normalizeRemoteImageUrl(item)];
+    }
+    return [key, sanitizeApiImages(item)];
+  }));
+}
+
 async function api(path, options = {}) {
   const token = localStorage.getItem('daudo_token');
   const { headers: optionHeaders = {}, noStore = false, ...fetchOptions } = options;
@@ -72,6 +105,11 @@ async function api(path, options = {}) {
   const url = buildApiUrl(path);
   const method = String(fetchOptions.method || 'GET').toUpperCase();
   const shouldUseNoStore = noStore || (method === 'GET' && /^(\/auth\/me|\/me\/|\/wallet(?:\/|$)|\/notifications(?:\/|$)|\/admin(?:\/|$))/.test(String(path)));
+  const requestKey = method === 'GET' ? `${url}|${JSON.stringify(headers)}` : '';
+  if (method === 'GET' && !shouldUseNoStore && inFlightGetRequests.has(requestKey)) {
+    return inFlightGetRequests.get(requestKey);
+  }
+  const execute = async () => {
   let response;
   let data = {};
   try {
@@ -81,7 +119,17 @@ async function api(path, options = {}) {
       headers
     });
     const text = await response.text();
-    data = text ? JSON.parse(text) : {};
+    if (text) {
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = {
+          message: response.ok
+            ? 'Phản hồi API không hợp lệ.'
+            : `Máy chủ API đang lỗi (${response.status}). Vui lòng thử lại sau.`
+        };
+      }
+    }
     if (!response.ok) {
       const error = new Error(data.message || `API request failed: ${response.status} ${response.statusText} ${url}`);
       error.status = response.status;
@@ -90,17 +138,34 @@ async function api(path, options = {}) {
       error.path = path;
       throw error;
     }
-    return data;
+    return sanitizeApiImages(data);
   } catch (error) {
-    console.error('[API_ERROR]', {
-      path,
-      url,
-      status: response?.status,
-      statusText: response?.statusText,
-      error
-    });
+    const status = Number(error?.status || response?.status || 0);
+    const isExpectedAuthFailure = status === 401 || status === 403;
+    if (isExpectedAuthFailure) {
+      localStorage.removeItem('daudo_token');
+      window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT, { detail: { path, status } }));
+    }
+    if (!status || status >= 500) {
+      console.error('[API_ERROR]', {
+        path,
+        url,
+        status: response?.status,
+        statusText: response?.statusText,
+        error
+      });
+    }
     throw error;
   }
+  };
+  if (method === 'GET' && !shouldUseNoStore) {
+    const promise = execute().finally(() => {
+      inFlightGetRequests.delete(requestKey);
+    });
+    inFlightGetRequests.set(requestKey, promise);
+    return promise;
+  }
+  return execute();
 }
 
 function useAuth() {
@@ -116,6 +181,8 @@ function ThemeProvider({ children }) {
 
   useEffect(() => {
     document.body.dataset.theme = theme;
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.style.colorScheme = theme;
     localStorage.setItem('daudo_theme', theme);
   }, [theme]);
 
@@ -141,8 +208,17 @@ function AuthProvider({ children }) {
     }
     api('/auth/me')
       .then(data => setUser(normalizeSessionUser(data.user)))
-      .catch(() => localStorage.removeItem('daudo_token'))
+      .catch(() => {
+        localStorage.removeItem('daudo_token');
+        setUser(null);
+      })
       .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    const handleAuthExpired = () => setUser(null);
+    window.addEventListener(AUTH_EXPIRED_EVENT, handleAuthExpired);
+    return () => window.removeEventListener(AUTH_EXPIRED_EVENT, handleAuthExpired);
   }, []);
 
   const value = useMemo(() => ({
@@ -227,6 +303,7 @@ function App() {
                 <Route path="/dang-truyen" element={<Protected author><Navigate to="/author/stories/new" replace /></Protected>} />
                 <Route path="/dang-truyen/them-nhieu-chuong" element={<Protected author><AuthorRoute /></Protected>} />
                 <Route path="/admin" element={<Protected admin><AdminRoute /></Protected>} />
+                <Route path="/admin/home" element={<Protected admin><AdminRoute /></Protected>} />
                 <Route path="/quan-tri-vien" element={<Protected admin><AdminRoute /></Protected>} />
                 <Route path="/admin/users" element={<Protected admin><AdminRoute /></Protected>} />
                 <Route path="/admin/stories" element={<Protected admin><AdminRoute /></Protected>} />
@@ -331,7 +408,12 @@ function SearchRoute({ presetFilters = {} }) {
         description="Tìm truyện theo tên, tác giả, thể loại, tag, trạng thái, số chương, đánh giá, lượt xem và truyện VIP hoặc miễn phí."
         canonical={category ? `/the-loai/${category}` : `/danh-sach${searchParams.toString() ? `?${searchParams.toString()}` : ''}`}
       />
-      <SearchPage apiClient={api} presetFilters={presetFilters} />
+      <SearchPage
+        apiClient={api}
+        presetFilters={presetFilters}
+        pageTitle={title}
+        heroTitle={category ? `Thể loại ${decodeURIComponent(category)}` : ''}
+      />
     </>
   );
 }
@@ -480,7 +562,7 @@ function PublicHeader() {
   const [categories, setCategories] = useState([]);
 
   useEffect(() => {
-    api('/categories')
+    api('/categories?limit=30')
       .then(data => setCategories(data.categories || []))
       .catch(() => setCategories([]));
   }, []);
@@ -520,7 +602,7 @@ function PublicHeader() {
         <span>Đậu Đỏ Truyện</span>
       </Link>
 
-      <button className="menu" onClick={() => setOpen(!open)}>☰</button>
+      <button className="menu" onClick={() => setOpen(!open)}><Majesticon name="menu" size={22} /></button>
 
       <nav className={open ? 'nav public-nav open' : 'nav public-nav'}>
         <NavLink to="/" onClick={closeMenu}>Trang chủ</NavLink>
@@ -677,7 +759,7 @@ function PublicHeaderEnhanced() {
       .replace(/[\u0300-\u036f]/g, '');
 
   useEffect(() => {
-    Promise.all([api('/categories'), api('/supabase/stories')])
+    Promise.all([api('/categories?limit=30'), api('/stories?sort=updated&limit=60')])
       .then(([categoryData, storyData]) => {
         setCategories(categoryData.categories || []);
         setAllStories(storyData.stories || storyData || []);
@@ -787,14 +869,14 @@ function PublicHeaderEnhanced() {
   };
 
   const profileMenuItems = [
-    { icon: '◉', label: 'Hồ sơ cá nhân', to: '/settings#profile' },
-    { icon: '▰', label: 'Tủ truyện', to: '/bookmarks' },
-    { icon: '◒', label: 'Đăng truyện mới', to: '/dang-truyen', authorOnly: true },
-    { icon: '▣', label: 'Quản lý truyện', to: '/author/stories', authorOnly: true },
-    { icon: '▣', label: 'Quản lý Mod', to: '/admin/users', adminOnly: true },
-    { icon: '▭', label: 'Ví của tôi', to: '/vi-hat' },
-    { icon: '♜', label: 'Bảng xếp hạng', to: '/xep-hang' },
-    { icon: '□', label: 'Mời bạn bè', to: '/ho-so' }
+    { icon: 'user', label: 'Hồ sơ cá nhân', to: '/settings#profile' },
+    { icon: 'bookmark', label: 'Tủ truyện', to: '/bookmarks' },
+    { icon: 'edit', label: 'Đăng truyện mới', to: '/dang-truyen', authorOnly: true },
+    { icon: 'book', label: 'Quản lý truyện', to: '/author/stories', authorOnly: true },
+    { icon: 'shield', label: 'Quản lý Mod', to: '/admin/users', adminOnly: true },
+    { icon: 'coins', label: 'Ví của tôi', to: '/vi-hat' },
+    { icon: 'ranking', label: 'Bảng xếp hạng', to: '/xep-hang' },
+    { icon: 'users', label: 'Mời bạn bè', to: '/ho-so' }
   ].filter(item => (!item.adminOnly || isAdmin(user?.role)) && (!item.authorOnly || canPostStory(user?.role)));
 
   const handleEnterSearch = event => {
@@ -811,7 +893,7 @@ function PublicHeaderEnhanced() {
     <div className="search-overlay" onMouseDown={event => event.target === event.currentTarget && closeSearch()}>
       <div className="search-modal">
         <div className="search-input-row">
-          <span>⌕</span>
+          <Majesticon name="search" size={18} />
           <input autoFocus value={keyword} onChange={event => setKeyword(event.target.value)} onKeyDown={handleEnterSearch} placeholder="Tìm kiếm truyện, tác giả, thể loại..." />
           <button type="button" onClick={closeSearch}>ESC</button>
         </div>
@@ -859,20 +941,20 @@ function PublicHeaderEnhanced() {
 
   return (
     <header className="topbar public-header dd-header" onClickCapture={handleHeaderLinkClick}>
-      <button className="menu dd-menu" type="button" onClick={() => setOpen(!open)}>☰</button>
+      <button className="menu dd-menu" type="button" onClick={() => setOpen(!open)}><Majesticon name="menu" size={22} /></button>
 
       <nav className={open ? 'dd-header-nav rounded-pill px-3 py-2 open' : 'dd-header-nav rounded-pill px-3 py-2'}>
         <div className="dd-nav-container">
           <div className="dd-nav-section dd-nav-left">
-            <NavLink end to="/" className="dd-nav-link" onClick={closeMenu}>⌂ Trang chủ</NavLink>
+            <NavLink end to="/" className="dd-nav-link" onClick={closeMenu}><Majesticon name="home" size={18} /> Trang chủ</NavLink>
             <NavLink
               to="/danh-sach?status=completed"
               className={location.search.includes('status=completed') ? 'dd-nav-link active' : 'dd-nav-link'}
               onClick={closeMenu}
             >
-              ✓ Hoàn thành
+              <Majesticon name="check" size={18} /> Hoàn thành
             </NavLink>
-            <NavLink to="/truyen-ngan" className="dd-nav-link" onClick={closeMenu}>▣ Truyện ngắn</NavLink>
+            <NavLink to="/truyen-ngan" className="dd-nav-link" onClick={closeMenu}><Majesticon name="bookOpen" size={18} /> Truyện ngắn</NavLink>
           </div>
 
           <Link to="/" className="dd-brand-title" onClick={closeMenu}>Đậu Đỏ Truyện</Link>
@@ -884,7 +966,7 @@ function PublicHeaderEnhanced() {
                 className={categoryOpen || location.pathname.startsWith('/the-loai') ? 'dd-nav-link nav-category-trigger active' : 'dd-nav-link nav-category-trigger'}
                 onClick={() => setCategoryOpen(value => !value)}
               >
-                ▦ Thể loại <span>⌄</span>
+                <Majesticon name="category" size={18} /> Thể loại <Majesticon name="chevronDown" size={16} />
               </button>
 
               {categoryOpen && (
@@ -901,14 +983,14 @@ function PublicHeaderEnhanced() {
               )}
             </div>
 
-            <NavLink to="/xep-hang" className="dd-nav-link" onClick={closeMenu}>▥ Xếp hạng</NavLink>
+            <NavLink to="/xep-hang" className="dd-nav-link" onClick={closeMenu}><Majesticon name="ranking" size={18} /> Xếp hạng</NavLink>
             <button className="dd-icon-btn" type="button" title="Giao diện" aria-label="Giao diện" onClick={toggleTheme}><span className={theme === 'dark' ? 'theme-sun-icon' : 'theme-moon-icon'} aria-hidden="true" /></button>
-            <button className="dd-icon-btn" type="button" onClick={() => setSearchOpen(true)} aria-label="Tìm kiếm">🔍</button>
-            <Link to="/thong-bao" className="dd-icon-btn" title="Thông báo" aria-label="Thông báo" onClick={closeMenu}>🔔</Link>
+            <button className="dd-icon-btn" type="button" onClick={() => setSearchOpen(true)} aria-label="Tìm kiếm"><Majesticon name="search" size={20} /></button>
+            <Link to="/thong-bao" className="dd-icon-btn" title="Thông báo" aria-label="Thông báo" onClick={closeMenu}><Majesticon name="bell" size={20} /></Link>
 
             {user ? (
               <>
-                <Link to="/bookmarks" className="dd-icon-btn" onClick={closeMenu}>♡</Link>
+                <Link to="/bookmarks" className="dd-icon-btn" onClick={closeMenu}><Majesticon name="heart" size={20} /></Link>
                 <div className="dd-profile-menu-wrap" ref={profileMenuRef}>
                   <button
                     type="button"
@@ -935,13 +1017,13 @@ function PublicHeaderEnhanced() {
                       <div className="dd-profile-list">
                         {profileMenuItems.map(({ icon, label, to }) => (
                           <Link key={label} to={to} onClick={closeMenu}>
-                            <span>{icon}</span>
+                            <Majesticon name={icon} size={18} />
                             <strong>{label}</strong>
                           </Link>
                         ))}
                       </div>
                       <div className="dd-profile-list dd-profile-footer-list">
-                        <Link to="/settings#profile" onClick={closeMenu}><span>⚙</span><strong>Cài đặt</strong></Link>
+                        <Link to="/settings#profile" onClick={closeMenu}><Majesticon name="settings" size={18} /><strong>Cài đặt</strong></Link>
                         <button type="button" onClick={() => { logout(); closeMenu(); }}>
                           <span>↵</span>
                           <strong>Đăng xuất</strong>
@@ -953,7 +1035,7 @@ function PublicHeaderEnhanced() {
               </>
             ) : (
               <Link to="/dang-nhap" className="dd-login-box" onClick={closeMenu}>
-                <span className="dd-login-icon">◉</span>
+                <Majesticon name="login" className="dd-login-icon" size={20} />
                 <span>Đăng nhập</span>
               </Link>
             )}
@@ -1108,11 +1190,11 @@ function Home() {
 
   useEffect(() => {
     Promise.all([
-      api('/stories?sort=updated'),
+        api('/stories?sort=updated&limit=20'),
       api('/stories?featured=true&sort=rating'),
-      api('/stories?sort=views'),
+        api('/stories?sort=views&limit=20'),
       api('/stories?status=completed&sort=updated'),
-      api('/categories')
+        api('/categories?limit=30')
     ])
       .then(([all, top, views, done, categoryData]) => {
         setStories(all.stories || []);
@@ -1183,7 +1265,7 @@ function HomePremiumBlock({ stories }) {
   return (
     <section className="section premium-home">
       <div className="section-head"><div><SectionKicker>Premium</SectionKicker><h2>Truyện Trả Phí</h2><p>Mua từng chương hoặc combo trọn bộ — không cần đăng ký gói</p></div><Link to="/vi-hat" className="small-link">Nạp Đậu ➜</Link></div>
-      <div className="premium-benefits"><span>📖 Đọc miễn phí chương đầu</span><span>🎁 Mua từng chương</span><span>📦 Combo trọn bộ</span></div>
+      <div className="premium-benefits"><span><Majesticon name="bookOpen" size={20} /> Đọc miễn phí chương đầu</span><span><Majesticon name="money" size={20} /> Mua từng chương</span><span><Majesticon name="combo" size={20} /> Combo trọn bộ</span></div>
       <div className="grid stories">{stories.map(story => <StoryCard key={story.id} story={story} />)}</div>
     </section>
   );
@@ -1235,7 +1317,8 @@ function HomeBanner({ stories }) {
 
   const currentIndex = active % stories.length;
   const story = stories[currentIndex];
-  const bannerImage = story.banner || '/images/hero.jpg';
+  const bannerImage = [story.bannerImage, story.bannerUrl, story.coverImage, story.cover, story.banner]
+    .find(value => typeof value === 'string' && value.trim() && value !== 'true' && value !== 'false') || '/images/hero.jpg';
 
   const nextBanner = () => {
     setActive(index => (index + 1) % stories.length);
@@ -1257,8 +1340,8 @@ function HomeBanner({ stories }) {
         <h1>{story.title}</h1>
         <p className="banner-desc">{story.description}</p>
         <div className="banner-actions">
-          <Link to={`/truyen/${story.slug}`} className="button banner-read">📖 Đọc ngay</Link>
-          <Link to={`/truyen/${story.slug}`} className="ghost banner-like">♡ Lưu ở trang chi tiết</Link>
+          <Link to={`/truyen/${story.slug}`} className="button banner-read"><Majesticon name="bookOpen" size={18} /> Đọc ngay</Link>
+          <Link to={`/truyen/${story.slug}`} className="ghost banner-like"><Majesticon name="heart" size={18} /> Lưu ở trang chi tiết</Link>
         </div>
       </div>
 
@@ -1300,7 +1383,7 @@ function Catalog() {
   const [categories, setCategories] = useState([]);
   const [form, setForm] = useState({ q: searchParams.get('q') || '', category: params.category || searchParams.get('category') || '', status: searchParams.get('status') || '', premium: searchParams.get('premium') || '', sort: searchParams.get('sort') || 'updated' });
   const [error, setError] = useState('');
-  useEffect(() => { api('/categories').then(data => setCategories(data.categories)).catch(() => {}); }, []);
+  useEffect(() => { api('/categories?limit=30').then(data => setCategories(data.categories)).catch(() => {}); }, []);
   useEffect(() => {
     const qs = new URLSearchParams();
     Object.entries(form).forEach(([key, value]) => value && qs.set(key, value));
@@ -1376,7 +1459,7 @@ function CatalogEnhanced() {
     return qs;
   }
 
-  useEffect(() => { api('/categories').then(data => setCategories(data.categories || [])).catch(() => {}); }, []);
+  useEffect(() => { api('/categories?limit=30').then(data => setCategories(data.categories || [])).catch(() => {}); }, []);
 
   useEffect(() => {
     const paramsFromUrl = new URLSearchParams(queryString);
@@ -1448,38 +1531,24 @@ function CatalogEnhanced() {
 }
 
 function ShortStoriesPage() {
-  const [stories, setStories] = useState([]);
-  const [categories, setCategories] = useState([]);
-  const [active, setActive] = useState('Tất cả');
-
-  useEffect(() => {
-    Promise.all([api('/stories?sort=updated'), api('/categories')]).then(([storyData, categoryData]) => {
-      setStories((storyData.stories || []).slice().sort((a, b) => getChapterCount(a) - getChapterCount(b)));
-      setCategories(categoryData.categories || []);
-    }).catch(() => {});
-  }, []);
-
-  const visible = active === 'Tất cả' ? stories : stories.filter(story => story.categories?.includes(active));
-  const highlighted = visible.slice(0, 3);
-
   return (
     <>
       <PageSeo title="Truyện ngắn" description="Tuyển tập truyện ngắn dễ đọc, gọn nhịp và phù hợp để đọc nhanh trong một buổi." canonical="/truyen-ngan" />
-      <div className="short-page">
-        <section className="catalog-hero-readdy short-hero"><span className="catalog-hero-pill purple">Truyện ngắn</span><h1>Truyện Ngắn</h1><p>Những câu chuyện gọn, súc tích — đọc xong trong một buổi, cảm xúc đọng lại mãi.</p></section>
-        <HomeSection title="Nổi Bật Tuần Này" subtitle="Các truyện ngắn được đọc nhiều" kicker="Short">
-          <div className="short-featured-row">{highlighted.map(story => <MiniStoryRow key={story.id} story={story} />)}</div>
-        </HomeSection>
-        <div className="catalog-chip-row short-filter-row"><button className={active === 'Tất cả' ? 'active' : ''} onClick={() => setActive('Tất cả')}>Tất cả</button>{categories.slice(0, 7).map(item => <button key={item} className={active === item ? 'active' : ''} onClick={() => setActive(item)}>{item}</button>)}</div>
-        <div className="grid stories catalog-grid-readdy">{visible.slice(0, 18).map(story => <StoryCard key={story.id} story={story} />)}</div>
-      </div>
+      <SearchPage
+        apiClient={api}
+        presetFilters={{ sort: 'chapters' }}
+        pageTitle="Truyện Ngắn"
+        heroTitle="Truyện Ngắn"
+        shortOnly
+        basePath="/truyen-ngan"
+      />
     </>
   );
 }
 
 function RankingPage() {
   const [stories, setStories] = useState([]);
-  useEffect(() => { api('/stories?sort=views').then(data => setStories(data.stories || [])).catch(() => {}); }, []);
+  useEffect(() => { api('/stories?sort=views&limit=20').then(data => setStories(data.stories || [])).catch(() => {}); }, []);
   const topThree = stories.slice(0, 3);
   const list = stories.slice(0, 12);
   const totalViews = stories.reduce((sum, story) => sum + Number(story.views || 0), 0);
@@ -1514,11 +1583,11 @@ function RankingPage() {
         </div>
       </section>
       <div className="ranking-tabs"><button>Hôm nay</button><button className="active">Tuần này</button><button>Tháng này</button><button>Năm nay</button><button>Tất cả</button><span></span><button className="active orange">Tất cả</button><button>Đang Hot</button><button>Truyện Mới</button><button>Hoàn Thành</button></div>
-      <h2 className="ranking-title">🏆 Top 3 Nổi Bật</h2>
+      <h2 className="ranking-title"><Majesticon name="award" size={24} /> Top 3 Nổi Bật</h2>
       <div className="podium-row">
         {topThree.map((story, index) => <Link key={story.id} to={`/truyen/${story.slug}`} className={`podium-card rank-${index + 1}`}><span className="podium-rank">{index + 1}</span><img src={story.cover} alt={story.title} /><strong>{story.title}</strong><small>{formatNumber(story.views)} lượt đọc</small><b>★ {story.rating}</b></Link>)}
       </div>
-      <h2 className="ranking-title">▰ Bảng Xếp Hạng Đầy Đủ</h2>
+      <h2 className="ranking-title"><Majesticon name="checklist" size={24} /> Bảng Xếp Hạng Đầy Đủ</h2>
       <div className="ranking-full-list">{list.map((story, index) => <Link key={story.id} to={`/truyen/${story.slug}`} className="ranking-full-row"><span className="ranking-medal">{index + 1}</span><img src={story.cover} alt={story.title} /><span><strong>{story.title}</strong><small>{story.author} · ★ {story.rating} · {getChapterCount(story)} chương</small></span><b>{formatNumber(story.views)}</b><small>lượt/tuần</small></Link>)}</div>
     </div>
   );
@@ -1550,7 +1619,7 @@ function CatalogEnhancedOld() {
   }
 
   useEffect(() => {
-    api('/categories')
+      api('/categories?limit=30')
       .then(data => setCategories(data.categories || []))
       .catch(() => {});
   }, []);
@@ -1730,22 +1799,22 @@ function StoryDetail() {
           <div className="story-category-row">{story.categories.map(item => <Link key={item} to={`/the-loai/${encodeURIComponent(item)}`}>{item}</Link>)}</div>
           <h1>{story.title}</h1>
           <div className="story-author">Tác giả: <Link to={`/tac-gia/${encodeURIComponent(story.author)}`}><strong>{story.author}</strong></Link></div>
-          <div className="story-inline-stats"><span>★ {story.rating}/5</span><span>👁 {formatNumber(story.views)} lượt đọc</span><span>▣ {chapters.length} chương</span><span className="green">⦿ {statusLabel(story.status)}</span></div>
+          <div className="story-inline-stats"><span><Majesticon name="star" size={18} /> {story.rating}/5</span><span><Majesticon name="eye" size={18} /> {formatNumber(story.views)} lượt đọc</span><span><Majesticon name="bookOpen" size={18} /> {chapters.length} chương</span><span className="green"><Majesticon name="check" size={18} /> {statusLabel(story.status)}</span></div>
           <p className="story-description">{story.description}</p>
-          <div className="purchase-strip"><span>📖 Miễn phí<br /><b>{freeCount} chương đầu</b></span><span>🪙 Mua lẻ<br /><b>{story.price || 1} Đậu/chương</b></span><span>🎁 Combo trọn bộ<br /><b>{Math.max(49, (story.price || 1) * chapters.length)} Đậu</b></span></div>
-          <div className="hero-actions"><Link className="button" to={`/truyen/${story.slug}/chuong/1`}>◎ Đọc từ đầu</Link><button className="button gold" onClick={buyCombo}>🪙 Mua combo {Math.max(49, (story.price || 1) * chapters.length)} Đậu</button><button className="ghost light" onClick={() => toggle('follow')}>{story.followed ? '✓ Đang theo dõi' : '♡ Theo dõi'}</button><button className="ghost light" onClick={() => toggle('bookmark')}>{story.bookmarked ? '✓ Đã lưu' : '🔖 Lưu'}</button><button className="ghost light" onClick={reportStory}>⚑ Báo cáo</button></div>
+          <div className="purchase-strip"><span><Majesticon name="bookOpen" size={20} /> Miễn phí<br /><b>{freeCount} chương đầu</b></span><span><Majesticon name="money" size={20} /> Mua lẻ<br /><b>{story.price || 1} Đậu/chương</b></span><span><Majesticon name="combo" size={20} /> Combo trọn bộ<br /><b>{Math.max(49, (story.price || 1) * chapters.length)} Đậu</b></span></div>
+          <div className="hero-actions"><Link className="button" to={`/truyen/${story.slug}/chuong/1`}><Majesticon name="play" size={18} /> Đọc từ đầu</Link><button className="button gold" onClick={buyCombo}><Majesticon name="money" size={18} /> Mua combo {Math.max(49, (story.price || 1) * chapters.length)} Đậu</button><button className="ghost light" onClick={() => toggle('follow')}>{story.followed ? <><Majesticon name="check" size={18} /> Đang theo dõi</> : <><Majesticon name="heart" size={18} /> Theo dõi</>}</button><button className="ghost light" onClick={() => toggle('bookmark')}>{story.bookmarked ? <><Majesticon name="check" size={18} /> Đã lưu</> : <><Majesticon name="bookmark" size={18} /> Lưu</>}</button><button className="ghost light" onClick={reportStory}><Majesticon name="alert" size={18} /> Báo cáo</button></div>
           {notice && <div className="success-box">{notice}</div>}
         </div>
       </section>
 
       <section className="story-section chapter-section-readdy">
-        <div className="story-section-head"><h2>▰ Danh sách chương <small>({chapters.length} chương)</small></h2><div className="chapter-tabs"><button className="active">Tất cả</button><button>Miễn phí</button><button>Trả phí</button><button>Mới nhất</button></div></div>
+        <div className="story-section-head"><h2><Majesticon name="playlist" size={22} /> Danh sách chương <small>({chapters.length} chương)</small></h2><div className="chapter-tabs"><button className="active">Tất cả</button><button>Miễn phí</button><button>Trả phí</button><button>Mới nhất</button></div></div>
             <div className="free-note">📚 {freeCount} chương đầu miễn phí — Từ chương {freeCount + 1} trở đi cần <b>{story.price || 1} Đậu/chương</b></div>
         <div className="chapter-grid-readdy">
           {orderedChapters.map(chapter => (
             <Link key={chapter.id} to={`/truyen/${story.slug}/chuong/${chapter.number}`}>
-              <span>{chapter.isPremium ? '🔒' : '📖'} Chương {chapter.number}: {chapter.title.replace(/^Chương\s*\d+[:：]?\s*/i, '')}</span>
-              <small>{chapter.isPremium ? `🪙 ${chapter.price || story.price || 1}` : 'Free'} · {formatNumber(chapter.views)} lượt</small>
+              <span><Majesticon name={chapter.isPremium ? 'lock' : 'bookOpen'} size={18} /> Chương {chapter.number}: {chapter.title.replace(/^Chương\s*\d+[:?]?\s*/i, '')}</span>
+              <small>{chapter.isPremium ? <><Majesticon name="money" size={14} /> {chapter.price || story.price || 1}</> : 'Free'} ? {formatNumber(chapter.views)} lượt</small>
             </Link>
           ))}
         </div>
@@ -1787,31 +1856,18 @@ function Reader() {
   const [saved, setSaved] = useState(false);
 
   function ReaderIcon({ name }) {
-    const props = { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: '1.9', strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': 'true' };
-    switch (name) {
-      case 'home': return <svg {...props}><path d="M3 11.5 12 4l9 7.5" /><path d="M5 10.5V20h14v-9.5" /></svg>;
-      case 'book': return <svg {...props}><path d="M6 5.5h10a3 3 0 0 1 3 3V19H9a3 3 0 0 0-3 3z" /><path d="M6 5.5v16" /></svg>;
-      case 'chevron-right': return <svg {...props}><path d="m9 6 6 6-6 6" /></svg>;
-      case 'chevron-left': return <svg {...props}><path d="m15 6-6 6 6 6" /></svg>;
-      case 'chevron-down': return <svg {...props}><path d="m6 9 6 6 6-6" /></svg>;
-      case 'line-tight': return <svg {...props}><path d="M5 7h14" /><path d="M5 12h10" /><path d="M5 17h7" /></svg>;
-      case 'font-size': return <svg {...props}><path d="M8 18V7" /><path d="m5 10 3-3 3 3" /><path d="m5 15 3 3 3-3" /><path d="M15 7h4" /><path d="M17 7v11" /></svg>;
-      case 'type': return <svg {...props}><path d="M5 7h14" /><path d="M12 7v12" /></svg>;
-      case 'panel': return <svg {...props}><rect x="5" y="5" width="14" height="14" rx="2" /><path d="M10 5v14" /></svg>;
-      case 'panel-wide': return <svg {...props}><rect x="4" y="6" width="16" height="12" rx="2" /><path d="M9 6v12" /><path d="M15 6v12" /></svg>;
-      case 'heart': return <svg {...props}><path d="m12 20-6.2-6.1a4.2 4.2 0 1 1 5.9-5.9L12 8.3l.3-.3a4.2 4.2 0 1 1 5.9 5.9z" /></svg>;
-      case 'share': return <svg {...props}><circle cx="18" cy="5" r="2" /><circle cx="6" cy="12" r="2" /><circle cx="18" cy="19" r="2" /><path d="m8 12 8-5" /><path d="m8 12 8 7" /></svg>;
-      case 'moon': return <svg {...props}><path d="M19 14.5A7.5 7.5 0 0 1 9.5 5a7.5 7.5 0 1 0 9.5 9.5Z" /></svg>;
-      case 'sun': return <svg {...props}><circle cx="12" cy="12" r="4" /><path d="M12 2v3" /><path d="M12 19v3" /><path d="M2 12h3" /><path d="M19 12h3" /><path d="m4.9 4.9 2.2 2.2" /><path d="m16.9 16.9 2.2 2.2" /><path d="m19.1 4.9-2.2 2.2" /><path d="m7.1 16.9-2.2 2.2" /></svg>;
-      case 'droplet': return <svg {...props}><path d="M12 3s5 5.3 5 9a5 5 0 1 1-10 0c0-3.7 5-9 5-9Z" /></svg>;
-      case 'spacing': return <svg {...props}><path d="M6 7h12" /><path d="M6 17h12" /><path d="m9 10 3 3 3-3" /><path d="m9 14 3-3 3 3" /></svg>;
-      case 'settings': return <svg {...props}><circle cx="12" cy="12" r="3" /><path d="M12 2v2.5" /><path d="M12 19.5V22" /><path d="m4.9 4.9 1.8 1.8" /><path d="m17.3 17.3 1.8 1.8" /><path d="M2 12h2.5" /><path d="M19.5 12H22" /><path d="m4.9 19.1 1.8-1.8" /><path d="m17.3 6.7 1.8-1.8" /></svg>;
-      case 'user': return <svg {...props}><path d="M18 20a6 6 0 0 0-12 0" /><circle cx="12" cy="8" r="4" /></svg>;
-      case 'calendar': return <svg {...props}><rect x="4" y="5" width="16" height="15" rx="2" /><path d="M8 3v4" /><path d="M16 3v4" /><path d="M4 10h16" /></svg>;
-      case 'eye': return <svg {...props}><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" /><circle cx="12" cy="12" r="2.5" /></svg>;
-      case 'message': return <svg {...props}><path d="M5 6h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H9l-4 3v-3H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Z" /></svg>;
-      default: return <svg {...props}><circle cx="12" cy="12" r="8" /></svg>;
-    }
+    const names = {
+      'chevron-right': 'chevronRight',
+      'chevron-left': 'chevronLeft',
+      'chevron-down': 'chevronDown',
+      'line-tight': 'text',
+      'font-size': 'fontSize',
+      'panel-wide': 'panelWide',
+      message: 'chatText',
+      spacing: 'text',
+      type: 'text'
+    };
+    return <Majesticon name={names[name] || name} size={20} />;
   }
 
   const load = () => api(`/stories/${slug}/chapters/${number}`).then(setData).catch(err => setError(err.message));
@@ -1827,7 +1883,7 @@ function Reader() {
   }, [saved]);
 
   async function unlock() {
-    if (!user) return setError('B?n c?n ??ng nh?p ?? m? kh?a ch??ng.');
+    if (!user) return setError('Bạn cần đăng nhập để mở khóa chương.');
     try {
       const result = await api(`/chapters/${data.chapter.id}/unlock`, { method: 'POST' });
       updateUser(result.user);
@@ -1838,7 +1894,7 @@ function Reader() {
   }
 
   async function saveStory(storyId) {
-    if (!user) return setError('B?n c?n ??ng nh?p ?? l?u truy?n.');
+    if (!user) return setError('Bạn cần đăng nhập để lưu truyện.');
     try {
       await api(`/stories/${storyId}/bookmark`, { method: 'POST' });
       setSaved(true);
@@ -1891,9 +1947,9 @@ function Reader() {
       </div>
 
       <div className="reader-chapter-switcher">
-        {prevLink ? <Link className="reader-switch ghost" to={prevLink}><ReaderIcon name="chevron-left" /><span>Ch??ng tr??c</span></Link> : <span className="reader-switch ghost disabled"><ReaderIcon name="chevron-left" /><span>Ch??ng tr??c</span></span>}
+        {prevLink ? <Link className="reader-switch ghost" to={prevLink}><ReaderIcon name="chevron-left" /><span>Chương trước</span></Link> : <span className="reader-switch ghost disabled"><ReaderIcon name="chevron-left" /><span>Chương trước</span></span>}
         <button type="button" className="reader-current-chip"><span>{chapter.title}</span><span className="reader-current-arrow"><ReaderIcon name="chevron-down" /></span></button>
-        {nextLink ? <Link className="reader-switch next" to={nextLink}><span>Ch??ng sau</span><ReaderIcon name="chevron-right" /></Link> : <span className="reader-switch ghost disabled"><span>?? h?t ch??ng</span></span>}
+        {nextLink ? <Link className="reader-switch next" to={nextLink}><span>Chương sau</span><ReaderIcon name="chevron-right" /></Link> : <span className="reader-switch ghost disabled"><span>Đã hết chương</span></span>}
       </div>
 
       <div className="reader-toolbar">
@@ -1902,11 +1958,11 @@ function Reader() {
           <button type="button" className={fontSize !== 'md' ? 'reader-tool-btn active' : 'reader-tool-btn'} onClick={() => cycleValue('fontSize', ['sm', 'md', 'lg'], 'md')} title="C? ch?"><ReaderIcon name="font-size" /></button>
           <button type="button" className={fontFamily === 'serif' ? 'reader-tool-btn active' : 'reader-tool-btn'} onClick={() => cycleValue('fontFamily', ['sans', 'serif'], 'sans')} title="Ki?u ch?"><ReaderIcon name="type" /></button>
           <button type="button" className={wide ? 'reader-tool-btn active' : 'reader-tool-btn'} onClick={() => updateReaderPref('wide', !wide)} title="Khung r?ng"><ReaderIcon name={wide ? 'panel-wide' : 'panel'} /></button>
-          <button type="button" className={saved ? 'reader-tool-btn active' : 'reader-tool-btn'} onClick={() => saveStory(story.id)} title="L?u truy?n"><ReaderIcon name="heart" /></button>
+          <button type="button" className={saved ? 'reader-tool-btn active' : 'reader-tool-btn'} onClick={() => saveStory(story.id)} title="Lưu truyện"><ReaderIcon name="heart" /></button>
           <button type="button" className="reader-tool-btn" onClick={() => shareChapter(story, chapter)} title="Chia s?"><ReaderIcon name="share" /></button>
         </div>
         <div className="reader-toolbar-group">
-          <button type="button" className={readerTone === 'dark' ? 'reader-tool-btn active' : 'reader-tool-btn'} onClick={() => cycleValue('readerTone', ['dark', 'light', 'sepia'], theme === 'light' ? 'light' : 'dark')} title="N?n ??c"><ReaderIcon name={readerTone === 'dark' ? 'moon' : readerTone === 'light' ? 'sun' : 'droplet'} /></button>
+          <button type="button" className={readerTone === 'dark' ? 'reader-tool-btn active' : 'reader-tool-btn'} onClick={() => cycleValue('readerTone', ['dark', 'light', 'sepia'], theme === 'light' ? 'light' : 'dark')} title="Nền đọc"><ReaderIcon name={readerTone === 'dark' ? 'moon' : readerTone === 'light' ? 'sun' : 'droplet'} /></button>
           <button type="button" className={theme === 'light' ? 'reader-tool-btn active' : 'reader-tool-btn'} onClick={toggleTheme} title="S?ng t?i"><ReaderIcon name={theme === 'light' ? 'moon' : 'sun'} /></button>
           <button type="button" className={lineHeight === 'relaxed' ? 'reader-tool-btn active' : 'reader-tool-btn'} onClick={() => cycleValue('lineHeight', ['tight', 'normal', 'relaxed'], 'normal')} title="Gi?n d?ng r?ng"><ReaderIcon name="spacing" /></button>
           <button type="button" className="reader-tool-btn" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })} title="L?n ??u trang"><ReaderIcon name="settings" /></button>
@@ -1920,16 +1976,16 @@ function Reader() {
           <p className="reader-meta">
             <span><ReaderIcon name="user" /> T?c gi?: {story.author}</span>
             <span><ReaderIcon name="calendar" /> {formatDateShort(story.updatedAt || chapter.updatedAt || Date.now())}</span>
-            <span><ReaderIcon name="eye" /> L??t ??c: {formatNumber(chapter.views)}</span>
+            <span><ReaderIcon name="eye" /> Lượt đọc: {formatNumber(chapter.views)}</span>
             <span><ReaderIcon name="message" /> B?nh lu?n: 0</span>
           </p>
         </div>
         <ErrorBox message={error} />
-        {!unlocked && <div className="paywall"><h3>Ch??ng tr? ph?</h3><p>B?n ?ang xem b?n preview. M? kh?a ?? ??c ??y ?? ch??ng n?y.</p><button className="button" onClick={unlock}>M? kh?a {chapter.price} H?t</button></div>}
+        {!unlocked && <div className="paywall"><h3>Chương trả phí</h3><p>Bạn đang xem bản preview. Mở khóa để đọc đầy đủ chương này.</p><button className="button" onClick={unlock}>Mở khóa {chapter.price} Hạt</button></div>}
         <div className="chapter-content">{chapter.content.split('\n').map((line, index) => line ? <p key={index}>{line}</p> : <br key={index} />)}</div>
         <div className="reader-nav">
-          {prevLink ? <Link className="ghost" to={prevLink}>Ch??ng tr??c</Link> : <span className="ghost disabled">Ch??ng tr??c</span>}
-          {nextLink ? <Link className="ghost" to={nextLink}>Ch??ng sau</Link> : <span className="ghost disabled">?? h?t ch??ng</span>}
+          {prevLink ? <Link className="ghost" to={prevLink}>Chương trước</Link> : <span className="ghost disabled">Chương trước</span>}
+          {nextLink ? <Link className="ghost" to={nextLink}>Chương sau</Link> : <span className="ghost disabled">Đã hết chương</span>}
         </div>
       </article>
     </div>
@@ -2059,7 +2115,7 @@ function Library({ type }) {
 
   return (
     <div className="library-page">
-      <div className="library-head"><div><span className="library-icon">🔖</span><h1>{titles[type]}</h1><p>{items.length} {type === 'history' ? 'mục lịch sử' : 'chương đã lưu'}</p></div><button className="dd-icon-btn" onClick={() => setView(view === 'grid' ? 'list' : 'grid')}>{view === 'grid' ? '☷' : '▦'}</button></div>
+      <div className="library-head"><div><span className="library-icon"><Majesticon name="bookmark" size={22} /></span><h1>{titles[type]}</h1><p>{items.length} {type === 'history' ? 'mục lịch sử' : 'chương đã lưu'}</p></div><button className="dd-icon-btn" onClick={() => setView(view === 'grid' ? 'list' : 'grid')}><Majesticon name={view === 'grid' ? 'list' : 'grid'} size={18} /></button></div>
       <div className="library-controls"><input value={keyword} onChange={event => setKeyword(event.target.value)} placeholder="Tìm kiếm bookmark..." /><select><option>Mới nhất</option><option>Cũ nhất</option></select></div>
       <div className={view === 'grid' && type !== 'history' ? 'library-grid' : 'library-list'}>
         {items.map(item => {
@@ -2115,11 +2171,11 @@ function Wallet() {
       <ErrorBox message={error} />
       <section className="wallet-balance-panel"><p>Số dư hiện tại</p><h2>🪙 {user.seeds} <span>Đậu</span></h2><div><span>🛒 Đã dùng: 106 Đậu</span><span>💵 Đã nạp: 170 Đậu</span><span>🎁 Thưởng: 23 Đậu</span></div></section>
       <div className="wallet-feature-row"><span>🪙 <b>1 Đậu</b><small>= 1.000đ</small></span><span>📖 <b>Mua lẻ</b><small>1-2 Đậu/chương</small></span><span>📦 <b>Combo</b><small>Tiết kiệm hơn 50%</small></span></div>
-      <h2 className="wallet-section-title">◇ Chọn gói nạp</h2>
+      <h2 className="wallet-section-title"><Majesticon name="moneyPlus" size={22} /> Chọn gói nạp</h2>
       <div className="wallet-packages">{DEFAULT_WALLET_PACKAGES.map(pack => <button key={pack.id} type="button" className={selected === pack.id ? 'active' : ''} onClick={() => setSelected(pack.id)}>{pack.featured && <b>Phổ biến nhất</b>}<strong>{pack.seeds}<small>{pack.bonus ? ` +${pack.bonus} Đậu` : ' Đậu'}</small></strong><em>{pack.bonus ? `Tặng thêm ${pack.bonus} Đậu` : 'Không bonus'}</em><span>{pack.price.toLocaleString('vi-VN')}đ</span><small>{pack.label}</small></button>)}</div>
-      <h2 className="wallet-section-title">▰ Phương thức thanh toán</h2>
+      <h2 className="wallet-section-title"><Majesticon name="creditcard" size={22} /> Phương thức thanh toán</h2>
       <div className="payment-methods">{['MoMo', 'VNPay', 'ZaloPay', 'Chuyển khoản'].map(item => <button key={item} className={method === item ? 'active' : ''} onClick={() => setMethod(item)}>{item}</button>)}</div>
-      <button className="button wallet-pay" onClick={() => topup(selected)}>◎ Nạp {selectedPack.price.toLocaleString('vi-VN')}đ — nhận {selectedPack.seeds + (selectedPack.bonus || 0)} Đậu</button>
+      <button className="button wallet-pay" onClick={() => topup(selected)}><Majesticon name="moneyPlus" size={18} /> Nạp {selectedPack.price.toLocaleString('vi-VN')}? - nhận {selectedPack.seeds + (selectedPack.bonus || 0)} Đậu</button>
       <small className="wallet-safe">🛡 Thanh toán an toàn, được mã hóa SSL</small>
       <HomeSection title="Lịch sử giao dịch" subtitle="Các giao dịch gần đây" kicker="History"><div className="wallet-txn-list">{data.transactions.map(txn => <div key={txn.id}><span>{txn.type === 'purchase' ? '🛒' : '💵'}</span><strong>{txn.note}</strong><small>{formatDateShort(txn.createdAt)}</small><b className={txn.amount > 0 ? 'plus' : 'minus'}>{txn.amount > 0 ? '+' : ''}{txn.amount}</b></div>)}</div></HomeSection>
       <section className="wallet-faq"><h3>◉ Câu hỏi thường gặp</h3><p><b>Đậu có hết hạn không?</b><br />Không, Đậu không có thời hạn sử dụng.</p><p><b>Có hoàn tiền không?</b><br />Đậu đã nạp không được hoàn tiền.</p><p><b>Mua combo có lợi hơn không?</b><br />Có, combo tiết kiệm hơn 50% so với mua lẻ từng chương.</p></section>

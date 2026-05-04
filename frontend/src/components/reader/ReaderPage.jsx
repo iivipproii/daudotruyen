@@ -1,89 +1,44 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { mockStories } from '../../data/mockStories';
+import { repairText, repairTextArray, repairTextFields } from '../../lib/textRepair.js';
 import { ReportModal } from '../story/StoryDetailPage.jsx';
+import { Majesticon } from '../shared/Majesticon.jsx';
 import { PageSeo, buildBreadcrumbSchema } from '../shared/Seo.jsx';
 
 const coverFallback = '/images/cover-1.jpg';
 
-const cp1252Map = {
-  '€': 0x80,
-  '‚': 0x82,
-  'ƒ': 0x83,
-  '„': 0x84,
-  '…': 0x85,
-  '†': 0x86,
-  '‡': 0x87,
-  'ˆ': 0x88,
-  '‰': 0x89,
-  'Š': 0x8a,
-  '‹': 0x8b,
-  'Œ': 0x8c,
-  'Ž': 0x8e,
-  '‘': 0x91,
-  '’': 0x92,
-  '“': 0x93,
-  '”': 0x94,
-  '•': 0x95,
-  '–': 0x96,
-  '—': 0x97,
-  '˜': 0x98,
-  '™': 0x99,
-  'š': 0x9a,
-  '›': 0x9b,
-  'œ': 0x9c,
-  'ž': 0x9e,
-  'Ÿ': 0x9f
-};
 
 const defaultSettings = {
   fontSize: 18,
-  fontFamily: 'system',
   lineHeight: 1.9,
-  width: 760,
+  width: 680,
+  paragraphSpacing: 'normal',
   tone: 'white',
+  fontFamily: 'Palatino',
   autoScrollSpeed: 1.2
 };
 
 const toneOptions = [
   ['white', 'Trắng'],
   ['cream', 'Kem'],
+  ['green', 'Xanh lá'],
   ['dark', 'Tối'],
-  ['green', 'Xanh dịu']
+  ['black', 'Đen']
 ];
 
-function repairText(value) {
-  if (typeof value !== 'string') return value;
-  if (!/(Ã|Ä|Â|Æ|áº|á»|â)/.test(value)) return value;
-  try {
-    const bytes = Array.from(value, char => {
-      const code = char.charCodeAt(0);
-      if (code <= 255) return code;
-      return cp1252Map[char] || code;
-    });
-    return new TextDecoder('utf-8', { fatal: false }).decode(new Uint8Array(bytes));
-  } catch {
-    return value;
-  }
-}
+const fontOptions = ['Palatino', 'Arial', 'Tahoma'];
+const spacingOptions = [['compact', 'Hẹp'], ['normal', 'Vừa'], ['wide', 'Rộng']];
 
 function normalizeStory(story = {}) {
   return {
-    ...story,
-    title: repairText(story.title),
-    author: repairText(story.author),
-    description: repairText(story.description),
-    categories: Array.isArray(story.categories) ? story.categories.map(repairText) : []
+    ...repairTextFields(story, ['title', 'author', 'description', 'language', 'translator', 'shortDescription']),
+    categories: repairTextArray(story.categories)
   };
 }
 
 function normalizeChapter(chapter = {}) {
-  return {
-    ...chapter,
-    title: repairText(chapter.title),
-    content: repairText(chapter.content),
-    preview: repairText(chapter.preview)
-  };
+  return repairTextFields(chapter, ['title', 'content', 'preview']);
 }
 
 function formatNumber(value = 0) {
@@ -99,25 +54,32 @@ function getChapterCount(story = {}) {
   return story.chapterCount || story.chapterCountEstimate || story.latestChapter?.number || 0;
 }
 
+function cleanChapterTitle(title = '', number = '') {
+  return repairText(String(title || `Chương ${number}`)).replace(/^Chương\s*\d+[:：-]?\s*/i, '').trim() || `Chương ${number}`;
+}
+
 function generateMockChapters(story) {
   const count = Math.max(24, Math.min(getChapterCount(story) || 48, 120));
+  const names = ['Xuyên Không', 'Thân Phận Mới', 'Gặp Gỡ Vương Gia', 'Y Thuật Thần Kỳ', 'Bí Ẩn Thân Thế', 'Vương Gia Nổi Giận', 'Âm Mưu Hậu Cung', 'Cứu Người'];
   return Array.from({ length: count }).map((_, index) => {
     const number = index + 1;
-    const premium = Boolean(story.premium && number > 5);
+    const premium = Boolean(story.premium && number > 4);
     return {
       id: `${story.id || story.slug}-chapter-${number}`,
       storyId: story.id,
       number,
-      title: `Chương ${number}: ${number % 4 === 0 ? 'Dư âm trong đêm' : number % 3 === 0 ? 'Lời hẹn cũ' : 'Bước ngoặt mới'}`,
+      title: `Chương ${number}: ${names[index % names.length]}`,
       isPremium: premium,
       price: premium ? story.price || 3 : 0,
       views: Math.max(100, Math.round(Number(story.views || 8000) / (number + 10))),
       updatedAt: story.updatedAt,
       content: [
-        `Đây là nội dung mẫu của chương ${number} trong ${story.title}. Bố cục được chia thành các đoạn ngắn để dễ đọc trên cả máy tính và điện thoại.`,
-        'Nhân vật chính tiếp tục đi qua một biến cố mới. Mỗi chi tiết đều được giữ ở nhịp vừa phải, giúp người đọc tập trung vào mạch truyện.',
-        'Gió ngoài hiên thổi nhẹ. Những lời chưa nói hết ở chương trước trở thành chìa khóa cho lựa chọn tiếp theo.',
-        'Khi màn đêm buông xuống, câu chuyện mở ra một lớp bí mật khác và để lại lời hẹn cho chương sau.'
+        `Ánh nắng ban mai chiếu qua khung cửa sổ, rọi lên khuôn mặt trắng ngần của người thiếu nữ đang nằm trên chiếc giường gỗ cổ kính. Nàng từ từ mở mắt, đôi mắt đen láy nhìn lên trần nhà xa lạ với vẻ bối rối.`,
+        `"Đây... là đâu?" Giọng nàng khàn khàn, như chưa được dùng đến từ lâu.`,
+        `Ký ức ùa về như thác lũ. Nàng nhớ rõ mình là một bác sĩ phẫu thuật, vậy mà khi tỉnh lại đã ở trong thân xác của một cô nương yếu ớt trong phủ thừa tướng.`,
+        `Nàng ngồi dậy, nhìn xuống đôi tay mảnh khảnh, trắng mịn. Trong đầu nàng nhanh chóng xâu chuỗi mọi thông tin và tự nhủ phải bình tĩnh nếu muốn sống sót trong thế giới này.`,
+        `Tiếng bước chân vang lên ngoài hành lang. Một giọng nói lạnh lùng truyền tới: "Nghe nói tiểu thư Lâm đã tỉnh? Bổn vương muốn vào thăm."`,
+        `Nàng khẽ nhắm mắt rồi mở ra. Từ hôm nay, nàng sẽ không còn là tiểu thư yếu đuối bị người khác định đoạt nữa.`
       ].join('\n\n')
     };
   });
@@ -138,7 +100,11 @@ async function fetchSafe(apiClient, path, options) {
 
 function loadSettings() {
   try {
-    return { ...defaultSettings, ...JSON.parse(localStorage.getItem('daudo_reader_settings') || '{}') };
+    const saved = { ...defaultSettings, ...JSON.parse(localStorage.getItem('daudo_reader_settings') || '{}') };
+    return {
+      ...saved,
+      fontFamily: fontOptions.includes(saved.fontFamily) ? saved.fontFamily : defaultSettings.fontFamily
+    };
   } catch {
     return defaultSettings;
   }
@@ -185,17 +151,25 @@ function readerProgressKeys(story, chapter) {
   };
 }
 
+function storageList(key) {
+  try {
+    return JSON.parse(localStorage.getItem(key) || '[]');
+  } catch {
+    return [];
+  }
+}
+
 function mockChapterComments(chapterId) {
   return [
-    { id: `${chapterId}-cc1`, userName: 'Bạn đọc ẩn danh', body: 'Đoạn này mở nút khá tốt.', likes: 7, replies: [] },
-    { id: `${chapterId}-cc2`, userName: 'Minh An', body: 'Mong chương sau giải thích thêm về nhân vật phụ.', likes: 3, replies: [] }
+    { id: `${chapterId}-cc1`, userName: 'Hoa_Đọc_Truyện', body: 'Truyện hay quá! Đọc không thể dừng được, tác giả viết quá đỉnh!', likes: 234, replies: [] },
+    { id: `${chapterId}-cc2`, userName: 'NamDoc2024', body: 'Nhân vật nữ chính rất mạnh mẽ và thông minh, không bị yếu đuối như nhiều truyện khác.', likes: 189, replies: [] },
+    { id: `${chapterId}-cc3`, userName: 'TruyenFan_VN', body: 'Chương này hay lắm! Cảnh gặp gỡ được viết rất tinh tế.', likes: 156, replies: [] }
   ];
 }
 
 export function ReaderPage({ apiClient, user, updateUser }) {
   const { slug, number } = useParams();
   const navigate = useNavigate();
-  const articleRef = useRef(null);
   const touchStartRef = useRef(null);
   const autoScrollRef = useRef(null);
   const saveProgressRef = useRef(null);
@@ -212,6 +186,7 @@ export function ReaderPage({ apiClient, user, updateUser }) {
   const [chapterListOpen, setChapterListOpen] = useState(false);
   const [toolbarHidden, setToolbarHidden] = useState(false);
   const [bookmarked, setBookmarked] = useState(false);
+  const [liked, setLiked] = useState(false);
   const [autoScroll, setAutoScroll] = useState(false);
   const [comments, setComments] = useState([]);
   const [reportTarget, setReportTarget] = useState(null);
@@ -225,17 +200,27 @@ export function ReaderPage({ apiClient, user, updateUser }) {
   async function loadReader() {
     setLoading(true);
     setError('');
-    const [chapterResult, detailResult] = await Promise.all([
+    const [chapterResult, chapterIndexResult] = await Promise.all([
       fetchSafe(apiClient, `/stories/${slug}/chapters/${number}`),
-      fetchSafe(apiClient, `/stories/${slug}`)
+      fetchSafe(apiClient, `/stories/${slug}/chapters?limit=200`)
     ]);
 
     if (chapterResult?.story && chapterResult?.chapter) {
       const story = normalizeStory(chapterResult.story);
       const chapter = normalizeChapter(chapterResult.chapter);
+      const detailChapters = (chapterIndexResult?.chapters || []).map(item => normalizeChapter({
+        id: `${story.id || story.slug}-chapter-${item.chapterNumber || item.number}`,
+        number: item.chapterNumber || item.number,
+        title: item.title,
+        content: '',
+        preview: '',
+        isPremium: false,
+        price: 0,
+        views: 0
+      }));
       setPayload({ story, chapter });
-      setUnlocked(Boolean(chapterResult.unlocked));
-      setChapters((detailResult?.chapters || []).map(normalizeChapter));
+      setUnlocked(Boolean(chapterResult.unlocked ?? !chapter.isPremium));
+      setChapters(detailChapters.length ? detailChapters : [chapter]);
       setComments(mockChapterComments(chapter.id));
       setLoading(false);
       return;
@@ -248,7 +233,7 @@ export function ReaderPage({ apiClient, user, updateUser }) {
     setUnlocked(!chapter.isPremium);
     setChapters(mockChapters);
     setComments(mockChapterComments(chapter.id));
-        setError('Không kết nối được API, đang hiển thị dữ liệu dự phòng cho trang đọc.');
+    setError('Không kết nối được API, đang hiển thị dữ liệu dự phòng cho trang đọc.');
     setLoading(false);
   }
 
@@ -261,12 +246,9 @@ export function ReaderPage({ apiClient, user, updateUser }) {
 
   useEffect(() => {
     if (!payload?.story || !payload?.chapter) return;
-    try {
-      const saved = JSON.parse(localStorage.getItem('daudo_chapter_bookmarks') || '[]');
-      setBookmarked(saved.some(item => item.id === `${payload.story.slug}-${payload.chapter.number}`));
-    } catch {
-      setBookmarked(false);
-    }
+    const id = `${payload.story.slug}-${payload.chapter.number}`;
+    setBookmarked(storageList('daudo_chapter_bookmarks').some(item => item.id === id));
+    setLiked(storageList('daudo_chapter_likes').includes(id));
   }, [payload?.story?.slug, payload?.chapter?.number]);
 
   useEffect(() => {
@@ -275,39 +257,34 @@ export function ReaderPage({ apiClient, user, updateUser }) {
 
   useEffect(() => {
     let lastY = window.scrollY;
-    let ticking = false;
     const onScroll = () => {
-      if (ticking) return;
-      ticking = true;
-      window.requestAnimationFrame(() => {
-        ticking = false;
       const doc = document.documentElement;
       const max = Math.max(1, doc.scrollHeight - window.innerHeight);
       const nextProgress = Math.min(100, Math.max(0, Math.round((window.scrollY / max) * 100)));
-        if (Math.abs(nextProgress - progressRef.current) >= 1) {
-          progressRef.current = nextProgress;
-          setProgress(nextProgress);
-        }
-      setToolbarHidden(window.scrollY > lastY && window.scrollY > 140);
-      lastY = window.scrollY;
-      if (payload?.story && payload?.chapter) {
-          if (saveProgressRef.current) window.clearTimeout(saveProgressRef.current);
-          saveProgressRef.current = window.setTimeout(() => {
-            const keys = readerProgressKeys(payload.story, payload.chapter);
-            const progressPayload = {
-              storyId: payload.story.id,
-              chapterId: payload.chapter.id,
-              chapterNumber: payload.chapter.number,
-              scrollY: Math.max(0, Math.round(window.scrollY)),
-              percent: nextProgress,
-          progress: nextProgress,
-              updatedAt: new Date().toISOString()
-            };
-            localStorage.setItem(keys.story, JSON.stringify(progressPayload));
-            localStorage.setItem(keys.chapter, JSON.stringify(progressPayload));
-          }, 180);
+      const currentY = window.scrollY;
+      if (Math.abs(nextProgress - progressRef.current) >= 1) {
+        progressRef.current = nextProgress;
+        setProgress(nextProgress);
       }
-      });
+      setToolbarHidden(currentY > lastY && currentY > 120);
+      lastY = currentY;
+      if (payload?.story && payload?.chapter) {
+        if (saveProgressRef.current) window.clearTimeout(saveProgressRef.current);
+        saveProgressRef.current = window.setTimeout(() => {
+          const keys = readerProgressKeys(payload.story, payload.chapter);
+          const progressPayload = {
+            storyId: payload.story.id,
+            chapterId: payload.chapter.id,
+            chapterNumber: payload.chapter.number,
+            scrollY: Math.max(0, Math.round(window.scrollY)),
+            percent: nextProgress,
+            progress: nextProgress,
+            updatedAt: new Date().toISOString()
+          };
+          localStorage.setItem(keys.story, JSON.stringify(progressPayload));
+          localStorage.setItem(keys.chapter, JSON.stringify(progressPayload));
+        }, 180);
+      }
     };
     window.addEventListener('scroll', onScroll, { passive: true });
     onScroll();
@@ -320,9 +297,8 @@ export function ReaderPage({ apiClient, user, updateUser }) {
   useEffect(() => {
     if (!payload?.story || !payload?.chapter || loading) return;
     const keys = readerProgressKeys(payload.story, payload.chapter);
-    const restoreKey = keys.chapter;
-    if (restoredRef.current === restoreKey) return;
-    restoredRef.current = restoreKey;
+    if (restoredRef.current === keys.chapter) return;
+    restoredRef.current = keys.chapter;
     window.requestAnimationFrame(() => {
       window.requestAnimationFrame(() => {
         let saved = null;
@@ -331,11 +307,9 @@ export function ReaderPage({ apiClient, user, updateUser }) {
         } catch {
           saved = null;
         }
-        const shouldRestore = saved && Number(saved.chapterNumber) === Number(payload.chapter.number);
+        const sameChapter = saved && Number(saved.chapterNumber) === Number(payload.chapter.number);
         const max = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
-        const savedY = Number(saved?.scrollY || 0);
-        const fallbackY = Math.round(max * (Number(saved?.percent ?? saved?.progress ?? 0) / 100));
-        const targetY = Math.min(max, Math.max(0, shouldRestore ? savedY || fallbackY : 0));
+        const targetY = sameChapter ? Math.min(max, Math.max(0, Number(saved.scrollY || 0))) : 0;
         window.scrollTo({ top: targetY, behavior: 'auto' });
       });
     });
@@ -373,7 +347,8 @@ export function ReaderPage({ apiClient, user, updateUser }) {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
-  const currentIndex = chapters.findIndex(chapter => chapter.number === Number(number));
+  const currentNumber = Number(payload?.chapter?.number || number);
+  const currentIndex = chapters.findIndex(chapter => Number(chapter.number) === currentNumber);
   const prevChapter = currentIndex > 0 ? chapters[currentIndex - 1] : null;
   const nextChapter = currentIndex >= 0 && currentIndex < chapters.length - 1 ? chapters[currentIndex + 1] : null;
 
@@ -397,16 +372,11 @@ export function ReaderPage({ apiClient, user, updateUser }) {
     await loadReader();
   }
 
-  async function bookmarkChapter() {
+  function bookmarkChapter() {
     if (!payload?.story || !payload?.chapter) return;
     const key = 'daudo_chapter_bookmarks';
-    let current = [];
-    try {
-      current = JSON.parse(localStorage.getItem(key) || '[]');
-    } catch {
-      current = [];
-    }
     const bookmarkId = `${payload.story.slug}-${payload.chapter.number}`;
+    const current = storageList(key);
     if (bookmarked) {
       localStorage.setItem(key, JSON.stringify(current.filter(item => item.id !== bookmarkId)));
       setBookmarked(false);
@@ -423,6 +393,17 @@ export function ReaderPage({ apiClient, user, updateUser }) {
     localStorage.setItem(key, JSON.stringify(next));
     setBookmarked(true);
     setToast('Đã bookmark chương.');
+  }
+
+  function likeChapter() {
+    if (!payload?.story || !payload?.chapter) return;
+    const key = 'daudo_chapter_likes';
+    const id = `${payload.story.slug}-${payload.chapter.number}`;
+    const current = storageList(key);
+    const next = liked ? current.filter(item => item !== id) : [id, ...current.filter(item => item !== id)];
+    localStorage.setItem(key, JSON.stringify(next));
+    setLiked(!liked);
+    setToast(liked ? 'Đã bỏ thích chương.' : 'Đã thích chương.');
   }
 
   async function submitReport(reason, note) {
@@ -443,23 +424,22 @@ export function ReaderPage({ apiClient, user, updateUser }) {
   }
 
   function submitComment(body, parentId) {
-    if (!body.trim()) return;
+    const clean = body.trim().slice(0, 500);
+    if (!clean) return;
     if (parentId) {
       setComments(current => current.map(comment => comment.id === parentId ? {
         ...comment,
-        replies: [...(comment.replies || []), { id: `reply-${Date.now()}`, userName: user?.name || 'Bạn', body, likes: 0 }]
+        replies: [...(comment.replies || []), { id: `reply-${Date.now()}`, userName: user?.name || 'Bạn', body: clean, likes: 0 }]
       } : comment));
     } else {
-      setComments(current => [{ id: `cc-${Date.now()}`, userName: user?.name || 'Bạn', body, likes: 0, replies: [] }, ...current]);
+      setComments(current => [{ id: `cc-${Date.now()}`, userName: user?.name || 'Bạn', userAvatar: user?.avatar, body: clean, likes: 0, replies: [] }, ...current]);
     }
+    setToast('Đã gửi bình luận.');
   }
 
   function toggleFullscreen() {
-    if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen?.();
-    } else {
-      document.exitFullscreen?.();
-    }
+    if (!document.fullscreenElement) document.documentElement.requestFullscreen?.();
+    else document.exitFullscreen?.();
   }
 
   function handleTouchStart(event) {
@@ -470,9 +450,7 @@ export function ReaderPage({ apiClient, user, updateUser }) {
     const start = touchStartRef.current;
     if (start === null) return;
     const diff = event.changedTouches[0].clientX - start;
-    if (Math.abs(diff) > 80) {
-      goChapter(diff > 0 ? 'prev' : 'next');
-    }
+    if (Math.abs(diff) > 80) goChapter(diff > 0 ? 'prev' : 'next');
     touchStartRef.current = null;
   }
 
@@ -485,12 +463,14 @@ export function ReaderPage({ apiClient, user, updateUser }) {
   const isHtmlContent = hasHtmlContent(rawContent);
   const sanitizedHtml = isHtmlContent ? sanitizeReaderHtml(rawContent) : '';
   const contentLines = isHtmlContent ? [] : rawContent.split('\n');
-  const readerDescription = `Đọc ${chapter.title} của ${story.title} trên Đậu Đỏ Truyện. Tùy chỉnh cỡ chữ, nền đọc, bookmark và chuyển chương nhanh.`;
+  const chapterTitle = cleanChapterTitle(chapter.title, chapter.number);
+  const fullTitle = `Chương ${chapter.number}: ${chapterTitle}`;
+  const chapterTotal = chapters.length || getChapterCount(story) || chapter.number;
   const readerSchema = [
     {
       '@context': 'https://schema.org',
       '@type': 'Article',
-      headline: `${story.title} - ${chapter.title}`,
+      headline: `${story.title} - ${fullTitle}`,
       author: story.author ? { '@type': 'Person', name: story.author } : undefined,
       image: story.cover || coverFallback,
       isPartOf: { '@type': 'Book', name: story.title }
@@ -503,20 +483,21 @@ export function ReaderPage({ apiClient, user, updateUser }) {
   ];
 
   return (
-    <div className={`rp-page tone-${settings.tone}`} onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}>
+    <div className={`rp-page rp-v2 tone-${settings.tone}`} onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}>
       <PageSeo
-        title={`${story.title} - ${chapter.title}`}
-        description={readerDescription}
+        title={`${story.title} - ${fullTitle}`}
+        description={`Đọc ${fullTitle} của ${story.title} trên Đậu Đỏ Truyện.`}
         image={story.cover || coverFallback}
         type="article"
         canonical={`/truyen/${story.slug}/chuong/${chapter.number}`}
         schema={readerSchema}
       />
-      <ReaderProgressBar progress={progress} />
       {toast && <div className="rp-toast">{toast}</div>}
       <ReaderToolbar
         story={story}
         chapter={chapter}
+        chapterTitle={chapterTitle}
+        progress={progress}
         hidden={toolbarHidden}
         prevChapter={prevChapter}
         nextChapter={nextChapter}
@@ -525,37 +506,36 @@ export function ReaderPage({ apiClient, user, updateUser }) {
         onSettings={() => setSettingsOpen(value => !value)}
         onChapterList={() => setChapterListOpen(value => !value)}
         onBookmark={bookmarkChapter}
-        onReport={() => setReportTarget({ type: 'chapter', chapter })}
         onFullscreen={toggleFullscreen}
         bookmarked={bookmarked}
       />
 
-      {settingsOpen && <ReaderSettings settings={settings} setSettings={setSettings} autoScroll={autoScroll} setAutoScroll={setAutoScroll} />}
+      {settingsOpen && <ReaderSettings settings={settings} setSettings={setSettings} autoScroll={autoScroll} setAutoScroll={setAutoScroll} onClose={() => setSettingsOpen(false)} />}
       {chapterListOpen && <QuickChapterList story={story} chapters={chapters} currentNumber={chapter.number} onClose={() => setChapterListOpen(false)} />}
 
       <main className="rp-reader-wrap">
         {error && <div className="rp-warning">{error}</div>}
         <article
-          ref={articleRef}
           className="rp-article"
           style={{
             '--rp-font-size': `${settings.fontSize}px`,
             '--rp-line-height': settings.lineHeight,
             '--rp-width': `${settings.width}px`,
-            '--rp-font-family': settings.fontFamily === 'serif' ? 'Georgia, Times New Roman, serif' : settings.fontFamily === 'mono' ? 'ui-monospace, SFMono-Regular, Consolas, monospace' : 'Inter, system-ui, sans-serif'
+            '--rp-paragraph-gap': settings.paragraphSpacing === 'compact' ? '.8em' : settings.paragraphSpacing === 'wide' ? '1.55em' : '1.15em',
+            '--rp-font-family': `${settings.fontFamily}, ${['Arial', 'Tahoma'].includes(settings.fontFamily) ? 'Inter, system-ui, sans-serif' : 'Georgia, Times New Roman, serif'}`
           }}
         >
-          <header>
-            <nav className="rp-breadcrumb" aria-label="Breadcrumb">
-              <Link to="/">Trang chủ</Link>
-              <span>/</span>
-              <Link to={`/truyen/${story.slug}`}>{story.title}</Link>
-              <span>/</span>
-              <b>Chương {chapter.number}</b>
-            </nav>
-            <h1>{chapter.title}</h1>
-            <p>{story.author} · {formatDate(chapter.updatedAt || story.updatedAt)} · {formatNumber(chapter.views)} lượt đọc</p>
+          <header className="rp-article-head">
+            <Link className="rp-story-link" to={`/truyen/${story.slug}`}><Majesticon name="bookOpen" size={14} /> {story.title}</Link>
+            <h1>{fullTitle}</h1>
+            <p>
+              <span><Majesticon name="eye" size={14} /> {formatNumber(chapter.views || story.views)} lượt đọc</span>
+              <span><Majesticon name="book" size={14} /> {formatNumber(chapterTotal)} chương</span>
+              <span><Majesticon name="clock" size={14} /> {formatDate(chapter.updatedAt || story.updatedAt)}</span>
+              <span><Majesticon name="chatText" size={14} /> {comments.length} bình luận</span>
+            </p>
           </header>
+          <div className="rp-title-divider" aria-hidden="true"><span><Majesticon name="bookOpen" size={16} /></span></div>
 
           {!unlocked && (
             <div className="rp-paywall">
@@ -571,15 +551,24 @@ export function ReaderPage({ apiClient, user, updateUser }) {
               : contentLines.map((line, index) => line.trim() ? <p key={index}>{line}</p> : <br key={index} />)}
             {!rawContent.trim() && <div className="rp-empty">Chương này chưa có nội dung để hiển thị.</div>}
           </div>
-
-          <nav className="rp-bottom-nav">
-            <button type="button" disabled={!prevChapter} onClick={() => goChapter('prev')}>Chương trước</button>
-            <Link to={`/truyen/${story.slug}`}>Chi tiết truyện</Link>
-            <button type="button" disabled={!nextChapter} onClick={() => goChapter('next')}>Chương sau</button>
-          </nav>
         </article>
 
-        <ChapterCommentSection comments={comments} onSubmit={submitComment} onReport={comment => setReportTarget({ type: 'comment', comment })} />
+        <ReaderChapterActions
+          story={story}
+          chapter={chapter}
+          prevChapter={prevChapter}
+          nextChapter={nextChapter}
+          liked={liked}
+          bookmarked={bookmarked}
+          onPrev={() => goChapter('prev')}
+          onNext={() => goChapter('next')}
+          onChapterList={() => setChapterListOpen(true)}
+          onLike={likeChapter}
+          onBookmark={bookmarkChapter}
+          onReport={() => setReportTarget({ type: 'chapter', chapter })}
+        />
+
+        <ChapterCommentSection comments={comments} onSubmit={submitComment} onReport={comment => setReportTarget({ type: 'comment', comment })} user={user} />
       </main>
 
       {reportTarget && <ReportModal target={reportTarget} onClose={() => setReportTarget(null)} onSubmit={submitReport} />}
@@ -589,117 +578,165 @@ export function ReaderPage({ apiClient, user, updateUser }) {
 
 function ReaderLoading() {
   return (
-    <div className="rp-page tone-white">
-      <div className="rp-loading">
-        <span />
-        <span />
-        <span />
-      </div>
+    <div className="rp-page rp-v2 tone-white">
+      <div className="rp-loading"><span /><span /><span /></div>
     </div>
   );
 }
 
-export function ReaderProgressBar({ progress }) {
-  return <div className="rp-progress"><span style={{ width: `${progress}%` }} /></div>;
-}
-
-export function ReaderToolbar({ story, chapter, hidden, prevChapter, nextChapter, onPrev, onNext, onSettings, onChapterList, onBookmark, onReport, onFullscreen, bookmarked }) {
+export function ReaderToolbar({ story, chapter, chapterTitle, progress, hidden, prevChapter, nextChapter, onPrev, onNext, onSettings, onChapterList, onBookmark, onFullscreen, bookmarked }) {
   return (
     <header className={hidden ? 'rp-toolbar hidden' : 'rp-toolbar'}>
       <div className="rp-toolbar-left">
-        <Link to={`/truyen/${story.slug}`}>←</Link>
-        <span><strong>{story.title}</strong><small>Chương {chapter.number}</small></span>
+        <Link to={`/truyen/${story.slug}`} aria-label="Quay lại truyện"><Majesticon name="arrowLeft" size={18} /></Link>
+        <span><strong>{story.title}</strong><small>Chương {chapter.number}: {chapterTitle}</small></span>
       </div>
       <div className="rp-toolbar-actions">
-        <button type="button" disabled={!prevChapter} onClick={onPrev} title="Chương trước">‹</button>
-        <button type="button" onClick={onChapterList} title="Danh sách chương">☷</button>
-        <button type="button" disabled={!nextChapter} onClick={onNext} title="Chương sau">›</button>
-        <button type="button" onClick={onSettings} title="Cài đặt đọc">Aa</button>
-        <button type="button" className={bookmarked ? 'active' : ''} onClick={onBookmark} title="Bookmark chương">★</button>
-        <button type="button" onClick={onReport} title="Báo lỗi chương">!</button>
-        <button type="button" onClick={onFullscreen} title="Toàn màn hình">⛶</button>
+        <div className="rp-progress-pill"><span><i style={{ width: `${progress}%` }} /></span><b>{progress}%</b></div>
+        <button type="button" className="rp-soft-active" onClick={onChapterList} title="Danh sách chương"><Majesticon name="list" size={19} /></button>
+        <button type="button" className={bookmarked ? 'active' : ''} onClick={onBookmark} title="Bookmark"><Majesticon name="bookmark" size={19} /></button>
+        <button type="button" onClick={onFullscreen} title="Toàn màn hình"><Majesticon name="panelWide" size={19} /></button>
+        <button type="button" onClick={onSettings} title="Cài đặt đọc"><Majesticon name="settings" size={19} /></button>
+      </div>
+      <div className="rp-toolbar-chapter-row">
+        <button type="button" disabled={!prevChapter} onClick={onPrev}><Majesticon name="chevronLeft" size={16} /> Chương trước</button>
+        <button type="button" onClick={onChapterList}>Chương {chapter.number}: {chapterTitle}</button>
+        <button type="button" disabled={!nextChapter} onClick={onNext}>Chương sau <Majesticon name="chevronRight" size={16} /></button>
       </div>
     </header>
   );
 }
 
-export function ReaderSettings({ settings, setSettings, autoScroll, setAutoScroll }) {
+export function ReaderSettings({ settings, setSettings, autoScroll, setAutoScroll, onClose }) {
   function patch(next) {
     setSettings(current => ({ ...current, ...next }));
   }
+  const updateFont = delta => patch({ fontSize: Math.min(28, Math.max(14, Number(settings.fontSize) + delta)) });
   return (
-    <aside className="rp-settings">
-      <h2>Cài đặt đọc</h2>
-      <label>Cỡ chữ <input type="range" min="14" max="28" value={settings.fontSize} onChange={event => patch({ fontSize: Number(event.target.value) })} /><span>{settings.fontSize}px</span></label>
-      <label>Font chữ <select value={settings.fontFamily} onChange={event => patch({ fontFamily: event.target.value })}><option value="system">Sans</option><option value="serif">Serif</option><option value="mono">Mono</option></select></label>
-      <label>Khoảng dòng <input type="range" min="1.5" max="2.4" step="0.1" value={settings.lineHeight} onChange={event => patch({ lineHeight: Number(event.target.value) })} /><span>{settings.lineHeight}</span></label>
-      <label>Chiều rộng <input type="range" min="620" max="1060" step="20" value={settings.width} onChange={event => patch({ width: Number(event.target.value) })} /><span>{settings.width}px</span></label>
-      <div className="rp-tone-row">
-        {toneOptions.map(([value, label]) => <button type="button" key={value} className={settings.tone === value ? 'active' : ''} onClick={() => patch({ tone: value })}>{label}</button>)}
+    <aside className="rp-settings rp-drawer">
+      <div className="rp-drawer-head"><h2>Cài Đặt Đọc</h2><button type="button" className="rp-close-button" onClick={onClose} aria-label="Đóng"><Majesticon name="close" size={18} /></button></div>
+      <SettingRange label="Cỡ chữ" value={`${settings.fontSize}px`}>
+        <div className="rp-font-range"><button type="button" onClick={() => updateFont(-1)}>A-</button><input type="range" min="14" max="28" value={settings.fontSize} onChange={event => patch({ fontSize: Number(event.target.value) })} /><button type="button" onClick={() => updateFont(1)}>A+</button></div>
+      </SettingRange>
+      <SettingRange label="Khoảng dòng" value={`${settings.lineHeight}x`}>
+        <input type="range" min="1.5" max="2.4" step="0.1" value={settings.lineHeight} onChange={event => patch({ lineHeight: Number(event.target.value) })} />
+      </SettingRange>
+      <SettingRange label="Độ rộng nội dung" value={`${settings.width}px`}>
+        <input type="range" min="560" max="980" step="20" value={settings.width} onChange={event => patch({ width: Number(event.target.value) })} />
+      </SettingRange>
+      <div className="rp-setting-block">
+        <p>Khoảng đoạn văn</p>
+        <div className="rp-segmented">{spacingOptions.map(([value, label]) => <button type="button" key={value} className={settings.paragraphSpacing === value ? 'active' : ''} onClick={() => patch({ paragraphSpacing: value })}>{label}</button>)}</div>
+      </div>
+      <div className="rp-setting-block">
+        <p>Màu nền</p>
+        <div className="rp-tone-row">{toneOptions.map(([value, label]) => <button type="button" key={value} className={`${value} ${settings.tone === value ? 'active' : ''}`} onClick={() => patch({ tone: value })}>{label}</button>)}</div>
+      </div>
+      <div className="rp-setting-block">
+        <p>Font chữ</p>
+        <div className="rp-font-grid">{fontOptions.map(font => <button type="button" key={font} className={settings.fontFamily === font ? 'active' : ''} onClick={() => patch({ fontFamily: font })} style={{ fontFamily: font }}>{font}</button>)}</div>
       </div>
       <label className="rp-toggle"><input type="checkbox" checked={autoScroll} onChange={event => setAutoScroll(event.target.checked)} /> Tự động cuộn</label>
-      <label>Tốc độ cuộn <input type="range" min="0.4" max="4" step="0.2" value={settings.autoScrollSpeed} onChange={event => patch({ autoScrollSpeed: Number(event.target.value) })} /></label>
+      <SettingRange label="Tốc độ cuộn" value={`${settings.autoScrollSpeed}x`}>
+        <input type="range" min="0.4" max="4" step="0.2" value={settings.autoScrollSpeed} onChange={event => patch({ autoScrollSpeed: Number(event.target.value) })} />
+      </SettingRange>
     </aside>
   );
+}
+
+function SettingRange({ label, value, children }) {
+  return <label className="rp-setting-range"><span><b>{label}</b><em>{value}</em></span>{children}</label>;
 }
 
 function QuickChapterList({ story, chapters, currentNumber, onClose }) {
   return (
-    <aside className="rp-chapter-drawer">
-      <div><h2>Danh sách chương</h2><button type="button" onClick={onClose}>×</button></div>
-      <div>
-        {chapters.map(chapter => (
-          <Link key={chapter.id} className={chapter.number === currentNumber ? 'active' : ''} to={`/truyen/${story.slug}/chuong/${chapter.number}`} onClick={onClose}>
-            {chapter.isPremium ? '🔒 ' : ''}Chương {chapter.number}
-            <small>{chapter.title.replace(/^Chương\s*\d+[:：-]?\s*/i, '')}</small>
-          </Link>
-        ))}
+    <aside className="rp-chapter-drawer rp-drawer">
+      <div className="rp-drawer-head"><h2>Danh Sách Chương</h2><button type="button" className="rp-close-button" onClick={onClose} aria-label="Đóng"><Majesticon name="close" size={18} /></button></div>
+      <div className="rp-chapter-list">
+        {chapters.map(chapter => {
+          const active = Number(chapter.number) === Number(currentNumber);
+          return (
+            <Link key={chapter.id || chapter.number} className={active ? 'active' : ''} to={`/truyen/${story.slug}/chuong/${chapter.number}`} onClick={onClose}>
+              <span>#{chapter.number}</span>
+              <strong>Chương {chapter.number}: {cleanChapterTitle(chapter.title, chapter.number)}</strong>
+              {chapter.isPremium ? <b>VIP</b> : active ? <Majesticon name="play" size={16} /> : null}
+            </Link>
+          );
+        })}
       </div>
     </aside>
   );
 }
 
-function ChapterCommentSection({ comments, onSubmit, onReport }) {
+function ReaderChapterActions({ story, chapter, prevChapter, nextChapter, liked, bookmarked, onPrev, onNext, onChapterList, onLike, onBookmark, onReport }) {
+  return (
+    <section className="rp-chapter-actions">
+      <div className="rp-endline"><span>Hết chương {chapter.number}</span></div>
+      <div className="rp-nav-buttons">
+        <button type="button" disabled={!prevChapter} onClick={onPrev}><Majesticon name="arrowLeft" size={18} /> Chương Trước</button>
+        <button type="button" className="icon-only" onClick={onChapterList}><Majesticon name="list" size={20} /></button>
+        <button type="button" className="next" disabled={!nextChapter} onClick={onNext}>Chương Sau <Majesticon name="arrowRight" size={18} /></button>
+      </div>
+      <div className="rp-action-buttons">
+        <button type="button" className={liked ? 'active' : ''} onClick={onLike}><Majesticon name="heart" size={17} /> Thích</button>
+        <button type="button" className={bookmarked ? 'active' : ''} onClick={onBookmark}><Majesticon name="bookmark" size={17} /> Bookmark</button>
+        <button type="button" onClick={onReport}><Majesticon name="alert" size={17} /> Báo Lỗi</button>
+        <Link to={`/truyen/${story.slug}`}><Majesticon name="alert" size={17} /> Chi Tiết</Link>
+      </div>
+    </section>
+  );
+}
+
+function ChapterCommentSection({ comments, onSubmit, onReport, user }) {
   const [text, setText] = useState('');
   const [replying, setReplying] = useState('');
   const [replyText, setReplyText] = useState('');
+  const remaining = 500 - text.length;
   function submit(event) {
     event.preventDefault();
     if (!text.trim()) return;
-    onSubmit(text.trim());
+    onSubmit(text);
     setText('');
   }
   function submitReply(commentId) {
     if (!replyText.trim()) return;
-    onSubmit(replyText.trim(), commentId);
+    onSubmit(replyText, commentId);
     setReplyText('');
     setReplying('');
   }
   return (
     <section className="rp-comments">
-      <div><h2>Bình luận chương</h2><span>{comments.length} bình luận</span></div>
-      <form onSubmit={submit}>
-        <textarea value={text} onChange={event => setText(event.target.value)} placeholder="Bình luận về chương này..." />
-        <button type="submit">Gửi bình luận</button>
+      <div className="rp-comments-head"><h2>Bình Luận Chương</h2><span>{comments.length}</span></div>
+      <form className="rp-comment-form" onSubmit={submit}>
+        <img src={user?.avatar || '/images/logo.png'} alt={user?.name || 'avatar'} />
+        <div>
+          <textarea maxLength={500} value={text} onChange={event => setText(event.target.value)} placeholder="Bình luận về chương này..." />
+          <footer><span>{Math.max(0, 500 - remaining)}/500</span><button type="submit" disabled={!text.trim()}>Gửi</button></footer>
+        </div>
       </form>
-      {comments.map(comment => (
-        <article key={comment.id}>
-          <strong>{comment.userName}</strong>
-          <p>{comment.body}</p>
-          <div>
-            <button type="button">Thích ({comment.likes || 0})</button>
-            <button type="button" onClick={() => setReplying(comment.id)}>Trả lời</button>
-            <button type="button" onClick={() => onReport(comment)}>Báo cáo</button>
-          </div>
-          {(comment.replies || []).map(reply => <p key={reply.id} className="rp-reply"><b>{reply.userName}</b> {reply.body}</p>)}
-          {replying === comment.id && (
-            <div className="rp-reply-form">
-              <input value={replyText} onChange={event => setReplyText(event.target.value)} placeholder="Nhập phản hồi..." />
-              <button type="button" onClick={() => submitReply(comment.id)}>Gửi</button>
+      <div className="rp-comment-list">
+        {comments.map(comment => (
+          <article key={comment.id}>
+            <img src={comment.userAvatar || '/images/logo.png'} alt={comment.userName || 'avatar'} />
+            <div>
+              <strong>{comment.userName || 'Độc giả'} <small>2 giờ trước</small></strong>
+              <p>{comment.body}</p>
+              <div className="rp-comment-actions">
+                <button type="button"><Majesticon name="heart" size={13} /> {comment.likes || 0}</button>
+                <button type="button" onClick={() => setReplying(comment.id)}>Trả lời</button>
+                <button type="button" onClick={() => onReport(comment)}>Báo cáo</button>
+              </div>
+              {(comment.replies || []).map(reply => <p key={reply.id} className="rp-reply"><b>{reply.userName}</b> {reply.body}</p>)}
+              {replying === comment.id && (
+                <div className="rp-reply-form">
+                  <input maxLength={500} value={replyText} onChange={event => setReplyText(event.target.value)} placeholder="Nhập phản hồi..." />
+                  <button type="button" disabled={!replyText.trim()} onClick={() => submitReply(comment.id)}>Gửi</button>
+                </div>
+              )}
             </div>
-          )}
-        </article>
-      ))}
+          </article>
+        ))}
+      </div>
     </section>
   );
 }

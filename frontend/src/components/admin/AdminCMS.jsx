@@ -17,6 +17,10 @@ export function loadDashboard(apiClient) {
   return apiClient('/admin/dashboard');
 }
 
+export function loadAdminBootstrap(apiClient) {
+  return apiClient(`/admin/bootstrap${queryString({ limit: ADMIN_PAGE_LIMIT })}`);
+}
+
 export function loadUsers(apiClient, params = {}) {
   return apiClient(`/admin/users${queryString({ limit: ADMIN_PAGE_LIMIT, ...params })}`);
 }
@@ -89,6 +93,7 @@ function normalizeStory(story = {}) {
   return {
     ...story,
     cover: story.cover || story.coverUrl || '/images/cover-1.jpg',
+    bannerImage: story.bannerImage || '',
     status: story.storyStatus || story.publishStatus || story.status || 'ongoing',
     approvalStatus: story.approvalStatus || 'approved',
     rejectionReason: story.rejectionReason || story.rejectReason || '',
@@ -99,6 +104,8 @@ function normalizeStory(story = {}) {
     hot: Boolean(story.hot ?? story.isHot),
     recommended: Boolean(story.recommended ?? story.isRecommended),
     banner: Boolean(story.banner ?? story.isBanner),
+    homeTrending: Boolean(story.homeTrending),
+    homeTrendingOrder: Number(story.homeTrendingOrder || 0),
     categories: asArray(story.categories?.length ? story.categories : story.genres),
     tags: asArray(story.tags)
   };
@@ -249,6 +256,7 @@ function usePaged(items, pageSize = 10) {
 }
 
 function getAdminView(pathname) {
+  if (pathname.includes('/home')) return 'home';
   if (pathname.includes('/users')) return 'users';
   if (pathname.includes('/stories')) return 'stories';
   if (pathname.includes('/chapters')) return 'chapters';
@@ -262,6 +270,7 @@ function getAdminView(pathname) {
 }
 
 const adminTabs = [
+  { to: '/admin/home', view: 'home', label: 'Trang chủ' },
   { to: '/admin', view: 'overview', label: 'Tổng quan' },
   { to: '/admin/users', view: 'users', label: 'Người dùng' },
   { to: '/admin/stories', view: 'stories', label: 'Truyện' },
@@ -292,34 +301,27 @@ export function AdminDashboard({ apiClient, user }) {
       return;
     }
     if (!silent) setLoading(true);
-    const tasks = await Promise.allSettled([
-      loadDashboard(apiClient),
-      loadUsers(apiClient),
-      loadStories(apiClient),
-      loadChapters(apiClient),
-      loadReports(apiClient),
-      loadTransactions(apiClient),
-      loadComments(apiClient),
-      loadTaxonomy(apiClient),
-      loadNotifications(apiClient),
-      loadAdminLogs(apiClient)
-    ]);
-    const failed = tasks.filter(item => item.status === 'rejected');
-    const value = index => tasks[index].status === 'fulfilled' ? tasks[index].value : {};
-    setState({
-      stats: value(0).stats || value(0) || {},
-      users: asArray(value(1).users).map(normalizeUser),
-      stories: asArray(value(2).stories).map(normalizeStory),
-      chapters: asArray(value(3).chapters).map(normalizeChapter),
-      reports: asArray(value(4).reports).map(normalizeReport),
-      transactions: asArray(value(5).transactions).map(normalizeTransaction),
-      comments: asArray(value(6).comments).map(normalizeComment),
-      taxonomy: value(7).taxonomy || { categories: [], tags: [] },
-      notifications: asArray(value(8).notifications),
-      logs: asArray(value(9).logs)
+    try {
+      const value = await loadAdminBootstrap(apiClient);
+      setState({
+      stats: value.stats || value || {},
+      users: asArray(value.users).map(normalizeUser),
+      stories: asArray(value.stories).map(normalizeStory),
+      chapters: asArray(value.chapters).map(normalizeChapter),
+      reports: asArray(value.reports).map(normalizeReport),
+      transactions: asArray(value.transactions).map(normalizeTransaction),
+      comments: asArray(value.comments).map(normalizeComment),
+      taxonomy: value.taxonomy || { categories: [], tags: [] },
+      notifications: asArray(value.notifications),
+      logs: asArray(value.logs)
     });
-    setError(failed.length ? `Không tải được ${failed.length} endpoint admin. Dữ liệu lỗi sẽ để trống, bấm Tải lại để thử lại.` : '');
-    setLoading(false);
+      setError('');
+    } catch (err) {
+      setState(emptyAdminState());
+      setError(err.message || 'Khong tai duoc du lieu Admin CMS. Bam Tai lai de thu lai.');
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function loadSlices(slices = []) {
@@ -430,6 +432,11 @@ export function AdminDashboard({ apiClient, user }) {
       'Đã cập nhật nhãn truyện.',
       ['stories', 'logs']
     ),
+    updateHomeTrending: storyIds => runMutation(
+      () => apiClient('/admin/home/trending', { method: 'PUT', body: JSON.stringify({ storyIds }) }),
+      'Đã cập nhật truyện đang xu hướng.',
+      ['stories', 'logs']
+    ),
     deleteStory: story => runMutation(
       () => apiClient(`/admin/stories/${story.id}`, { method: 'DELETE' }),
       'Đã xóa truyện.'
@@ -519,11 +526,12 @@ export function AdminDashboard({ apiClient, user }) {
       )}
 
       {activeView === 'overview' && <OverviewTab state={state} />}
+      {activeView === 'home' && <HomeAdminTab stories={state.stories} busy={actionBusy} onSave={actions.updateHomeTrending} />}
       {activeView === 'users' && (
         <UsersTab users={state.users} currentUser={user} onOpenUser={setUserDetail} onUpdateUser={actions.updateUser} onUpdateRole={actions.updateUserRole} onAdjust={actions.adjustBalance} onConfirm={setConfirm} />
       )}
       {activeView === 'stories' && (
-        <StoriesTab busy={actionBusy} stories={state.stories} taxonomy={state.taxonomy} onLoadStories={loadStoriesSlice} onStoriesLoaded={applyStoriesSlice} onSave={actions.saveStory} onStatus={actions.updateStoryStatus} onFlags={actions.updateStoryFlags} onDelete={actions.deleteStory} onConfirm={setConfirm} />
+        <StoriesTab apiClient={apiClient} busy={actionBusy} stories={state.stories} taxonomy={state.taxonomy} onLoadStories={loadStoriesSlice} onStoriesLoaded={applyStoriesSlice} onSave={actions.saveStory} onStatus={actions.updateStoryStatus} onFlags={actions.updateStoryFlags} onDelete={actions.deleteStory} onConfirm={setConfirm} />
       )}
       {activeView === 'chapters' && (
         <ChaptersTab busy={actionBusy} chapters={state.chapters} stories={state.stories} onSave={actions.saveChapter} onStatus={actions.updateChapterStatus} onDelete={actions.deleteChapter} onConfirm={setConfirm} />
@@ -739,7 +747,96 @@ function UserModal({ user, currentUser, onClose, onSave, onRole, onAdjust }) {
   );
 }
 
-function StoriesTab({ busy = false, stories, taxonomy, onLoadStories, onStoriesLoaded, onSave, onStatus, onFlags, onDelete, onConfirm }) {
+function HomeAdminTab({ stories, busy = false, onSave }) {
+  const [query, setQuery] = useState('');
+  const [dragId, setDragId] = useState('');
+  const [selectedIds, setSelectedIds] = useState(() => stories
+    .filter(story => story.homeTrending)
+    .sort((a, b) => Number(a.homeTrendingOrder || 0) - Number(b.homeTrendingOrder || 0))
+    .map(story => story.id)
+    .slice(0, 10));
+
+  useEffect(() => {
+    setSelectedIds(stories
+      .filter(story => story.homeTrending)
+      .sort((a, b) => Number(a.homeTrendingOrder || 0) - Number(b.homeTrendingOrder || 0))
+      .map(story => story.id)
+      .slice(0, 10));
+  }, [stories]);
+
+  const storyById = useMemo(() => new Map(stories.map(story => [story.id, story])), [stories]);
+  const selected = selectedIds.map(id => storyById.get(id)).filter(Boolean);
+  const candidates = stories
+    .filter(story => !selectedIds.includes(story.id))
+    .filter(story => story.approvalStatus === 'approved' && !story.hidden)
+    .filter(story => includesText([story.title, story.author, story.description, ...story.categories, ...story.tags], query))
+    .slice(0, 12);
+
+  const move = (id, direction) => {
+    setSelectedIds(current => {
+      const index = current.indexOf(id);
+      const nextIndex = index + direction;
+      if (index < 0 || nextIndex < 0 || nextIndex >= current.length) return current;
+      const next = current.slice();
+      [next[index], next[nextIndex]] = [next[nextIndex], next[index]];
+      return next;
+    });
+  };
+  const add = id => setSelectedIds(current => current.includes(id) || current.length >= 10 ? current : [...current, id]);
+  const remove = id => setSelectedIds(current => current.filter(item => item !== id));
+  const dropOn = id => {
+    if (!dragId || dragId === id) return;
+    setSelectedIds(current => {
+      const from = current.indexOf(dragId);
+      const to = current.indexOf(id);
+      if (from < 0 || to < 0) return current;
+      const next = current.slice();
+      const [item] = next.splice(from, 1);
+      next.splice(to, 0, item);
+      return next;
+    });
+    setDragId('');
+  };
+
+  return (
+    <div className="cms-stack">
+      <PageHead eyebrow="Home" title="Trang chủ" text="Chọn tối đa 10 truyện đang xu hướng và kéo thả để đổi vị trí hiển thị." />
+      <div className="cms-home-layout">
+        <section className="cms-home-panel">
+          <h3>Truyện đang xu hướng</h3>
+          <div className="cms-home-selected">
+            {selected.map((story, index) => (
+              <div key={story.id} className="cms-home-trending-row" draggable onDragStart={() => setDragId(story.id)} onDragOver={event => event.preventDefault()} onDrop={() => dropOn(story.id)}>
+                <b>{index + 1}</b>
+                <StoryCell story={story} />
+                <button type="button" onClick={() => move(story.id, -1)} disabled={index === 0}>Lên</button>
+                <button type="button" onClick={() => move(story.id, 1)} disabled={index === selected.length - 1}>Xuống</button>
+                <button type="button" className="danger" onClick={() => remove(story.id)}>Bỏ</button>
+              </div>
+            ))}
+            {!selected.length && <EmptyState title="Chưa chọn truyện" text="Thêm truyện từ danh sách bên phải." />}
+          </div>
+          <div className="cms-modal-actions">
+            <button type="button" disabled={busy} onClick={() => onSave(selectedIds)}>{busy ? 'Đang lưu...' : 'Lưu xu hướng'}</button>
+          </div>
+        </section>
+        <section className="cms-home-panel">
+          <h3>Thêm truyện</h3>
+          <input value={query} onChange={event => setQuery(event.target.value)} placeholder="Tìm truyện, tác giả, thể loại..." />
+          <div className="cms-home-candidates">
+            {candidates.map(story => (
+              <button key={story.id} type="button" onClick={() => add(story.id)} disabled={selectedIds.length >= 10}>
+                <StoryCell story={story} />
+              </button>
+            ))}
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function StoriesTab({ apiClient, busy = false, stories, taxonomy, onLoadStories, onStoriesLoaded, onSave, onStatus, onFlags, onDelete, onConfirm }) {
   const [query, setQuery] = useState('');
   const [approval, setApproval] = useState('all');
   const [hidden, setHidden] = useState('all');
@@ -772,6 +869,9 @@ function StoriesTab({ busy = false, stories, taxonomy, onLoadStories, onStoriesL
     (category === 'all' || story.categories.includes(category))
   ), [stories, query, approval, hidden, category]);
   const { page, setPage, totalPages, pageItems } = usePaged(filtered);
+  const bannerCount = stories.filter(story => story.banner).length;
+  const bannerLimitMessage = 'Trang chu chi duoc bat toi da 6 banner. Hay tat bot 1 banner roi bat banner moi.';
+  const canEnableBanner = story => story.banner || bannerCount < 6;
 
   return (
     <div className="cms-stack">
@@ -801,7 +901,17 @@ function StoriesTab({ busy = false, stories, taxonomy, onLoadStories, onStoriesL
                 <button type="button" disabled={busy} onClick={() => onFlags(story, { featured: !story.featured })}>{story.featured ? 'Bỏ featured' : 'Featured'}</button>
                 <button type="button" disabled={busy} onClick={() => onFlags(story, { hot: !story.hot })}>{story.hot ? 'Bỏ hot' : 'Hot'}</button>
                 <button type="button" disabled={busy} onClick={() => onFlags(story, { recommended: !story.recommended })}>{story.recommended ? 'Bỏ đề cử' : 'Đề cử'}</button>
-                <button type="button" disabled={busy} onClick={() => onFlags(story, { banner: !story.banner })}>{story.banner ? 'Bỏ banner' : 'Banner'}</button>
+                <button type="button" disabled={busy} title={canEnableBanner(story) ? '' : bannerLimitMessage} onClick={() => {
+                  const nextBanner = !story.banner;
+                  if (nextBanner && !canEnableBanner(story)) {
+                    window.alert(bannerLimitMessage);
+                    return;
+                  }
+                  onFlags(story, {
+                    banner: nextBanner,
+                    ...(nextBanner ? { bannerImage: story.bannerImage || story.cover || '' } : {})
+                  });
+                }}>{story.banner ? 'Bỏ banner' : 'Banner'}</button>
                 <button type="button" disabled={busy} onClick={() => setEditing(story)}>Sửa</button>
                 {story.slug && <Link className="cms-link-button" to={`/truyen/${story.slug}`}>Preview</Link>}
                 <button type="button" className="danger" disabled={busy} onClick={() => onConfirm({ title: 'Xóa truyện?', text: 'Toàn bộ chương, bình luận, lịch sử liên quan sẽ bị xóa.', action: () => onDelete(story) })}>Xóa</button>
@@ -811,7 +921,7 @@ function StoriesTab({ busy = false, stories, taxonomy, onLoadStories, onStoriesL
         ))}
       </AdminTable>
       <Pagination page={page} totalPages={totalPages} onPage={setPage} />
-      {editing && <StoryFormModal story={editing.id ? editing : null} taxonomy={taxonomy} onClose={() => setEditing(null)} onSave={payload => { onSave(editing.id ? editing : null, payload); setEditing(null); }} />}
+      {editing && <StoryFormModal apiClient={apiClient} story={editing.id ? editing : null} taxonomy={taxonomy} onClose={() => setEditing(null)} onSave={payload => { onSave(editing.id ? editing : null, payload); setEditing(null); }} />}
       {rejecting && <ReasonModal title="Từ chối truyện" target={rejecting.title} onClose={() => setRejecting(null)} onSubmit={reason => { onStatus(rejecting, { approvalStatus: 'rejected', rejectionReason: reason }); setRejecting(null); }} />}
     </div>
   );
@@ -840,12 +950,44 @@ function FlagBadges({ item }) {
   return <div className="cms-chip-row">{flags.map(([key, label]) => <Badge key={key} tone={key === 'hot' ? 'danger' : 'info'}>{label}</Badge>)}</div>;
 }
 
-function StoryFormModal({ story, taxonomy, onClose, onSave }) {
+const adminImageTypes = new Set(['image/png', 'image/jpeg', 'image/webp']);
+const adminImageMaxOriginalBytes = 10 * 1024 * 1024;
+const adminImageMaxCompressedBytes = 500 * 1024;
+
+async function compressAdminImage(file) {
+  if (!file) return null;
+  if (!adminImageTypes.has(file.type)) throw new Error('Chi chap nhan anh JPG, PNG hoac WEBP.');
+  if (file.size > adminImageMaxOriginalBytes) throw new Error('Anh goc toi da 10MB.');
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    const image = await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('Khong doc duoc anh.'));
+      img.src = objectUrl;
+    });
+    const scale = Math.min(1, 1600 / image.width);
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(image.width * scale));
+    canvas.height = Math.max(1, Math.round(image.height * scale));
+    canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
+    for (const quality of [0.86, 0.76, 0.66, 0.56]) {
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/webp', quality));
+      if (blob && blob.size <= adminImageMaxCompressedBytes) return new File([blob], file.name.replace(/\.[^.]+$/, '.webp'), { type: 'image/webp' });
+    }
+    throw new Error('Anh sau nen van lon hon 500KB. Vui long chon anh nho hon.');
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+function StoryFormModal({ apiClient, story, taxonomy, onClose, onSave }) {
   const [form, setForm] = useState(() => ({
     title: story?.title || '',
     author: story?.author || '',
     translator: story?.translator || '',
     cover: story?.cover || '/images/cover-1.jpg',
+    bannerImage: story?.bannerImage || '',
     description: story?.description || '',
     status: story?.status || 'ongoing',
     approvalStatus: story?.approvalStatus || 'pending',
@@ -859,8 +1001,40 @@ function StoryFormModal({ story, taxonomy, onClose, onSave }) {
     recommended: Boolean(story?.recommended),
     banner: Boolean(story?.banner)
   }));
+  const [bannerUploading, setBannerUploading] = useState(false);
+  const [bannerDragging, setBannerDragging] = useState(false);
+  const [bannerError, setBannerError] = useState('');
   const set = (key, value) => setForm(current => ({ ...current, [key]: value }));
+  const setBannerImage = value => setForm(current => ({
+    ...current,
+    bannerImage: value,
+    banner: value && String(value).trim() ? true : current.banner
+  }));
+  const setBannerEnabled = enabled => setForm(current => ({
+    ...current,
+    banner: enabled,
+    bannerImage: enabled && !String(current.bannerImage || '').trim() ? current.cover : current.bannerImage
+  }));
   const suggestions = asArray(taxonomy.categories).map(item => item.name).join(', ');
+  async function uploadBannerFile(file) {
+    if (!file || bannerUploading) return;
+    setBannerError('');
+    setBannerUploading(true);
+    try {
+      if (!apiClient) throw new Error('Khong co API client de upload anh.');
+      const compressed = await compressAdminImage(file);
+      const body = new FormData();
+      body.append('file', compressed);
+      if (story?.id) body.append('storyId', story.id);
+      const result = await apiClient('/uploads/cover', { method: 'POST', body });
+      setBannerImage(result.url || result.cover || result.path || '');
+    } catch (err) {
+      setBannerError(err.message || 'Khong upload duoc anh banner.');
+    } finally {
+      setBannerUploading(false);
+      setBannerDragging(false);
+    }
+  }
   return (
     <Modal title={story ? 'Sửa truyện' : 'Tạo truyện'} onClose={onClose}>
       <form className="cms-form" onSubmit={event => {
@@ -876,6 +1050,33 @@ function StoryFormModal({ story, taxonomy, onClose, onSave }) {
         <label>Tác giả<input value={form.author} onChange={event => set('author', event.target.value)} required /></label>
         <label>Dịch giả<input value={form.translator} onChange={event => set('translator', event.target.value)} /></label>
         <label>Cover<input value={form.cover} onChange={event => set('cover', event.target.value)} /></label>
+        <div className="cms-banner-upload">
+          <span>Anh banner</span>
+          <small className="cms-banner-hint">Bat Banner se dung anh banner rieng neu co, neu khong se dung Cover.</small>
+          <label
+            className={bannerDragging ? 'cms-banner-drop dragging' : 'cms-banner-drop'}
+            onDragEnter={event => {
+              event.preventDefault();
+              setBannerDragging(true);
+            }}
+            onDragOver={event => {
+              event.preventDefault();
+              setBannerDragging(true);
+            }}
+            onDragLeave={() => setBannerDragging(false)}
+            onDrop={event => {
+              event.preventDefault();
+              uploadBannerFile(event.dataTransfer.files?.[0]);
+            }}
+          >
+            {form.bannerImage ? <img src={form.bannerImage} alt="Banner preview" /> : <strong>Keo tha anh banner vao day</strong>}
+            <small>{bannerUploading ? 'Dang upload...' : 'Chon file hoac keo tha JPG, PNG, WEBP'}</small>
+            <input type="file" accept="image/*" disabled={bannerUploading} onChange={event => uploadBannerFile(event.target.files?.[0])} />
+          </label>
+          <input value={form.bannerImage} onChange={event => setBannerImage(event.target.value)} placeholder="Hoac dan URL anh banner" />
+          <label className="cms-checkbox cms-banner-toggle"><input type="checkbox" checked={form.banner} onChange={event => setBannerEnabled(event.target.checked)} /> Banner</label>
+          {bannerError && <em className="cms-upload-error">{bannerError}</em>}
+        </div>
         <label>Trạng thái<select value={form.status} onChange={event => set('status', event.target.value)}><option value="ongoing">Đang ra</option><option value="completed">Hoàn thành</option><option value="paused">Tạm dừng</option></select></label>
         <label>Duyệt<select value={form.approvalStatus} onChange={event => set('approvalStatus', event.target.value)}><option value="pending">Chờ duyệt</option><option value="approved">Đã duyệt</option><option value="rejected">Từ chối</option><option value="draft">Nháp</option></select></label>
         <label>Giá Đậu<input type="number" value={form.price} onChange={event => set('price', event.target.value)} /></label>
@@ -887,7 +1088,6 @@ function StoryFormModal({ story, taxonomy, onClose, onSave }) {
         <label className="cms-checkbox"><input type="checkbox" checked={form.featured} onChange={event => set('featured', event.target.checked)} /> Featured</label>
         <label className="cms-checkbox"><input type="checkbox" checked={form.hot} onChange={event => set('hot', event.target.checked)} /> Hot</label>
         <label className="cms-checkbox"><input type="checkbox" checked={form.recommended} onChange={event => set('recommended', event.target.checked)} /> Đề cử</label>
-        <label className="cms-checkbox"><input type="checkbox" checked={form.banner} onChange={event => set('banner', event.target.checked)} /> Banner</label>
         <div className="cms-modal-actions"><button type="button" onClick={onClose}>Hủy</button><button type="submit">Lưu</button></div>
       </form>
     </Modal>

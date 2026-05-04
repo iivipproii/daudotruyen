@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { mockCategories, mockPopularSearches, mockStories } from '../../data/mockStories';
+import { Majesticon } from '../shared/Majesticon.jsx';
+
 const isDev = import.meta.env.DEV;
 const LOAD_ERROR_MESSAGE = 'Không tải được dữ liệu từ máy chủ. Vui lòng thử lại.';
 
@@ -17,45 +19,31 @@ const defaultFilters = {
 };
 
 const statusOptions = [
-  { value: '', label: 'Tất cả trạng thái' },
+  { value: '', label: 'Tất cả' },
   { value: 'ongoing', label: 'Đang ra' },
-  { value: 'completed', label: 'Hoàn thành' },
-  { value: 'paused', label: 'Tạm dừng' }
+  { value: 'completed', label: 'Hoàn thành' }
 ];
 
 const chapterOptions = [
-  { value: '', label: 'Mọi độ dài' },
-  { value: '1-50', label: '1 - 50 chương' },
-  { value: '51-100', label: '51 - 100 chương' },
-  { value: '101-300', label: '101 - 300 chương' },
-  { value: '301-999999', label: 'Trên 300 chương' }
+  { value: '', label: 'Tất cả' },
+  { value: '1-99', label: '< 100' },
+  { value: '100-500', label: '100 - 500' },
+  { value: '501-1000', label: '500 - 1000' },
+  { value: '1001-999999', label: '> 1000' }
 ];
 
 const ratingOptions = [
-  { value: '', label: 'Mọi đánh giá' },
-  { value: '4', label: 'Từ 4.0 sao' },
-  { value: '4.5', label: 'Từ 4.5 sao' },
-  { value: '4.8', label: 'Từ 4.8 sao' }
-];
-
-const viewOptions = [
-  { value: '', label: 'Mọi lượt xem' },
-  { value: '10000', label: 'Từ 10.000 lượt' },
-  { value: '100000', label: 'Từ 100.000 lượt' },
-  { value: '500000', label: 'Từ 500.000 lượt' }
-];
-
-const premiumOptions = [
-  { value: '', label: 'Miễn phí và VIP' },
-  { value: 'false', label: 'Miễn phí' },
-  { value: 'true', label: 'VIP' }
+  { value: '', label: 'Tất cả' },
+  { value: '4.5', label: '4.5+' },
+  { value: '4', label: '4.0+' },
+  { value: '3.5', label: '3.5+' }
 ];
 
 const sortOptions = [
+  { value: 'views', label: 'Phổ biến nhất' },
   { value: 'updated', label: 'Mới cập nhật' },
-  { value: 'views', label: 'Lượt xem' },
-  { value: 'rating', label: 'Đánh giá' },
-  { value: 'chapters', label: 'Số chương' },
+  { value: 'rating', label: 'Đánh giá cao' },
+  { value: 'chapters', label: 'Nhiều chương' },
   { value: 'created', label: 'Mới đăng' }
 ];
 
@@ -128,13 +116,15 @@ function formatNumber(value = 0) {
   return Number(value || 0).toLocaleString('vi-VN');
 }
 
-function getChapterCount(story = {}) {
-  return story.chapterCount || story.chapterCountEstimate || story.latestChapter?.number || 0;
+function compactNumber(value = 0) {
+  const number = Number(value || 0);
+  if (number >= 1000000) return `${(number / 1000000).toFixed(number >= 10000000 ? 0 : 1)}M`;
+  if (number >= 1000) return `${(number / 1000).toFixed(number >= 10000 ? 0 : 1)}K`;
+  return formatNumber(number);
 }
 
-function formatDate(value) {
-  if (!value) return 'Đang cập nhật';
-  return new Date(value).toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' });
+function getChapterCount(story = {}) {
+  return story.chapterCount || story.chapterCountEstimate || story.latestChapter?.number || 0;
 }
 
 function uniqueStories(stories = []) {
@@ -150,7 +140,7 @@ function filtersFromUrl(searchParams, routeCategory, presetFilters = {}) {
     ...defaultFilters,
     ...presetFilters,
     q: searchParams.get('q') || '',
-    category: routeCategory || searchParams.get('category') || presetFilters.category || '',
+    category: routeCategory ? decodeURIComponent(routeCategory) : searchParams.get('category') || presetFilters.category || '',
     tag: searchParams.get('tag') || '',
     status: searchParams.get('status') || '',
     chapterRange: searchParams.get('chapterRange') || '',
@@ -161,10 +151,10 @@ function filtersFromUrl(searchParams, routeCategory, presetFilters = {}) {
   };
 }
 
-function toSearchParams(filters) {
+function toSearchParams(filters, defaults = defaultFilters) {
   const params = new URLSearchParams();
   Object.entries(filters).forEach(([key, value]) => {
-    if (value && value !== defaultFilters[key]) params.set(key, value);
+    if (value && value !== defaults[key]) params.set(key, value);
   });
   return params;
 }
@@ -241,14 +231,16 @@ function useRecentSearches() {
   return { recent, saveRecent, clearRecent };
 }
 
-export function SearchPage({ apiClient, presetFilters = {} }) {
+export function SearchPage({ apiClient, presetFilters = {}, pageTitle = '', heroTitle = '', shortOnly = false, basePath = '' }) {
   const params = useParams();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const routeCategory = params.category ? decodeURIComponent(params.category) : '';
+  const pageDefaults = useMemo(() => ({ ...defaultFilters, ...presetFilters }), [presetFilters]);
   const [filters, setFilters] = useState(() => filtersFromUrl(searchParams, params.category, presetFilters));
   const [draftQ, setDraftQ] = useState(filters.q);
   const [stories, setStories] = useState([]);
-  const [categories, setCategories] = useState(isDev ? mockCategories : []);
+  const [categories, setCategories] = useState(isDev ? mockCategories.map(repairText) : []);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [retryCount, setRetryCount] = useState(0);
@@ -261,29 +253,42 @@ export function SearchPage({ apiClient, presetFilters = {} }) {
   }, [params.category, presetFilters, searchParams]);
 
   useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const nextQ = draftQ.trim();
+      if (!nextQ && filters.q) {
+        updateFilters({ q: '' });
+        return;
+      }
+      if (nextQ.length >= 2 && nextQ !== filters.q) {
+        saveRecent(nextQ);
+        updateFilters({ q: nextQ });
+      }
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [draftQ]);
+
+  useEffect(() => {
     let alive = true;
     async function load() {
       setLoading(true);
       setError('');
-      const [updated, views, rating, chapters, categoryData] = await Promise.all([
-        fetchSafe(apiClient, '/stories?sort=updated'),
-        fetchSafe(apiClient, '/stories?sort=views'),
-        fetchSafe(apiClient, '/stories?sort=rating'),
-        fetchSafe(apiClient, '/stories?sort=chapters'),
-        fetchSafe(apiClient, '/categories')
+      const [homeData, categoryData] = await Promise.all([
+        fetchSafe(apiClient, '/home'),
+        fetchSafe(apiClient, '/categories?limit=30')
       ]);
       if (!alive) return;
       const apiStories = uniqueStories([
-        ...(updated?.stories || []),
-        ...(views?.stories || []),
-        ...(rating?.stories || []),
-        ...(chapters?.stories || [])
+        ...(homeData?.updatedStories || []),
+        ...(homeData?.popularStories || []),
+        ...(homeData?.featuredStories || []),
+        ...(homeData?.recommendedStories || []),
+        ...(homeData?.completedStories || [])
       ]);
       const sourceStories = apiStories.length ? apiStories : isDev ? uniqueStories(mockStories) : [];
       const nextCategories = (categoryData?.categories || []).map(repairText);
       setStories(sourceStories);
       setCategories(nextCategories.length ? nextCategories : categoriesFromStories(sourceStories));
-        setError(apiStories.length || isDev ? '' : LOAD_ERROR_MESSAGE);
+      setError(apiStories.length || isDev ? '' : LOAD_ERROR_MESSAGE);
       setLoading(false);
     }
     load();
@@ -293,26 +298,39 @@ export function SearchPage({ apiClient, presetFilters = {} }) {
   }, [apiClient, retryCount]);
 
   const filteredStories = useMemo(() => {
-    return stories.filter(story => storyMatchesFilters(story, filters)).sort(scoreSort(filters));
-  }, [stories, filters]);
-
-  const quickResults = useMemo(() => {
-    const text = normalizeForSearch(draftQ);
-    if (!text) return [];
-    return stories
-      .filter(story => normalizeForSearch([story.title, story.author, ...(story.categories || []), ...(story.tags || [])].join(' ')).includes(text))
-      .slice(0, 5);
-  }, [stories, draftQ]);
+    const shortStories = stories.filter(story => {
+      const chapters = getChapterCount(story);
+      return chapters > 0 && chapters <= 100;
+    });
+    const sourceStories = shortOnly
+      ? (shortStories.length >= 6 ? shortStories : stories.slice().sort((a, b) => getChapterCount(a) - getChapterCount(b)))
+      : stories;
+    return sourceStories.filter(story => storyMatchesFilters(story, filters)).sort(scoreSort(filters));
+  }, [stories, filters, shortOnly]);
 
   const popularTags = useMemo(() => {
-    return Array.from(new Set(stories.flatMap(story => [...(story.tags || []), ...(story.categories || [])]).filter(Boolean))).slice(0, 12);
+    const fromStories = Array.from(new Set(stories.flatMap(story => [...(story.tags || []), ...(story.categories || [])]).filter(Boolean))).slice(0, 12);
+    return fromStories.length ? fromStories : mockPopularSearches.map(repairText).slice(0, 6);
   }, [stories]);
 
   function pushFilters(nextFilters) {
     const normalized = { ...defaultFilters, ...nextFilters };
     setFilters(normalized);
-    const paramsToPush = toSearchParams(normalized);
-    const nextUrl = `/danh-sach${paramsToPush.toString() ? `?${paramsToPush.toString()}` : ''}`;
+    const paramsToPush = toSearchParams(normalized, pageDefaults);
+    let nextPath = basePath || '/danh-sach';
+
+    if (routeCategory) {
+      if (!normalized.category) {
+        nextPath = '/danh-sach';
+      } else if (normalizeForSearch(normalized.category) !== normalizeForSearch(routeCategory)) {
+        nextPath = `/the-loai/${encodeURIComponent(normalized.category)}`;
+      } else {
+        nextPath = `/the-loai/${encodeURIComponent(routeCategory)}`;
+        paramsToPush.delete('category');
+      }
+    }
+
+    const nextUrl = `${nextPath}${paramsToPush.toString() ? `?${paramsToPush.toString()}` : ''}`;
     navigate(nextUrl);
   }
 
@@ -323,7 +341,7 @@ export function SearchPage({ apiClient, presetFilters = {} }) {
   function submitSearch(event) {
     event.preventDefault();
     saveRecent(draftQ);
-    updateFilters({ q: draftQ });
+    updateFilters({ q: draftQ.trim() });
   }
 
   function useSuggestion(value) {
@@ -334,148 +352,139 @@ export function SearchPage({ apiClient, presetFilters = {} }) {
 
   function resetFilters() {
     setDraftQ('');
-    setFilters(defaultFilters);
-    navigate('/danh-sach');
+    setFilters(pageDefaults);
+    navigate(basePath || '/danh-sach');
   }
 
-  const hasActiveFilters = Object.entries(filters).some(([key, value]) => value && value !== defaultFilters[key]);
-  const title = filters.category ? `Thể loại ${filters.category}` : filters.q ? `Tìm kiếm “${filters.q}”` : 'Tìm kiếm truyện';
+  const hasActiveFilters = Object.entries(filters).some(([key, value]) => value && value !== pageDefaults[key]);
+  const title = heroTitle || pageTitle || (filters.category ? `Thể loại ${filters.category}` : filters.q ? `Tìm kiếm "${filters.q}"` : 'Tìm Kiếm Truyện');
+  const heroTags = [...new Set([...popularTags.slice(0, 4), ...recent.slice(0, 2)])].slice(0, 5);
 
   return (
     <div className="sr-page">
       <section className="sr-hero">
-        <div>
-          <span>Search</span>
-          <h1>{title}</h1>
-          <p>Tìm theo tên truyện, tác giả, thể loại hoặc tag. Bộ lọc được lưu vào URL để bạn chia sẻ lại kết quả.</p>
-        </div>
+        <h1>{title}</h1>
         <form className="sr-search-main" onSubmit={submitSearch}>
           <label>
-            <span>⌕</span>
-            <input value={draftQ} onChange={event => setDraftQ(event.target.value)} placeholder="Nhập tên truyện, tác giả, thể loại, tag..." />
+            <Majesticon name="search" size={18} />
+            <input value={draftQ} onChange={event => setDraftQ(event.target.value)} placeholder="Tìm theo tên truyện, tác giả, thể loại..." />
           </label>
-          <button type="submit">Tìm kiếm</button>
         </form>
-        {quickResults.length > 0 && (
-          <div className="sr-quick-results">
-            <strong>Kết quả nhanh</strong>
-            {quickResults.map(story => (
-              <Link key={story.id || story.slug} to={`/truyen/${story.slug}`}>
-                <img src={story.cover || coverFallback} alt={story.title} decoding="async" loading="lazy" onError={handleImageError} />
-                <span>{story.title}<small>{story.author}</small></span>
-              </Link>
-            ))}
+        {heroTags.length > 0 && (
+          <div className="sr-hero-tags" aria-label="Gợi ý tìm kiếm">
+            {heroTags.map(tag => <button type="button" key={tag} onClick={() => useSuggestion(tag)}>↻ {tag}</button>)}
           </div>
         )}
       </section>
 
-      <div className="sr-suggestion-row">
-        <SuggestionGroup title="Tìm kiếm gần đây" items={recent} onSelect={useSuggestion} empty="Chưa có lịch sử tìm kiếm." action={recent.length ? <button type="button" onClick={clearRecent}>Xóa</button> : null} />
-        <SuggestionGroup title="Gợi ý phổ biến" items={isDev ? mockPopularSearches : []} onSelect={useSuggestion} />
+      <div className="sr-browse-layout">
+        <AdvancedFilters
+          filters={filters}
+          categories={categories}
+          tags={popularTags}
+          updateFilters={updateFilters}
+          resetFilters={resetFilters}
+          hasActiveFilters={hasActiveFilters}
+          recent={recent}
+          clearRecent={clearRecent}
+          useSuggestion={useSuggestion}
+        />
+
+        <SearchResults
+          stories={filteredStories}
+          loading={loading}
+          error={error}
+          filters={filters}
+          resetFilters={resetFilters}
+          onRetry={() => setRetryCount(count => count + 1)}
+          updateFilters={updateFilters}
+          resultLabel={shortOnly ? 'truyện ngắn' : 'truyện'}
+        />
       </div>
-
-      <AdvancedFilters
-        filters={filters}
-        categories={categories}
-        tags={popularTags}
-        updateFilters={updateFilters}
-        resetFilters={resetFilters}
-        hasActiveFilters={hasActiveFilters}
-      />
-
-      <SearchResults
-        stories={filteredStories}
-        loading={loading}
-        error={error}
-        filters={filters}
-        resetFilters={resetFilters}
-        onRetry={() => setRetryCount(count => count + 1)}
-      />
     </div>
   );
 }
 
-function SuggestionGroup({ title, items, onSelect, empty, action }) {
+export function AdvancedFilters({ filters, categories, tags, updateFilters, resetFilters, hasActiveFilters, recent, clearRecent, useSuggestion }) {
   return (
-    <section className="sr-suggestion-card">
-      <div>
-        <strong>{title}</strong>
-        {action}
-      </div>
-      {items.length ? (
-        <p>
-          {items.map(item => <button type="button" key={item} onClick={() => onSelect(item)}>{item}</button>)}
-        </p>
-      ) : (
-        <em>{empty}</em>
-      )}
-    </section>
-  );
-}
-
-export function AdvancedFilters({ filters, categories, tags, updateFilters, resetFilters, hasActiveFilters }) {
-  return (
-    <section className="sr-filter-panel">
+    <aside className="sr-filter-panel" aria-label="Bộ lọc tìm kiếm">
       <div className="sr-filter-head">
-        <div>
-          <span>Filters</span>
-          <h2>Bộ lọc nâng cao</h2>
-        </div>
-        <div>
-          <SortSelect value={filters.sort} onChange={value => updateFilters({ sort: value })} />
-          <button type="button" disabled={!hasActiveFilters} onClick={resetFilters}>Reset bộ lọc</button>
-        </div>
+        <h2>Bộ Lọc</h2>
+        <button type="button" disabled={!hasActiveFilters} onClick={resetFilters}>Xóa lọc</button>
       </div>
-      <FilterSidebar filters={filters} categories={categories} tags={tags} updateFilters={updateFilters} />
-    </section>
+
+      <FilterChipGroup
+        title="Thể Loại"
+        options={[{ value: '', label: 'Tất cả' }, ...categories.slice(0, 13).map(category => ({ value: category, label: category }))]}
+        value={filters.category}
+        onChange={value => updateFilters({ category: value })}
+      />
+
+      <FilterRadioGroup title="Trạng Thái" name="status" options={statusOptions} value={filters.status} onChange={value => updateFilters({ status: value })} />
+      <FilterRadioGroup title="Số Chương" name="chapters" options={chapterOptions} value={filters.chapterRange} onChange={value => updateFilters({ chapterRange: value })} />
+      <FilterRadioGroup title="Đánh Giá" name="rating" options={ratingOptions} value={filters.rating} onChange={value => updateFilters({ rating: value })} />
+
+      {tags.length > 0 && (
+        <div className="sr-filter-block">
+          <h3>Gợi Ý</h3>
+          <div className="sr-tag-cloud">
+            {tags.slice(0, 8).map(tag => <button type="button" key={tag} onClick={() => updateFilters({ tag })}>{tag}</button>)}
+          </div>
+        </div>
+      )}
+
+      {recent.length > 0 && (
+        <div className="sr-filter-block">
+          <div className="sr-filter-inline-head">
+            <h3>Gần Đây</h3>
+            <button type="button" onClick={clearRecent}>Xóa</button>
+          </div>
+          <div className="sr-tag-cloud">
+            {recent.slice(0, 4).map(item => <button type="button" key={item} onClick={() => useSuggestion(item)}>{item}</button>)}
+          </div>
+        </div>
+      )}
+    </aside>
   );
 }
 
-export function FilterSidebar({ filters, categories, tags, updateFilters }) {
+function FilterChipGroup({ title, options, value, onChange }) {
   return (
-    <div className="sr-filter-grid">
-      <label>
-        <span>Thể loại</span>
-        <select value={filters.category} onChange={event => updateFilters({ category: event.target.value })}>
-          <option value="">Tất cả thể loại</option>
-          {categories.map(category => <option key={category} value={category}>{category}</option>)}
-        </select>
-      </label>
-      <label>
-        <span>Trạng thái</span>
-        <select value={filters.status} onChange={event => updateFilters({ status: event.target.value })}>
-          {statusOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-        </select>
-      </label>
-      <label>
-        <span>Số chương</span>
-        <select value={filters.chapterRange} onChange={event => updateFilters({ chapterRange: event.target.value })}>
-          {chapterOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-        </select>
-      </label>
-      <label>
-        <span>Đánh giá</span>
-        <select value={filters.rating} onChange={event => updateFilters({ rating: event.target.value })}>
-          {ratingOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-        </select>
-      </label>
-      <label>
-        <span>Lượt xem</span>
-        <select value={filters.views} onChange={event => updateFilters({ views: event.target.value })}>
-          {viewOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-        </select>
-      </label>
-      <label>
-        <span>Miễn phí/VIP</span>
-        <select value={filters.premium} onChange={event => updateFilters({ premium: event.target.value })}>
-          {premiumOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-        </select>
-      </label>
-      <label>
-        <span>Tag</span>
-        <input value={filters.tag} onChange={event => updateFilters({ tag: event.target.value })} placeholder="VD: tu tiên, chữa lành..." list="sr-tag-options" />
-        <datalist id="sr-tag-options">{tags.map(tag => <option key={tag} value={tag} />)}</datalist>
-      </label>
+    <div className="sr-filter-block">
+      <h3>{title}</h3>
+      <div className="sr-category-chips">
+        {options.map(option => (
+          <button
+            type="button"
+            key={option.value || 'all'}
+            className={value === option.value ? 'active' : ''}
+            onClick={() => onChange(option.value)}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function FilterRadioGroup({ title, name, options, value, onChange }) {
+  return (
+    <div className="sr-filter-block">
+      <h3>{title}</h3>
+      <div className="sr-radio-list">
+        {options.map(option => (
+          <label key={option.value || 'all'}>
+            <input
+              type="radio"
+              name={`sr-${name}`}
+              checked={value === option.value}
+              onChange={() => onChange(option.value)}
+            />
+            <span>{option.label}</span>
+          </label>
+        ))}
+      </div>
     </div>
   );
 }
@@ -491,12 +500,14 @@ export function SortSelect({ value, onChange }) {
   );
 }
 
-export function SearchResults({ stories, loading, error, filters, resetFilters, onRetry }) {
+export function SearchResults({ stories, loading, error, filters, resetFilters, onRetry, updateFilters, resultLabel = 'truyện' }) {
   if (loading) {
     return (
       <section className="sr-results">
-        <div className="sr-results-head"><h2>Đang tải kết quả</h2></div>
-        <div className="sr-result-skeleton">{Array.from({ length: 8 }).map((_, index) => <span key={index} />)}</div>
+        <div className="sr-results-head">
+          <p>Đang tải kết quả</p>
+        </div>
+        <div className="sr-result-skeleton">{Array.from({ length: 10 }).map((_, index) => <span key={index} />)}</div>
       </section>
     );
   }
@@ -505,12 +516,13 @@ export function SearchResults({ stories, loading, error, filters, resetFilters, 
     <section className="sr-results">
       <div className="sr-results-head">
         <div>
-            <span>{error ? 'Lỗi tải dữ liệu' : 'Results'}</span>
-          <h2>{formatNumber(stories.length)} truyện phù hợp</h2>
-          {error && <p>{error}</p>}
-          {error && <button type="button" onClick={onRetry}>Thử lại</button>}
+          <p>{error ? 'Lỗi tải dữ liệu' : <>Tìm thấy <strong>{formatNumber(stories.length)}</strong> {resultLabel}</>}</p>
+          {error && <span>{error}</span>}
         </div>
+        <SortSelect value={filters.sort} onChange={value => updateFilters({ sort: value })} />
       </div>
+
+      {error && <button className="sr-retry-button" type="button" onClick={onRetry}>Thử lại</button>}
 
       {stories.length === 0 ? (
         <div className="sr-empty-state">
@@ -520,37 +532,40 @@ export function SearchResults({ stories, loading, error, filters, resetFilters, 
         </div>
       ) : (
         <div className="sr-result-list">
-          {stories.map(story => <SearchResultCard key={story.id || story.slug} story={story} activeQuery={filters.q} />)}
+          {stories.map((story, index) => <SearchResultCard key={story.id || story.slug} story={story} index={index} />)}
         </div>
       )}
     </section>
   );
 }
 
-function SearchResultCard({ story }) {
-  const statusLabel = story.status === 'completed' ? 'Hoàn thành' : story.status === 'paused' ? 'Tạm dừng' : 'Đang ra';
+function SearchResultCard({ story, index }) {
+  const categories = story.categories || [];
+  const isCompleted = story.status === 'completed';
+  const isNew = index > 5 && new Date(story.createdAt || 0) > Date.now() - 1000 * 60 * 60 * 24 * 45;
+  const showHot = Number(story.views || 0) >= 400000 || Number(story.rating || 0) >= 4.8;
+
   return (
     <article className="sr-result-card">
-      <Link to={`/truyen/${story.slug}`} className="sr-result-cover">
-              <img src={story.cover || coverFallback} alt={story.title} decoding="async" loading="lazy" onError={handleImageError} />
-        {story.premium && <b>VIP</b>}
+      <Link to={`/truyen/${story.slug}`} className="sr-result-cover" aria-label={story.title}>
+        <img src={story.cover || coverFallback} alt={story.title} decoding="async" loading="lazy" onError={handleImageError} />
+        <div className="sr-badge-stack">
+          {showHot && <b className="hot">HOT</b>}
+          {isCompleted && <b className="full">FULL</b>}
+          {isNew && <b className="new">MỚI</b>}
+          {story.premium && <b className="vip">VIP</b>}
+        </div>
+        <span className="sr-favorite" aria-label="Yêu thích"><Majesticon name="heart" size={18} /></span>
+        <div className="sr-cover-meta">
+          <span><Majesticon name="star" size={16} /> {story.rating || 4.5}</span>
+          <span>◉ {compactNumber(story.views)}</span>
+        </div>
       </Link>
       <div className="sr-result-copy">
-        <div className="sr-result-title">
-          <Link to={`/truyen/${story.slug}`}><h3>{story.title}</h3></Link>
-          <button type="button" aria-label="Yêu thích">♡</button>
-        </div>
-        <p className="sr-result-author">Tác giả: {story.author}</p>
-        <p className="sr-result-desc">{story.description}</p>
+        <Link to={`/truyen/${story.slug}`} className="sr-result-title"><h3>{story.title}</h3></Link>
+        <p className="sr-result-author">{story.author}</p>
         <div className="sr-result-tags">
-          {(story.categories || []).slice(0, 5).map(category => <Link key={category} to={`/the-loai/${encodeURIComponent(category)}`}>{category}</Link>)}
-        </div>
-        <div className="sr-result-meta">
-          <span>★ {story.rating || 4.5}</span>
-          <span>{formatNumber(getChapterCount(story))} chương</span>
-          <span>{formatNumber(story.views)} lượt xem</span>
-          <span>{statusLabel}</span>
-          <span>Cập nhật {formatDate(story.updatedAt)}</span>
+          {categories.slice(0, 2).map(category => <Link key={category} to={`/the-loai/${encodeURIComponent(category)}`}>{category}</Link>)}
         </div>
       </div>
     </article>

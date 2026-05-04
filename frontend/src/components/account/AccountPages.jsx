@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { mockStories } from '../../data/mockStories';
+import { Majesticon } from '../shared/Majesticon.jsx';
 
 const coverFallback = '/images/cover-1.jpg';
 
@@ -733,13 +734,7 @@ function SettingsMessage({ state }) {
 }
 
 function EyeIcon({ visible }) {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <path d="M2.4 12s3.4-6 9.6-6 9.6 6 9.6 6-3.4 6-9.6 6-9.6-6-9.6-6Z" />
-      <circle cx="12" cy="12" r="3" />
-      {visible ? null : <path d="M4 4l16 16" />}
-    </svg>
-  );
+  return <Majesticon name={visible ? 'eye' : 'eyeOff'} size={22} />;
 }
 
 function PasswordField({ label, value, onChange, autoComplete, visible, onToggle }) {

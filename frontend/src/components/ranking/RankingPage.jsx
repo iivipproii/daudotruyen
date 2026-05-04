@@ -1,8 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { mockStories } from '../../data/mockStories';
+import { Majesticon } from '../shared/Majesticon.jsx';
+
 const isDev = import.meta.env.DEV;
 const LOAD_ERROR_MESSAGE = 'Không tải được dữ liệu từ máy chủ. Vui lòng thử lại.';
+const coverFallback = '/images/cover-1.jpg';
 
 const periodOptions = [
   { value: 'day', label: 'Ngày' },
@@ -20,47 +23,12 @@ const metricOptions = [
   { value: 'revenue', label: 'Doanh thu' }
 ];
 
-const coverFallback = '/images/cover-1.jpg';
-
-const cp1252Map = {
-  '€': 0x80,
-  '‚': 0x82,
-  'ƒ': 0x83,
-  '„': 0x84,
-  '…': 0x85,
-  '†': 0x86,
-  '‡': 0x87,
-  'ˆ': 0x88,
-  '‰': 0x89,
-  'Š': 0x8a,
-  '‹': 0x8b,
-  'Œ': 0x8c,
-  'Ž': 0x8e,
-  '‘': 0x91,
-  '’': 0x92,
-  '“': 0x93,
-  '”': 0x94,
-  '•': 0x95,
-  '–': 0x96,
-  '—': 0x97,
-  '˜': 0x98,
-  '™': 0x99,
-  'š': 0x9a,
-  '›': 0x9b,
-  'œ': 0x9c,
-  'ž': 0x9e,
-  'Ÿ': 0x9f
-};
-
 function repairText(value) {
   if (typeof value !== 'string') return value;
   if (!/(Ã|Ä|Â|Æ|áº|á»|â)/.test(value)) return value;
   try {
-    const bytes = Array.from(value, char => {
-      const code = char.charCodeAt(0);
-      if (code <= 255) return code;
-      return cp1252Map[char] || code;
-    });
+    const bytes = Array.from(value, char => char.charCodeAt(0)).filter(code => code <= 255);
+    if (!bytes.length) return value;
     return new TextDecoder('utf-8', { fatal: false }).decode(new Uint8Array(bytes));
   } catch {
     return value;
@@ -70,9 +38,8 @@ function repairText(value) {
 function normalizeStory(story = {}) {
   return {
     ...story,
-    title: repairText(story.title),
-    author: repairText(story.author),
-    description: repairText(story.description),
+    title: repairText(story.title) || 'Truyện chưa đặt tên',
+    author: repairText(story.author) || 'Đang cập nhật',
     categories: Array.isArray(story.categories) ? story.categories.map(repairText) : [],
     tags: Array.isArray(story.tags) ? story.tags.map(repairText) : []
   };
@@ -80,6 +47,14 @@ function normalizeStory(story = {}) {
 
 function formatNumber(value = 0) {
   return Number(value || 0).toLocaleString('vi-VN');
+}
+
+function compactNumber(value = 0) {
+  const number = Number(value || 0);
+  if (number >= 1000000000) return `${(number / 1000000000).toFixed(1)}B`;
+  if (number >= 1000000) return `${(number / 1000000).toFixed(1)}M`;
+  if (number >= 1000) return `${(number / 1000).toFixed(1)}K`;
+  return formatNumber(number);
 }
 
 function metricLabel(metric) {
@@ -103,6 +78,7 @@ function fallbackRankingStories(metric) {
         comments: 0,
         revenue: 0
       }[metric] ?? Number(normalized.views || 0);
+
       return {
         ...normalized,
         rankScore,
@@ -129,6 +105,7 @@ export function RankingPage({ apiClient }) {
 
   useEffect(() => {
     let alive = true;
+
     async function load() {
       setLoading(true);
       setError('');
@@ -138,7 +115,6 @@ export function RankingPage({ apiClient }) {
         if (!alive) return;
         const apiStories = Array.isArray(data?.stories) ? data.stories.map(normalizeStory) : [];
         setStories(apiStories.length ? apiStories : isDev ? fallbackRankingStories(metric) : []);
-        setError('');
       } catch (err) {
         if (!alive) return;
         console.error('[API_ERROR]', {
@@ -151,6 +127,7 @@ export function RankingPage({ apiClient }) {
         if (alive) setLoading(false);
       }
     }
+
     load();
     return () => {
       alive = false;
@@ -163,29 +140,47 @@ export function RankingPage({ apiClient }) {
     setSearchParams(next);
   }
 
+  const activePeriod = periodOptions.find(option => option.value === period)?.label || 'Toàn thời gian';
+  const totalViews = stories.reduce((sum, story) => sum + Number(story.views || story.rankScore || 0), 0);
+
   return (
     <div className="rk-page">
       <section className="rk-hero">
         <div>
-          <span>Ranking</span>
-          <h1>Bảng xếp hạng truyện</h1>
-          <p>Theo dõi top truyện theo lượt xem, yêu thích, đánh giá, bình luận và doanh thu. Bộ lọc được lưu vào URL.</p>
+          <span>Bảng xếp hạng</span>
+          <h1>Top truyện nổi bật</h1>
+          <p>Cập nhật các truyện đang dẫn đầu theo lượt xem, yêu thích, đánh giá và tương tác cộng đồng.</p>
         </div>
-        <div className="rk-filter-bar">
-          <SegmentedControl label="Khoảng thời gian" options={periodOptions} value={period} onChange={value => updateQuery({ period: value })} />
-          <SegmentedControl label="Chỉ số" options={metricOptions} value={metric} onChange={value => updateQuery({ metric: value })} />
+        <div className="rk-hero-stats" aria-label="Thống kê bảng xếp hạng">
+          <span><strong>{formatNumber(stories.length)}</strong> truyện</span>
+          <span><strong>{compactNumber(totalViews)}</strong> lượt đọc</span>
+          <span><strong>{activePeriod}</strong> chu kỳ</span>
         </div>
       </section>
 
-      {loading ? (
-        <RankingLoading />
-      ) : (
-        <>
-          {error && <div className="rk-warning">{error}<button type="button" onClick={() => setRetryCount(count => count + 1)}>Thử lại</button></div>}
-          {!error && <RankingPodium stories={stories.slice(0, 3)} metric={metric} />}
-          {!error && <RankingTable stories={stories} metric={metric} period={period} />}
-        </>
-      )}
+      <div className="rk-browse-layout">
+        <aside className="rk-sidebar" aria-label="Bộ lọc bảng xếp hạng">
+          <SegmentedControl label="Khoảng thời gian" options={periodOptions} value={period} onChange={value => updateQuery({ period: value })} />
+          <SegmentedControl label="Chỉ số xếp hạng" options={metricOptions} value={metric} onChange={value => updateQuery({ metric: value })} />
+        </aside>
+
+        <main className="rk-results">
+          {loading ? (
+            <RankingLoading />
+          ) : (
+            <>
+              {error && (
+                <div className="rk-warning">
+                  <span>{error}</span>
+                  <button type="button" onClick={() => setRetryCount(count => count + 1)}>Thử lại</button>
+                </div>
+              )}
+              <RankingTopThree stories={stories.slice(0, 3)} metric={metric} />
+              <RankingTable stories={stories} metric={metric} period={period} />
+            </>
+          )}
+        </main>
+      </div>
     </div>
   );
 }
@@ -213,36 +208,36 @@ function SegmentedControl({ label, options, value, onChange }) {
 function RankingLoading() {
   return (
     <div className="rk-loading">
-      <div className="rk-podium-skeleton">{Array.from({ length: 3 }).map((_, index) => <span key={index} />)}</div>
+      <div className="rk-top-skeleton">{Array.from({ length: 3 }).map((_, index) => <span key={index} />)}</div>
       <div className="rk-table-skeleton">{Array.from({ length: 8 }).map((_, index) => <span key={index} />)}</div>
     </div>
   );
 }
 
-export function RankingPodium({ stories, metric }) {
-  if (!stories.length) {
-    return <div className="rk-empty">Chưa có dữ liệu xếp hạng.</div>;
-  }
+export function RankingTopThree({ stories, metric }) {
+  if (!stories.length) return null;
 
   const arranged = [stories[1], stories[0], stories[2]].filter(Boolean);
 
   return (
-    <section className="rk-podium">
+    <section className="rk-top-three" aria-label="Top 3 truyện nổi bật">
       {arranged.map(story => {
-        const actualRank = stories.findIndex(item => item.id === story.id) + 1;
-        return (
-          <Link key={story.id || story.slug} to={`/truyen/${story.slug}`} className={`rk-podium-card rank-${actualRank}`}>
-            <b>#{actualRank}</b>
-                <img src={story.cover || coverFallback} alt={story.title} decoding="async" loading="lazy" onError={handleImageError} />
-            <span>
-              <strong>{story.title}</strong>
-              <small>{story.author}</small>
-            </span>
-            <em>{formatMetric(story.rankScore, metric)}</em>
-          </Link>
-        );
+        const rank = stories.findIndex(item => (item.id || item.slug) === (story.id || story.slug)) + 1;
+        return <RankingTopCard key={story.id || story.slug || rank} story={story} rank={rank || 1} metric={metric} />;
       })}
     </section>
+  );
+}
+
+function RankingTopCard({ story, rank, metric }) {
+  return (
+    <Link to={`/truyen/${story.slug}`} className={`rk-top-card rank-${rank}`}>
+      <span className="rk-top-rank">#{rank}</span>
+      <img className="rk-top-cover" src={story.cover || coverFallback} alt={story.title} decoding="async" loading="lazy" onError={handleImageError} />
+      <strong>{story.title}</strong>
+      <small>{story.author}</small>
+      <em className="rk-top-score">{formatMetric(story.rankScore, metric)}</em>
+    </Link>
   );
 }
 
@@ -256,44 +251,56 @@ export function RankingTable({ stories, metric, period }) {
       <div className="rk-table-head">
         <div>
           <span>Top 100</span>
-          <h2>Xếp hạng theo {metricLabel(metric).toLowerCase()}</h2>
+          <h2>Bảng Xếp Hạng Đầy Đủ</h2>
         </div>
-        <p>{periodOptions.find(option => option.value === period)?.label || 'Toàn thời gian'}</p>
+        <p>{metricLabel(metric)} · {periodOptions.find(option => option.value === period)?.label || 'Toàn thời gian'}</p>
       </div>
-      <div className="rk-table" role="table" aria-label="Bảng top 100 truyện">
-        <div className="rk-table-row header" role="row">
-          <span>Hạng</span>
-          <span>Truyện</span>
-          <span>Tác giả</span>
-          <span>Chỉ số</span>
-          <span>Thay đổi</span>
-        </div>
+      <div className="rk-table" role="list" aria-label="Bảng top 100 truyện">
         {stories.map((story, index) => (
-          <Link key={story.id || story.slug} to={`/truyen/${story.slug}`} className="rk-table-row" role="row">
-            <span className="rk-rank">#{index + 1}</span>
-            <span className="rk-story-cell">
-              <img src={story.cover || coverFallback} alt={story.title} decoding="async" loading="lazy" onError={handleImageError} />
-              <strong>{story.title}</strong>
-            </span>
-            <span>{story.author}</span>
-            <span>{formatMetric(story.rankScore, metric)}</span>
-            <RankDelta value={story.rankDelta} />
-          </Link>
+          <RankingRow key={story.id || story.slug || index} story={story} index={index} metric={metric} />
         ))}
       </div>
     </section>
   );
 }
 
-function RankDelta({ value }) {
-  if (value > 0) return <span className="rk-delta up">▲ {value}</span>;
-  if (value < 0) return <span className="rk-delta down">▼ {Math.abs(value)}</span>;
-  return <span className="rk-delta same">● 0</span>;
+function RankingRow({ story, index, metric }) {
+  const rank = index + 1;
+  const categories = [...(story.categories || []), ...(story.tags || [])].filter(Boolean).slice(0, 2);
+  const status = getStatusLabel(story);
+  const rating = Number(story.rating || 0);
+
+  return (
+    <Link to={`/truyen/${story.slug}`} className="rk-table-row" role="listitem">
+      <span className={`rk-rank ${rank <= 3 ? `top-${rank}` : ''}`} aria-label={`Hạng ${rank}`}>
+        {rank <= 3 ? <span aria-hidden="true">♛</span> : rank}
+      </span>
+      <img className="rk-row-cover" src={story.cover || coverFallback} alt={story.title} decoding="async" loading="lazy" onError={handleImageError} />
+      <span className="rk-story-info">
+        <strong>{story.title}</strong>
+        <small>{story.author}</small>
+        <span className="rk-tags">
+          {categories.map(category => <em key={category}>{category}</em>)}
+        </span>
+      </span>
+      <span className="rk-row-stats">
+        <strong><span aria-hidden="true">⊙</span> {formatMetric(story.rankScore, metric)}</strong>
+        <small><Majesticon name="star" size={15} /> {rating ? rating.toFixed(1).replace(/\.0$/, '') : '0'}</small>
+        <em className={status === 'Full' ? 'full' : ''}>{status}</em>
+      </span>
+    </Link>
+  );
+}
+
+function getStatusLabel(story) {
+  const rawStatus = String(story.status || '').toLowerCase();
+  if (story.completed || rawStatus.includes('complete') || rawStatus.includes('full') || rawStatus.includes('hoàn')) return 'Full';
+  return 'Đang ra';
 }
 
 function formatMetric(value, metric) {
-  if (metric === 'rating') return `${Number(value || 0).toFixed(1)} ${metricSuffix(metric)}`;
-  return `${formatNumber(value)}${metricSuffix(metric) ? ` ${metricSuffix(metric)}` : ''}`;
+  if (metric === 'rating') return `${Number(value || 0).toFixed(1).replace(/\.0$/, '')}`;
+  return `${compactNumber(value)}${metricSuffix(metric) ? ` ${metricSuffix(metric)}` : ''}`;
 }
 
 function handleImageError(event) {
