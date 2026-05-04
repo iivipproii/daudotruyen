@@ -395,6 +395,7 @@ export function ProductionHeader({ user, logout, theme = 'light', toggleTheme, a
             panelId={searchPanelId}
             stories={stories}
             categories={categories}
+            apiClient={apiClient}
             navigate={navigate}
             closeAll={closeAll}
           />
@@ -457,9 +458,12 @@ export function MegaMenu({ id, categories, onSelect, closeAll }) {
   );
 }
 
-export function SearchCommand({ open, setOpen, onFocus, panelId, stories, categories, navigate, closeAll }) {
+export function SearchCommand({ open, setOpen, onFocus, panelId, stories, categories, apiClient, navigate, closeAll }) {
   const [keyword, setKeyword] = useState('');
-  const mobileInputRef = useRef(null);
+  const panelInputRef = useRef(null);
+  const [remoteStories, setRemoteStories] = useState([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchFailed, setSearchFailed] = useState(false);
   const [history, setHistory] = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem('daudo_search_history') || '[]');
@@ -471,23 +475,52 @@ export function SearchCommand({ open, setOpen, onFocus, panelId, stories, catego
 
   useEffect(() => {
     if (!open) return;
-    const shouldFocusMobileInput = window.matchMedia('(max-width: 768px)').matches;
-    if (shouldFocusMobileInput) {
-      window.requestAnimationFrame(() => mobileInputRef.current?.focus());
-    }
+    window.requestAnimationFrame(() => panelInputRef.current?.focus());
   }, [open]);
 
   const searchText = normalizeForSearch(keyword.trim());
-  const quickStories = useMemo(() => {
+  const localQuickStories = useMemo(() => {
     const source = searchText
       ? stories.filter(story => normalizeForSearch([story.title, story.author, story.description, ...(story.categories || [])].join(' ')).includes(searchText))
       : stories;
     return source.slice(0, 5);
   }, [stories, searchText]);
+  const quickStories = searchText && !searchFailed ? remoteStories : localQuickStories;
   const quickCategories = useMemo(() => {
     const source = searchText ? categories.filter(category => normalizeForSearch(category).includes(searchText)) : categories;
     return source.slice(0, 8);
   }, [categories, searchText]);
+
+  useEffect(() => {
+    const text = keyword.trim();
+    if (!text || !apiClient) {
+      setRemoteStories([]);
+      setSearchLoading(false);
+      setSearchFailed(false);
+      return undefined;
+    }
+
+    let alive = true;
+    setSearchLoading(true);
+    setSearchFailed(false);
+    const timer = window.setTimeout(async () => {
+      const data = await fetchSafe(apiClient, `/stories?q=${encodeURIComponent(text)}&sort=updated&limit=5`);
+      if (!alive) return;
+      if (data?.stories) {
+        setRemoteStories(normalizeStories(data.stories));
+        setSearchFailed(false);
+      } else {
+        setRemoteStories([]);
+        setSearchFailed(true);
+      }
+      setSearchLoading(false);
+    }, 220);
+
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+    };
+  }, [apiClient, keyword]);
 
   const saveHistory = value => {
     const text = value.trim();
@@ -554,7 +587,7 @@ export function SearchCommand({ open, setOpen, onFocus, panelId, stories, catego
           <label className="prod-search-panel-input">
             <Majesticon name="search" size={20} />
             <input
-              ref={mobileInputRef}
+              ref={panelInputRef}
               value={keyword}
               onChange={event => setKeyword(event.target.value)}
               onKeyDown={event => {
@@ -567,7 +600,8 @@ export function SearchCommand({ open, setOpen, onFocus, panelId, stories, catego
           {history.length > 0 && <SearchBlock title={'L\u1ecbch s\u1eed t\u00ecm ki\u1ebfm'} items={history} onSelect={goSearch} muted />}
           <div className="prod-search-results">
             <p>{'K\u1ebft qu\u1ea3 nhanh'}</p>
-            {quickStories.map(story => (
+            {searchLoading && <div className="prod-empty-mini">{'\u0110ang t\u00ecm...'}</div>}
+            {!searchLoading && quickStories.map(story => (
               <button type="button" key={story.id} onClick={() => goStory(story)}>
                 <img src={story.cover || coverFallback} alt={story.title} loading="lazy" onError={handleImageError} />
                 <span>
@@ -576,7 +610,7 @@ export function SearchCommand({ open, setOpen, onFocus, panelId, stories, catego
                 </span>
               </button>
             ))}
-            {quickStories.length === 0 && <div className="prod-empty-mini">{'Kh\u00f4ng c\u00f3 truy\u1ec7n ph\u00f9 h\u1ee3p.'}</div>}
+            {!searchLoading && quickStories.length === 0 && <div className="prod-empty-mini">{'Kh\u00f4ng c\u00f3 truy\u1ec7n ph\u00f9 h\u1ee3p.'}</div>}
           </div>
           <div className="prod-search-chips">
             {quickCategories.map(category => (

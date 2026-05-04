@@ -806,6 +806,12 @@ function compactRankingSummary(story) {
 }
 
 function sortStories(items, sort = 'updated') {
+  const updatedTime = story => Math.max(
+    new Date(story.latestChapter?.updatedAt || 0).getTime(),
+    new Date(story.latestChapter?.createdAt || 0).getTime(),
+    new Date(story.updatedAt || 0).getTime(),
+    new Date(story.createdAt || 0).getTime()
+  );
   items.sort((a, b) => {
     if (sort === 'homeTrending') return Number(a.homeTrendingOrder || 9999) - Number(b.homeTrendingOrder || 9999);
     if (sort === 'views') return b.views - a.views;
@@ -815,7 +821,7 @@ function sortStories(items, sort = 'updated') {
     if (sort === 'created' || sort === 'new') {
       return new Date(b.createdAt || b.updatedAt || 0) - new Date(a.createdAt || a.updatedAt || 0);
     }
-    return new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0);
+    return updatedTime(b) - updatedTime(a);
   });
   return items;
 }

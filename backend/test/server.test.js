@@ -141,6 +141,71 @@ test('seed database has enough stories for home sections', () => {
   assert.ok(db.stories.filter(story => story.featured).length >= 6);
 });
 
+test('updated story lists prefer the latest public chapter timestamp', async () => {
+  const db = createSeedDb();
+  const oldStory = {
+    ...db.stories[0],
+    id: 'story_updated_regression_old',
+    slug: 'regression-updated-old',
+    title: 'RegressionUpdated Old Story',
+    hidden: false,
+    approvalStatus: 'approved',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    createdAt: '2026-01-01T00:00:00.000Z'
+  };
+  const chapterFreshStory = {
+    ...db.stories[1],
+    id: 'story_updated_regression_chapter',
+    slug: 'regression-updated-chapter',
+    title: 'RegressionUpdated Chapter Story',
+    hidden: false,
+    approvalStatus: 'approved',
+    updatedAt: '2025-01-01T00:00:00.000Z',
+    createdAt: '2025-01-01T00:00:00.000Z'
+  };
+  db.stories.unshift(oldStory, chapterFreshStory);
+  db.chapters.push(
+    {
+      id: 'chapter_updated_regression_public',
+      storyId: chapterFreshStory.id,
+      number: 1,
+      title: 'Fresh public chapter',
+      content: longChapterContent(),
+      status: 'approved',
+      createdAt: '2030-01-01T00:00:00.000Z',
+      updatedAt: '2030-01-02T00:00:00.000Z'
+    },
+    {
+      id: 'chapter_updated_regression_hidden',
+      storyId: oldStory.id,
+      number: 99,
+      title: 'Hidden future chapter',
+      content: longChapterContent(),
+      status: 'hidden',
+      createdAt: '2031-01-01T00:00:00.000Z',
+      updatedAt: '2031-01-02T00:00:00.000Z'
+    }
+  );
+  resetDataStore(db);
+
+  const list = await request('/api/stories?sort=updated&limit=5&q=RegressionUpdated');
+  assert.equal(list.response.status, 200);
+  assert.equal(list.data.stories[0].id, chapterFreshStory.id);
+  assert.equal(list.data.stories[1].id, oldStory.id);
+
+  const token = await loginToken();
+  const clearHomeCache = await request('/api/admin/home/trending', {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ storyIds: [] })
+  });
+  assert.equal(clearHomeCache.response.status, 200);
+
+  const home = await request('/api/home');
+  assert.equal(home.response.status, 200);
+  assert.equal(home.data.updatedStories[0].id, chapterFreshStory.id);
+});
+
 test('admin home trending updates invalidate home cache and public APIs filter safely', async () => {
   const db = createSeedDb();
   const hiddenTrending = db.stories.find(story => story.id === 's8');
