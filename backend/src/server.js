@@ -1209,12 +1209,16 @@ function romanToNumber(value) {
 }
 
 function parseChapterHeading(line) {
-  const pattern = /^\s*(?:(?:quy\u1ec3n|quyen)\s+([0-9ivxlcdm]+)\s*[-:–—]\s*)?(ch\u01b0\u01a1ng|chuong|chapter|h\u1ed3i|hoi|quy\u1ec3n|quyen|ph\u00f3\s*b\u1ea3n|pho\s*ban)\s+([0-9ivxlcdm]+)(?:\s*[:\-–—]\s*(.+))?\s*$/i;
-  const match = String(line || '').match(pattern);
+  const text = String(line || '').trim();
+  const patterns = [
+    /^\s*(?:(?:quy\u1ec3n|quyen)\s+([0-9ivxlcdm]+)\s*[-:–—]\s*)?(ch\u01b0\u01a1ng|chuong|chapter|h\u1ed3i|hoi|quy\u1ec3n|quyen|ph\u00f3\s*b\u1ea3n|pho\s*ban)\s+([0-9ivxlcdm]+)(?:\s*[:\-–—]\s*(.+))?\s*$/i,
+    /^\s*(ch\u01b0\u01a1ng|chuong|chapter|h\u1ed3i|hoi|quy\u1ec3n|quyen)\s+([0-9ivxlcdm]+)(?:\s*[:\-–—]\s*(.+))?\s*$/i
+  ];
+  const match = patterns.map(pattern => text.match(pattern)).find(Boolean);
   if (!match) return null;
-  const number = romanToNumber(match[3]);
-  const suffix = String(match[4] || '').trim();
-  const heading = String(line || '').trim();
+  const number = romanToNumber(match[3] || match[2]);
+  const suffix = String((match.length >= 5 ? match[4] : match[3]) || '').trim();
+  const heading = text;
   return {
     number,
     title: suffix || heading,
@@ -1259,7 +1263,7 @@ function parseChaptersFromText(text, { startNumber = 1 } = {}) {
     const warnings = [];
     if (!content) warnings.push('Noi dung chuong rong.');
     if (!section.title) warnings.push('Ten chuong rong.');
-    if (wordCount(content) > 0 && wordCount(content) < 80) warnings.push('Chuong hoi ngan.');
+    if (wordCount(content) > 0 && wordCount(content) < 100) warnings.push('Chuong duoi 100 tu.');
     return {
       number,
       title: section.title || `Chuong ${number}`,
@@ -1278,6 +1282,29 @@ function nextChapterNumber(db, storyId) {
 
 function chapterNumberExists(db, storyId, number, currentChapterId) {
   return db.chapters.some(item => item.storyId === storyId && item.id !== currentChapterId && Number(item.number) === Number(number));
+}
+
+function summarizeChapterImport(chapters = []) {
+  const numbers = chapters.map(item => Number(item.number)).filter(Number.isFinite).sort((a, b) => a - b);
+  const seen = new Set();
+  const duplicates = [];
+  numbers.forEach(number => {
+    if (seen.has(number)) duplicates.push(number);
+    seen.add(number);
+  });
+  const missing = [];
+  if (numbers.length > 1) {
+    for (let current = numbers[0]; current <= numbers[numbers.length - 1]; current += 1) {
+      if (!seen.has(current)) missing.push(current);
+    }
+  }
+  return {
+    total: chapters.length,
+    duplicateNumbers: Array.from(new Set(duplicates)),
+    missingNumbers: missing,
+    shortChapters: chapters.filter(item => Number(item.wordCount || 0) > 0 && Number(item.wordCount || 0) < 100).map(item => Number(item.number)),
+    emptyChapters: chapters.filter(item => !String(item.content || '').trim() || !String(item.title || '').trim()).map(item => Number(item.number))
+  };
 }
 
 function chapterAdminSummary(db, chapter) {
@@ -3900,7 +3927,8 @@ async function handle(req, res) {
           type: ext.replace('.', '')
         },
         chapters: parsed.chapters,
-        warnings: parsed.warnings
+        warnings: parsed.warnings,
+        report: summarizeChapterImport(parsed.chapters)
       });
     }
 
@@ -4002,7 +4030,13 @@ async function handle(req, res) {
         skipped,
         errors,
         chapters: createdChapters.map(chapter => authorChapterSummary(db, chapter)),
-        story: authorStorySummary(db, story, user.id)
+        story: authorStorySummary(db, story, user.id),
+        report: {
+          total: incoming.length,
+          created: createdChapters.length,
+          skipped,
+          errors
+        }
       });
     }
 

@@ -13,6 +13,7 @@ import { ADULT_CATEGORY_ITEMS, AUTHOR_CATEGORY_GROUPS } from '../../data/storyCa
 import { Majesticon } from '../shared/Majesticon.jsx';
 
 const coverFallback = '/images/cover-1.jpg';
+const BULK_PREVIEW_PAGE_SIZE = 10;
 
 function formatNumber(value = 0) {
   return Number(value || 0).toLocaleString('vi-VN');
@@ -210,6 +211,72 @@ function textWordCount(value) {
   return String(value || '').trim().split(/\s+/).filter(Boolean).length;
 }
 
+const MIN_CHAPTER_WARNING_WORDS = 100;
+
+function sortUniqueNumbers(values = []) {
+  return [...new Set(values.filter(Number.isFinite))].sort((a, b) => a - b);
+}
+
+function buildChapterAudit(chapters, storyChapters = [], options = {}) {
+  const publishMode = Boolean(options.publishMode);
+  const ordered = [...(chapters || [])].sort((a, b) => Number(a.number) - Number(b.number));
+  const numberCounts = new Map();
+  const existingNumbers = new Set((storyChapters || []).map(chapter => Number(chapter.number)));
+  const duplicates = [];
+  const shortChapters = [];
+  const missingNumbers = [];
+
+  ordered.forEach(chapter => {
+    const number = Number(chapter.number);
+    if (!Number.isFinite(number)) return;
+    const count = (numberCounts.get(number) || 0) + 1;
+    numberCounts.set(number, count);
+    if (count > 1) {
+      duplicates.push(number);
+    }
+    if (existingNumbers.has(number)) {
+      duplicates.push(number);
+    }
+    if ((Number(chapter.wordCount || 0) > 0 && Number(chapter.wordCount || 0) < MIN_CHAPTER_WARNING_WORDS) || (Number(chapter.wordCount || 0) === 0 && String(chapter.content || '').trim())) {
+      shortChapters.push(number);
+    }
+  });
+
+  const numbers = sortUniqueNumbers(ordered.map(item => Number(item.number)));
+  if (numbers.length > 1) {
+    for (let current = numbers[0]; current <= numbers[numbers.length - 1]; current += 1) {
+      if (!numbers.includes(current)) missingNumbers.push(current);
+    }
+  }
+
+  const warnings = [];
+  if (duplicates.length) warnings.push(`Trùng số chương: ${sortUniqueNumbers(duplicates).map(num => `#${num}`).join(', ')}`);
+  if (missingNumbers.length) warnings.push(`Thiếu chương theo thứ tự: ${sortUniqueNumbers(missingNumbers).map(num => `#${num}`).join(', ')}`);
+  if (shortChapters.length) warnings.push(`Có ${sortUniqueNumbers(shortChapters).length} chương dưới ${MIN_CHAPTER_WARNING_WORDS} từ.`);
+  const emptyChapters = ordered.filter(chapter => !String(chapter.content || '').trim() || !String(chapter.title || '').trim()).map(chapter => chapter.number);
+  if (emptyChapters.length) warnings.push(`Có ${emptyChapters.length} chương rỗng hoặc thiếu tiêu đề.`);
+
+  return {
+    warnings,
+    duplicates: sortUniqueNumbers(duplicates),
+    missingNumbers: sortUniqueNumbers(missingNumbers),
+    shortChapters: sortUniqueNumbers(shortChapters),
+    hasBlockingIssues: Boolean(duplicates.length || missingNumbers.length || (publishMode && shortChapters.length)),
+    total: ordered.length
+  };
+}
+
+function buildChapterPricePayload(chapter, price) {
+  const nextPrice = Number(price || 0);
+  const isPremium = nextPrice > 0;
+  return {
+    ...chapter,
+    access: isPremium ? 'vip' : 'free',
+    isPremium,
+    price: nextPrice
+  };
+}
+
 function romanToNumber(value) {
   const input = String(value || '').toUpperCase();
   if (!/^[IVXLCDM]+$/.test(input)) return Number(value) || 0;
@@ -263,7 +330,7 @@ function parseBulkChapterText(text, startNumber = 1) {
     const number = section.number || startNumber + index;
     const warnings = [];
     if (!content) warnings.push('Nội dung chương rỗng.');
-    if (textWordCount(content) > 0 && textWordCount(content) < 80) warnings.push('Chương hơi ngắn.');
+    if (textWordCount(content) > 0 && textWordCount(content) < MIN_CHAPTER_WARNING_WORDS) warnings.push(`Chương dưới ${MIN_CHAPTER_WARNING_WORDS} từ.`);
     return {
       localId: `chapter-${Date.now()}-${index}`,
       number,
@@ -1300,6 +1367,10 @@ function ChapterManagerDashboard({ stories, chapters, apiClient, usingMock, onSa
   const [editing, setEditing] = useState(null);
   const [previewing, setPreviewing] = useState(null);
   const [comboOpen, setComboOpen] = useState(false);
+  const [bulkPriceOpen, setBulkPriceOpen] = useState(false);
+  const [bulkPriceValue, setBulkPriceValue] = useState('');
+  const [bulkPriceConfirm, setBulkPriceConfirm] = useState(false);
+  const [bulkPriceError, setBulkPriceError] = useState('');
   const [deleteRequest, setDeleteRequest] = useState(null);
   const [dragEnabled, setDragEnabled] = useState(false);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
@@ -1335,12 +1406,22 @@ function ChapterManagerDashboard({ stories, chapters, apiClient, usingMock, onSa
       setLoadingRemote(true);
       setRemoteError('');
       try {
-        const params = new URLSearchParams({ storyId: selectedStoryId, page: '1', limit: '500' });
-        if (debouncedQuery) params.set('q', debouncedQuery);
-        if (filter === 'free' || filter === 'vip') params.set('access', filter);
-        else if (filter) params.set('status', filter);
-        const result = await apiClient(`/author/chapters?${params.toString()}`, { noStore: true, signal: controller.signal });
-        setRemoteData(result);
+        const collected = [];
+        let page = 1;
+        let totalPages = 1;
+        let lastResult = null;
+        do {
+          const params = new URLSearchParams({ storyId: selectedStoryId, page: String(page), limit: '100' });
+          if (debouncedQuery) params.set('q', debouncedQuery);
+          if (filter === 'free' || filter === 'vip') params.set('access', filter);
+          else if (filter) params.set('status', filter);
+          lastResult = await apiClient(`/author/chapters?${params.toString()}`, { noStore: true, signal: controller.signal });
+          const chaptersPage = Array.isArray(lastResult?.chapters) ? lastResult.chapters : [];
+          collected.push(...chaptersPage);
+          totalPages = Number(lastResult?.pagination?.totalPages || 1);
+          page += 1;
+        } while (page <= totalPages);
+        setRemoteData(lastResult ? { ...lastResult, chapters: collected } : null);
       } catch (err) {
         if (err.name !== 'AbortError') setRemoteError(err.message || 'Không thể tải danh sách chương.');
       } finally {
@@ -1353,7 +1434,7 @@ function ChapterManagerDashboard({ stories, chapters, apiClient, usingMock, onSa
 
   const selectedStory = stories.find(story => story.id === selectedStoryId);
   const sourceChapters = remoteData?.chapters || chapters;
-  const allStoryChapters = chapters
+  const allStoryChapters = sourceChapters
     .filter(chapter => !selectedStoryId || chapter.storyId === selectedStoryId)
     .sort((a, b) => Number(a.number || 0) - Number(b.number || 0));
   const storyChapters = sourceChapters
@@ -1370,6 +1451,7 @@ function ChapterManagerDashboard({ stories, chapters, apiClient, usingMock, onSa
   const pageStart = filtered.length ? (currentPage - 1) * pageSize : 0;
   const visibleChapters = filtered.slice(pageStart, pageStart + pageSize);
   const allVisibleSelected = visibleChapters.length > 0 && visibleChapters.every(chapter => selectedIds.has(chapter.id));
+  const selectedChapters = storyChapters.filter(chapter => selectedIds.has(chapter.id));
   const stats = remoteData?.stats || {
     total: storyChapters.length,
     free: storyChapters.filter(chapter => chapter.access !== 'vip').length,
@@ -1418,13 +1500,47 @@ function ChapterManagerDashboard({ stories, chapters, apiClient, usingMock, onSa
   }
 
   async function publishSelected() {
-    const selectedChapters = storyChapters.filter(chapter => selectedIds.has(chapter.id));
     if (!selectedChapters.length) return;
     await Promise.all(selectedChapters.map(chapter => onSave({ ...chapter }, 'published')));
     if (selectedStory?.hidden && selectedStory?.approvalStatus === 'approved' && onUpdateStory) {
       await onUpdateStory(selectedStory.id, { hidden: false });
     }
     setSelectedIds(new Set());
+  }
+
+  function openBulkPriceModal() {
+    if (!selectedChapters.length) return;
+    setBulkPriceValue('');
+    setBulkPriceConfirm(false);
+    setBulkPriceError('');
+    setBulkPriceOpen(true);
+  }
+
+  async function applyBulkPrice() {
+    const nextPrice = Number(bulkPriceValue || 0);
+    if (!bulkPriceConfirm) {
+      setBulkPriceError('Vui lòng xác nhận trước khi áp dụng giá.');
+      return;
+    }
+    if (!Number.isFinite(nextPrice) || nextPrice < 0) {
+      setBulkPriceError('Giá Hạt không hợp lệ.');
+      return;
+    }
+    if (!selectedChapters.length) {
+      setBulkPriceError('Chưa có chương nào được chọn.');
+      return;
+    }
+    setBulkPriceOpen(false);
+    setBulkPriceError('');
+    setRemoteError('');
+    try {
+      await Promise.all(selectedChapters.map(chapter => onSave(buildChapterPricePayload(chapter, nextPrice), chapter.status || 'published')));
+      setBulkPriceValue('');
+      setBulkPriceConfirm(false);
+      setSelectedIds(new Set());
+    } catch (err) {
+      setRemoteError(err.message || 'Không thể cập nhật giá chương.');
+    }
   }
 
   async function moveDragged(targetId) {
@@ -1507,6 +1623,7 @@ function ChapterManagerDashboard({ stories, chapters, apiClient, usingMock, onSa
             <button type="button" disabled={!visibleChapters.length} onClick={toggleAllVisible}><Majesticon name="check" size={16} /> {allVisibleSelected ? 'Bỏ chọn trang' : 'Chọn tất cả'}</button>
             <button type="button" disabled={!selectedIds.size} onClick={() => setSelectedIds(new Set())}><Majesticon name="close" size={16} /> Bỏ chọn</button>
             <button type="button" disabled={!selectedIds.size} onClick={publishSelected}><Majesticon name="send" size={16} /> Xuất bản</button>
+            <button type="button" className="ad-gold-action" disabled={!selectedIds.size} onClick={openBulkPriceModal}><Majesticon name="coins" size={16} /> Sét đậu</button>
             <button type="button" className="danger" disabled={!selectedIds.size} onClick={deleteSelected}><Majesticon name="trash" size={16} /> Xóa</button>
           </div>
         </div>
@@ -1590,6 +1707,18 @@ function ChapterManagerDashboard({ stories, chapters, apiClient, usingMock, onSa
           }}
         />
       )}
+      {bulkPriceOpen && (
+        <SetChapterPriceModal
+          count={selectedChapters.length}
+          value={bulkPriceValue}
+          error={bulkPriceError}
+          confirm={bulkPriceConfirm}
+          onValueChange={setBulkPriceValue}
+          onConfirmChange={setBulkPriceConfirm}
+          onClose={() => setBulkPriceOpen(false)}
+          onSave={applyBulkPrice}
+        />
+      )}
       {deleteRequest && (
         <DeleteChapterModal
           chapters={deleteRequest}
@@ -1628,6 +1757,46 @@ function PaginationControl({ page, totalPages, onPage }) {
         : <button type="button" key={item} className={item === page ? 'active' : ''} onClick={() => onPage(item)}>{item}</button>)}
       <button type="button" disabled={page >= totalPages} onClick={() => onPage(page + 1)}><Majesticon name="chevronRight" size={18} /></button>
     </nav>
+  );
+}
+
+function SetChapterPriceModal({ count, value, error, confirm, onValueChange, onConfirmChange, onClose, onSave }) {
+  const nextPrice = Number(value || 0);
+  const freeMode = value !== '' && Number.isFinite(nextPrice) && nextPrice === 0;
+  return (
+    <div className="ad-preview-overlay" role="dialog" aria-modal="true" aria-label="Sét đậu chương hàng loạt">
+      <article className="ad-set-price-modal">
+        <header>
+          <h2><Majesticon name="coins" size={20} /> Sét giá Hạt hàng loạt</h2>
+          <button type="button" onClick={onClose} aria-label="Đóng"><Majesticon name="close" size={20} /></button>
+        </header>
+        <div className="ad-set-price-body">
+          <div className="ad-set-price-note">
+            <Majesticon name="info" size={20} />
+            <div>
+              <strong>Áp dụng cho chương đã chọn</strong>
+              <p>Bạn đang chuẩn bị sét giá Hạt cho {formatNumber(count)} chương.</p>
+            </div>
+          </div>
+          <label className="ad-set-price-field">
+            <span>Giá (Hạt) <small>(0 = miễn phí)</small></span>
+            <input type="number" min="0" value={value} onChange={event => onValueChange(event.target.value)} placeholder="Ví dụ: 10" />
+          </label>
+          <div className="ad-set-price-hint">
+            {freeMode ? 'Các chương đã chọn sẽ trở thành chương miễn phí.' : 'Các chương đã chọn sẽ trở thành chương trả phí với mức giá này.'}
+          </div>
+          <label className="ad-set-price-confirm">
+            <input type="checkbox" checked={confirm} onChange={event => onConfirmChange(event.target.checked)} />
+            <span>Tôi xác nhận cập nhật giá Hạt cho các chương đã chọn</span>
+          </label>
+          {error && <div className="ad-set-price-error">{error}</div>}
+        </div>
+        <footer>
+          <button type="button" onClick={onClose}>Hủy bỏ</button>
+          <button type="button" className="primary" onClick={onSave}><Majesticon name="save" size={17} /> Áp dụng</button>
+        </footer>
+      </article>
+    </div>
   );
 }
 
@@ -2037,6 +2206,8 @@ function BulkChapterPage({ story, stories, chapters, loading, apiClient, usingMo
   const [processing, setProcessing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const [auditOpen, setAuditOpen] = useState(false);
+  const [previewPage, setPreviewPage] = useState(1);
   const selectedStory = story || stories.find(item => item.id === selectedStoryId);
   const storyChapters = chapters.filter(chapter => chapter.storyId === selectedStory?.id);
   const nextNumber = selectedStory ? nextChapterNumberForStory(chapters, selectedStory.id) : 1;
@@ -2050,6 +2221,10 @@ function BulkChapterPage({ story, stories, chapters, loading, apiClient, usingMo
     setStartNumber(nextNumber);
   }, [nextNumber, selectedStory?.id]);
 
+  useEffect(() => {
+    setPreviewPage(1);
+  }, [selectedStory?.id, rawText, renumber]);
+
   const previewChapters = useMemo(() => {
     const seen = new Set();
     const existing = new Set(storyChapters.map(chapter => Number(chapter.number)));
@@ -2062,11 +2237,17 @@ function BulkChapterPage({ story, stories, chapters, loading, apiClient, usingMo
       if (existing.has(Number(number)) || seen.has(Number(number))) warnings.push('Trùng số chương.');
       seen.add(Number(number));
       const wordTotal = textWordCount(chapter.content);
-      if (wordTotal > 0 && wordTotal < 80 && !warnings.some(item => item.includes('ngắn'))) warnings.push('Chương hơi ngắn.');
-      const blocked = warnings.some(item => item.includes('rỗng') || item.includes('Trùng'));
+      if (wordTotal > 0 && wordTotal < MIN_CHAPTER_WARNING_WORDS && !warnings.some(item => item.includes('từ'))) warnings.push(`Chương dưới ${MIN_CHAPTER_WARNING_WORDS} từ.`);
+      const blocked = warnings.some(item => item.includes('rỗng') || item.includes('Trùng')) || ((mode === 'published' || mode === 'scheduled') && wordTotal > 0 && wordTotal < MIN_CHAPTER_WARNING_WORDS);
       return { ...chapter, number, wordCount: wordTotal, warnings, blocked };
     });
   }, [parsed, renumber, startNumber, nextNumber, storyChapters]);
+
+  const audit = useMemo(() => buildChapterAudit(previewChapters, storyChapters, { publishMode: mode === 'published' || mode === 'scheduled' }), [previewChapters, storyChapters, mode]);
+  const previewTotalPages = Math.max(1, Math.ceil(previewChapters.length / BULK_PREVIEW_PAGE_SIZE));
+  const currentPreviewPage = Math.min(previewPage, previewTotalPages);
+  const previewStart = previewChapters.length ? (currentPreviewPage - 1) * BULK_PREVIEW_PAGE_SIZE : 0;
+  const visiblePreviewChapters = previewChapters.slice(previewStart, previewStart + BULK_PREVIEW_PAGE_SIZE);
 
   function setParsedChapters(chaptersToSet) {
     const normalized = chaptersToSet.map((chapter, index) => ({
@@ -2079,6 +2260,7 @@ function BulkChapterPage({ story, stories, chapters, loading, apiClient, usingMo
     }));
     setParsed(normalized);
     setSelectedIds(new Set(normalized.map(chapter => chapter.localId)));
+    setPreviewPage(1);
   }
 
   function checkChapters() {
@@ -2088,6 +2270,7 @@ function BulkChapterPage({ story, stories, chapters, loading, apiClient, usingMo
     }
     setError('');
     setParsedChapters(parseBulkChapterText(rawText, Number(startNumber || nextNumber)));
+    setAuditOpen(true);
   }
 
   function updateChapter(localId, patch) {
@@ -2146,6 +2329,11 @@ function BulkChapterPage({ story, stories, chapters, loading, apiClient, usingMo
       setError('Vui lòng sửa các chương đang lỗi trước khi lưu.');
       return;
     }
+    if (!renumber && audit.hasBlockingIssues) {
+      setError('Có lỗi số chương hoặc thiếu thứ tự. Hãy kiểm tra trước khi đăng.');
+      setAuditOpen(true);
+      return;
+    }
     setSubmitting(true);
     setError('');
     try {
@@ -2158,7 +2346,8 @@ function BulkChapterPage({ story, stories, chapters, loading, apiClient, usingMo
         scheduledAt
       });
       if (result.errors?.length) {
-        setError(`${result.skipped || result.errors.length} chương bị bỏ qua: ${result.errors.map(item => `#${item.number || item.index}: ${item.reason}`).join(', ')}`);
+        setError(`${result.skipped || result.errors.length} chương không lưu được: ${result.errors.map(item => `#${item.number || item.index}: ${item.reason}`).join(', ')}`);
+        setAuditOpen(true);
       } else {
         navigate('/author/chapters');
       }
@@ -2221,11 +2410,25 @@ function BulkChapterPage({ story, stories, chapters, loading, apiClient, usingMo
         </div>
       </section>
 
+      {auditOpen && (
+        <ChapterAuditModal
+          story={selectedStory}
+          chapters={previewChapters}
+          audit={audit}
+          renumber={renumber}
+          onClose={() => setAuditOpen(false)}
+        />
+      )}
+
       {previewChapters.length > 0 && (
         <section className="ad-panel">
-          <div className="ad-panel-head"><div><h2>Preview trước khi đăng</h2><p>{previewChapters.filter(chapter => selectedIds.has(chapter.localId) && !chapter.blocked).length} chương hợp lệ đang được chọn</p></div></div>
+          <div className="ad-panel-head"><div><h2>Preview trước khi đăng</h2><p>{previewChapters.filter(chapter => selectedIds.has(chapter.localId) && !chapter.blocked).length} chương hợp lệ đang được chọn</p></div><button type="button" onClick={() => setAuditOpen(true)}>Mở popup kiểm tra</button></div>
+          <div className="ad-preview-pager">
+            <strong>Hiển thị {previewChapters.length ? previewStart + 1 : 0} - {Math.min(previewStart + BULK_PREVIEW_PAGE_SIZE, previewChapters.length)} của {formatNumber(previewChapters.length)} chương</strong>
+            <PaginationControl page={currentPreviewPage} totalPages={previewTotalPages} onPage={setPreviewPage} />
+          </div>
           <div className="ad-bulk-preview">
-            {previewChapters.map(chapter => (
+            {visiblePreviewChapters.map(chapter => (
               <article key={chapter.localId} className={chapter.blocked ? 'invalid' : ''}>
                 <label className="ad-check"><input type="checkbox" checked={selectedIds.has(chapter.localId)} onChange={() => toggleChapter(chapter.localId)} /> Chọn</label>
                 <input type="number" min="1" value={chapter.number} disabled={renumber} onChange={event => updateChapter(chapter.localId, { number: Number(event.target.value) })} />
@@ -2239,6 +2442,61 @@ function BulkChapterPage({ story, stories, chapters, loading, apiClient, usingMo
           </div>
         </section>
       )}
+    </div>
+  );
+}
+
+function ChapterAuditModal({ story, chapters, audit, renumber, onClose }) {
+  const validCount = chapters.filter(chapter => !chapter.blocked).length;
+  const chapterMap = chapters.map(chapter => ({
+    number: chapter.number,
+    title: chapter.title || `Chương ${chapter.number}`,
+    wordCount: chapter.wordCount || 0,
+    warnings: chapter.warnings || []
+  }));
+  return (
+    <div className="ad-preview-overlay" role="dialog" aria-modal="true" aria-label="Kiểm tra chương">
+      <article className="ad-check-modal">
+        <header>
+          <strong>Kiểm tra chương</strong>
+          <button type="button" onClick={onClose} aria-label="Đóng"><Majesticon name="close" size={18} /></button>
+        </header>
+        <section className="ad-check-body">
+          <div className="ad-check-banner">
+            <Majesticon name="alert" size={22} />
+            <div>
+              <strong>{story?.title || 'Truyện đang xử lý'}</strong>
+              <p>{chapters.length} chương phát hiện · {validCount} chương đủ điều kiện · {renumber ? 'Tự đánh số lại đang bật' : 'Giữ nguyên số chương'}</p>
+            </div>
+          </div>
+          {audit.warnings.length > 0 && (
+            <div className="ad-check-warning-list">
+              {audit.warnings.map(item => <div key={item} className="ad-check-warning-item"><Majesticon name="alert" size={16} /> {item}</div>)}
+            </div>
+          )}
+          <div className="ad-check-summary">
+            <span><b>{audit.duplicates.length}</b> trùng số</span>
+            <span><b>{audit.missingNumbers.length}</b> thiếu số</span>
+            <span><b>{audit.shortChapters.length}</b> dưới {MIN_CHAPTER_WARNING_WORDS} từ</span>
+          </div>
+          <div className="ad-check-list">
+            {chapterMap.map(item => (
+              <article key={`${item.number}-${item.title}`} className={[
+                item.warnings.some(warning => warning.includes('Trùng')) || item.warnings.some(warning => warning.includes('rỗng')) ? 'danger' : '',
+                item.warnings.some(warning => warning.includes('từ')) ? 'warning' : ''
+              ].filter(Boolean).join(' ')}>
+                <strong>Chương {item.number}: {item.title}</strong>
+                <span>{formatNumber(item.wordCount)} từ</span>
+                <div>{item.warnings.length ? item.warnings.map(warning => <small key={warning}>{warning}</small>) : <small>Không có cảnh báo</small>}</div>
+              </article>
+            ))}
+          </div>
+          {audit.hasBlockingIssues && !renumber && <div className="ad-check-blocker">Có trùng số hoặc thiếu thứ tự. Bật tự đánh số lại hoặc sửa dãy chương trước khi đăng.</div>}
+        </section>
+        <footer>
+          <button type="button" onClick={onClose}>Đóng</button>
+        </footer>
+      </article>
     </div>
   );
 }
