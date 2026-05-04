@@ -679,12 +679,7 @@ function queryPublicStories(db, viewerId, query = {}) {
 
 function promotedHomeStories(db, limit = 24) {
   const activeStoryIds = new Set(db.promotions
-    .filter(promotion => {
-      const startsAt = promotion.startsAt ? new Date(promotion.startsAt).getTime() : 0;
-      const endsAt = promotion.endsAt ? new Date(promotion.endsAt).getTime() : Infinity;
-      const time = Date.now();
-      return promotion.status === 'active' && startsAt <= time && time <= endsAt;
-    })
+    .filter(isActivePromotion)
     .map(promotion => promotion.storyId));
   const promoted = db.stories
     .filter(story => activeStoryIds.has(story.id) && isPublicStory(story))
@@ -692,6 +687,65 @@ function promotedHomeStories(db, limit = 24) {
     .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0));
   if (promoted.length) return promoted.slice(0, limit);
   return queryPublicStories(db, null, { recommended: true, sort: 'updated', limit });
+}
+
+const ADMIN_MANUAL_PROMOTION_PACKAGE_ID = 'admin-manual';
+
+function isActivePromotion(promotion) {
+  if (!promotion || promotion.status !== 'active') return false;
+  const startsAt = promotion.startsAt ? new Date(promotion.startsAt).getTime() : 0;
+  const endsAt = promotion.endsAt ? new Date(promotion.endsAt).getTime() : Infinity;
+  const time = Date.now();
+  return startsAt <= time && time <= endsAt;
+}
+
+function isManualAdminPromotion(promotion) {
+  return promotion?.packageId === ADMIN_MANUAL_PROMOTION_PACKAGE_ID || promotion?.source === 'admin';
+}
+
+function isStoryPromoted(db, storyId) {
+  return db.promotions.some(promotion => promotion.storyId === storyId && isActivePromotion(promotion));
+}
+
+function setManualStoryPromotion(db, story, enabled, admin) {
+  db.promotions ||= [];
+  const timestamp = now();
+  const manualPromotions = db.promotions.filter(promotion => promotion.storyId === story.id && isManualAdminPromotion(promotion));
+  if (enabled) {
+    const promotion = manualPromotions[0];
+    if (promotion) {
+      promotion.status = 'active';
+      promotion.startsAt = promotion.startsAt || timestamp;
+      promotion.endsAt = '';
+      promotion.updatedAt = timestamp;
+      promotion.source = 'admin';
+      promotion.packageId = ADMIN_MANUAL_PROMOTION_PACKAGE_ID;
+      promotion.packageName = promotion.packageName || 'Quang ba thu cong';
+      promotion.cost = Number(promotion.cost || 0);
+      if (!promotion.ownerId) promotion.ownerId = getStoryOwnerId(story);
+      return;
+    }
+    db.promotions.unshift({
+      id: uid('promo'),
+      storyId: story.id,
+      ownerId: getStoryOwnerId(story),
+      packageId: ADMIN_MANUAL_PROMOTION_PACKAGE_ID,
+      packageName: 'Quang ba thu cong',
+      cost: 0,
+      status: 'active',
+      source: 'admin',
+      startsAt: timestamp,
+      endsAt: '',
+      createdBy: admin?.id || '',
+      createdAt: timestamp,
+      updatedAt: timestamp
+    });
+    return;
+  }
+  manualPromotions.forEach(promotion => {
+    promotion.status = 'inactive';
+    promotion.updatedAt = timestamp;
+  });
 }
 
 function reviewHomeStories(db, limit = 12) {
@@ -1568,6 +1622,7 @@ function adminStorySummary(db, story, viewerId) {
     isHot: Boolean(story.hot),
     isRecommended: Boolean(story.recommended),
     isBanner: Boolean(story.banner),
+    isPromoted: isStoryPromoted(db, story.id),
     views: Number(story.views || 0),
     chaptersCount: chapterCount,
     createdAt: story.createdAt || '',
@@ -1581,6 +1636,7 @@ function adminStorySummary(db, story, viewerId) {
     hot: Boolean(story.hot),
     recommended: Boolean(story.recommended),
     banner: Boolean(story.banner),
+    promoted: isStoryPromoted(db, story.id),
     homeTrending: Boolean(story.homeTrending),
     homeTrendingOrder: Number(story.homeTrendingOrder || 0),
     categories: story.categories || [],
@@ -4814,12 +4870,14 @@ async function handle(req, res) {
       if (story.banner && !String(story.bannerImage || '').trim() && story.cover) {
         story.bannerImage = String(story.cover || '').trim();
       }
+      if (body.isPromoted !== undefined) setManualStoryPromotion(db, story, Boolean(body.isPromoted), admin);
+      if (body.promoted !== undefined) setManualStoryPromotion(db, story, Boolean(body.promoted), admin);
       if (body.homeTrending !== undefined) story.homeTrending = Boolean(body.homeTrending);
       if (body.homeTrendingOrder !== undefined) story.homeTrendingOrder = Number(body.homeTrendingOrder || 0);
       story.updatedAt = now();
       const after = adminStorySummary(db, story, admin.id);
       logAdminAction(db, admin, 'update_story_flags', 'story', story.id, before, after, '');
-      await persistDb(db, { prune: false, only: ['stories', 'adminLogs'], relationStoryIds: [story.id] });
+      await persistDb(db, { prune: false, only: ['stories', 'promotions', 'adminLogs'], relationStoryIds: [story.id] });
       clearHomePublicCache();
       requestPerf.mark('db');
       requestPerf.log();

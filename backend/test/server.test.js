@@ -187,6 +187,7 @@ test('admin story flags invalidate home cache and update public story sections',
   story.recommended = false;
   story.banner = false;
   story.bannerImage = '';
+  db.promotions = [];
   resetDataStore(db);
 
   const primedHome = await request('/api/home');
@@ -194,22 +195,25 @@ test('admin story flags invalidate home cache and update public story sections',
   assert.ok(!primedHome.data.banners.some(item => item.id === story.id));
   assert.ok(!primedHome.data.featuredStories.some(item => item.id === story.id));
   assert.ok(!primedHome.data.recommendedStories.some(item => item.id === story.id));
+  assert.ok(!primedHome.data.promotedStories.some(item => item.id === story.id));
 
   const token = await loginToken();
   const update = await request(`/api/admin/stories/${story.id}/flags`, {
     method: 'PATCH',
     headers: { Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ banner: true, featured: true, recommended: true, hot: true })
+    body: JSON.stringify({ banner: true, featured: true, recommended: true, hot: true, promoted: true })
   });
   assert.equal(update.response.status, 200);
   assert.equal(update.data.story.banner, true);
   assert.equal(update.data.story.bannerImage, story.cover);
+  assert.equal(update.data.story.promoted, true);
 
   const coverBannerHome = await request('/api/home');
   assert.equal(coverBannerHome.response.status, 200);
   const coverBannerStory = coverBannerHome.data.banners.find(item => item.id === story.id);
   assert.ok(coverBannerStory);
   assert.equal(coverBannerStory.bannerImage, story.cover);
+  assert.ok(coverBannerHome.data.promotedStories.some(item => item.id === story.id));
 
   const bannerImage = 'https://cdn.example.com/story-banner.jpg';
   const storyUpdate = await request(`/api/admin/stories/${story.id}`, {
@@ -239,6 +243,18 @@ test('admin story flags invalidate home cache and update public story sections',
   assert.ok(hotStory);
   assert.equal(hotStory.hot, true);
   assert.equal(hotStory.isHot, true);
+
+  const unpromote = await request(`/api/admin/stories/${story.id}/flags`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ promoted: false, recommended: false })
+  });
+  assert.equal(unpromote.response.status, 200);
+  assert.equal(unpromote.data.story.promoted, false);
+
+  const unpromotedHome = await request('/api/home');
+  assert.equal(unpromotedHome.response.status, 200);
+  assert.ok(!unpromotedHome.data.promotedStories.some(item => item.id === story.id));
 });
 
 test('register rejects invalid email', async () => {
