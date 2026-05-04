@@ -1659,6 +1659,124 @@ test('author can create draft and pending stories with ownerId', async () => {
   assert.equal(pending.data.story.hidden, true);
 });
 
+test('author can update many chapter prices in one request', async () => {
+  const author = await registerMod('bulk.price.author@gmail.com', 'Bulk Price Author');
+  const headers = { Authorization: `Bearer ${author.token}` };
+  const story = await request('/api/author/stories', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      title: 'Bulk Price Story',
+      description: 'Story used to test bulk chapter price updates.',
+      categories: ['Author Flow'],
+      approvalStatus: 'pending'
+    })
+  });
+  assert.equal(story.response.status, 201);
+
+  const first = await request(`/api/author/stories/${story.data.story.id}/chapters`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      number: 1,
+      title: 'Bulk Price One',
+      content: longChapterContent('First chapter for bulk price update'),
+      status: 'draft'
+    })
+  });
+  const second = await request(`/api/author/stories/${story.data.story.id}/chapters`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      number: 2,
+      title: 'Bulk Price Two',
+      content: longChapterContent('Second chapter for bulk price update'),
+      status: 'draft'
+    })
+  });
+  assert.equal(first.response.status, 201);
+  assert.equal(second.response.status, 201);
+
+  const vip = await request('/api/author/chapters/bulk-price', {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify({ ids: [first.data.chapter.id, second.data.chapter.id], price: 7 })
+  });
+  assert.equal(vip.response.status, 200);
+  assert.equal(vip.data.updated, 2);
+  assert.deepEqual(vip.data.chapters.map(chapter => chapter.access), ['vip', 'vip']);
+  assert.deepEqual(vip.data.chapters.map(chapter => chapter.price), [7, 7]);
+  const afterVip = readTestDb();
+  const bulkStory = afterVip.stories.find(item => item.id === story.data.story.id);
+  assert.equal(bulkStory.chapterPrice, 0);
+
+  const free = await request('/api/author/chapters/bulk-price', {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify({ ids: [first.data.chapter.id, second.data.chapter.id], price: 0 })
+  });
+  assert.equal(free.response.status, 200);
+  assert.equal(free.data.updated, 2);
+  assert.deepEqual(free.data.chapters.map(chapter => chapter.access), ['free', 'free']);
+  assert.deepEqual(free.data.chapters.map(chapter => chapter.price), [0, 0]);
+  const afterFree = readTestDb();
+  const freeStory = afterFree.stories.find(item => item.id === story.data.story.id);
+  assert.equal(freeStory.chapterPrice, 0);
+});
+
+test('author bulk chapter price rejects invalid chapter ids atomically', async () => {
+  const author = await registerMod('bulk.price.invalid@gmail.com', 'Bulk Price Invalid Author');
+  const headers = { Authorization: `Bearer ${author.token}` };
+  const story = await request('/api/author/stories', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      title: 'Bulk Price Invalid Story',
+      description: 'Story used to test invalid bulk chapter price updates.',
+      categories: ['Author Flow'],
+      approvalStatus: 'pending'
+    })
+  });
+  assert.equal(story.response.status, 201);
+  const chapter = await request(`/api/author/stories/${story.data.story.id}/chapters`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      number: 1,
+      title: 'Bulk Price Valid Chapter',
+      content: longChapterContent('Valid chapter for invalid bulk price test'),
+      status: 'draft'
+    })
+  });
+  assert.equal(chapter.response.status, 201);
+
+  const rejected = await request('/api/author/chapters/bulk-price', {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify({ ids: [chapter.data.chapter.id, 'chap_missing_bulk_price'], price: 5 })
+  });
+  assert.equal(rejected.response.status, 404);
+
+  const list = await request(`/api/author/chapters?storyId=${story.data.story.id}`, { headers });
+  assert.equal(list.response.status, 200);
+  assert.equal(list.data.chapters[0].access, 'free');
+  assert.equal(list.data.chapters[0].price, 0);
+});
+
+test('author bulk chapter price preflight includes CORS headers', async () => {
+  const preflight = await request('/api/author/chapters/bulk-price', {
+    method: 'OPTIONS',
+    headers: {
+      Origin: 'https://daudotruyen.vercel.app',
+      'Access-Control-Request-Method': 'PATCH',
+      'Access-Control-Request-Headers': 'authorization,content-type'
+    }
+  });
+  assert.equal(preflight.response.status, 204);
+  assert.equal(preflight.response.headers.get('access-control-allow-origin'), 'https://daudotruyen.vercel.app');
+  assert.match(preflight.response.headers.get('access-control-allow-methods') || '', /PATCH/);
+});
+
 test('author bulk chapter create rejects whole batch when one chapter is invalid', async () => {
   resetDataStore(createSeedDb());
   const headers = { Authorization: `Bearer ${await loginToken()}` };
@@ -1793,6 +1911,55 @@ test('author can update combo price without resubmitting story categories', asyn
   });
   assert.equal(update.response.status, 200);
   assert.equal(update.data.story.comboPrice, 33);
+});
+
+test('author can update chapterPrice without rewriting chapter rows', async () => {
+  const author = await registerMod('chapter.price.author@gmail.com', 'Chapter Price Author');
+  const headers = { Authorization: `Bearer ${author.token}` };
+  const create = await request('/api/author/stories', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      title: 'Chapter Price Story',
+      description: 'Story for isolated chapter price updates.',
+      categories: ['Price'],
+      approvalStatus: 'pending',
+      price: 11,
+      chapterPrice: 11
+    })
+  });
+  assert.equal(create.response.status, 201);
+
+  const chapter = await request(`/api/author/stories/${create.data.story.id}/chapters`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      number: 1,
+      title: 'Chapter One',
+      content: longChapterContent('Chapter content used to verify chapter rows stay untouched'),
+      status: 'published',
+      access: 'vip',
+      price: 9
+    })
+  });
+  assert.equal(chapter.response.status, 201);
+
+  const update = await request(`/api/author/stories/${create.data.story.id}`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify({ chapterPrice: 17 })
+  });
+  assert.equal(update.response.status, 200);
+  assert.equal(update.data.story.chapterPrice, 17);
+  assert.equal(update.data.story.price, 11);
+
+  const after = readTestDb();
+  const updatedStory = after.stories.find(item => item.id === create.data.story.id);
+  const updatedChapter = after.chapters.find(item => item.id === chapter.data.chapter.id);
+  assert.equal(updatedStory.chapterPrice, 17);
+  assert.equal(updatedStory.price, 11);
+  assert.equal(updatedChapter.price, 9);
+  assert.equal(updatedChapter.isPremium, true);
 });
 
 test('author cannot edit another owner story or chapter', async () => {

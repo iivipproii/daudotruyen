@@ -616,6 +616,21 @@ async function deleteMissing(table, ids) {
   }
 }
 
+async function deleteRowsByColumn(table, column, values) {
+  if (!isSupabaseStore()) return;
+  const supabase = getSupabase();
+  const ids = Array.from(new Set((values || []).filter(Boolean)));
+  if (!ids.length) return;
+  for (let index = 0; index < ids.length; index += PAGE_SIZE) {
+    const batch = ids.slice(index, index + PAGE_SIZE);
+    await safeWrite({
+      table,
+      method: `deleteBy${column}`,
+      run: () => supabase.from(table).delete().in(column, batch)
+    });
+  }
+}
+
 function dedupeRows(rows, onConflict = 'id') {
   const keys = String(onConflict)
     .split(',')
@@ -989,6 +1004,30 @@ async function selectOneById(def, id) {
   return result.data ? fromRow(result.data, def) : null;
 }
 
+async function selectMappedRows(table, {
+  columns = tableColumns(table, true),
+  buildQuery = query => query,
+  single = false
+} = {}) {
+  if (!isSupabaseStore()) return single ? null : [];
+  const def = TABLES[Object.keys(TABLES).find(key => TABLES[key].table === table)];
+  if (!def) throw new Error(`Unknown table: ${table}`);
+  const supabase = getSupabase();
+  const result = await safeRead({
+    table,
+    method: single ? 'selectSingle' : 'selectMappedRows',
+    columns,
+    run: async () => {
+      const query = buildQuery(supabase.from(table).select(columns));
+      return single ? query.maybeSingle() : query;
+    }
+  });
+  if (single) {
+    return result ? fromRow(result, def) : null;
+  }
+  return (result || []).map(row => fromRow(row, def));
+}
+
 async function selectUserById(id) {
   return selectOneById(TABLES.users, id);
 }
@@ -1189,6 +1228,8 @@ module.exports = {
   unlockCombo,
   storeName,
   selectOneById,
+  selectMappedRows,
+  deleteRowsByColumn,
   selectUserById,
   selectUserByIdentifier,
   selectStoryById,

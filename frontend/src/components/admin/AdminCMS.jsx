@@ -107,6 +107,8 @@ function normalizeStory(story = {}) {
     promoted: Boolean(story.promoted ?? story.isPromoted),
     homeTrending: Boolean(story.homeTrending),
     homeTrendingOrder: Number(story.homeTrendingOrder || 0),
+    price: Number(story.price ?? story.chapterPrice ?? 0),
+    chapterPrice: Number(story.chapterPrice ?? story.price ?? 0),
     categories: asArray(story.categories?.length ? story.categories : story.genres),
     tags: asArray(story.tags)
   };
@@ -1062,7 +1064,8 @@ function StoryFormModal({ apiClient, story, taxonomy, onClose, onSave }) {
     categories: asArray(story?.categories).join(', '),
     tags: asArray(story?.tags).join(', '),
     premium: Boolean(story?.premium),
-    price: story?.price || 0,
+    price: story?.price ?? story?.chapterPrice ?? 0,
+    chapterPrice: story?.chapterPrice ?? story?.price ?? 0,
     featured: Boolean(story?.featured),
     hot: Boolean(story?.hot),
     recommended: Boolean(story?.recommended),
@@ -1106,12 +1109,13 @@ function StoryFormModal({ apiClient, story, taxonomy, onClose, onSave }) {
     <Modal title={story ? 'Sửa truyện' : 'Tạo truyện'} onClose={onClose}>
       <form className="cms-form" onSubmit={event => {
         event.preventDefault();
-        onSave({
-          ...form,
-          price: Number(form.price || 0),
-          categories: form.categories.split(',').map(item => item.trim()).filter(Boolean),
-          tags: form.tags.split(',').map(item => item.trim()).filter(Boolean)
-        });
+      onSave({
+        ...form,
+        price: Number(form.price || form.chapterPrice || 0),
+        chapterPrice: Number(form.chapterPrice || form.price || 0),
+        categories: form.categories.split(',').map(item => item.trim()).filter(Boolean),
+        tags: form.tags.split(',').map(item => item.trim()).filter(Boolean)
+      });
       }}>
         <label>Tiêu đề<input value={form.title} onChange={event => set('title', event.target.value)} required /></label>
         <label>Tác giả<input value={form.author} onChange={event => set('author', event.target.value)} required /></label>
@@ -1146,7 +1150,8 @@ function StoryFormModal({ apiClient, story, taxonomy, onClose, onSave }) {
         </div>
         <label>Trạng thái<select value={form.status} onChange={event => set('status', event.target.value)}><option value="ongoing">Đang ra</option><option value="completed">Hoàn thành</option><option value="paused">Tạm dừng</option></select></label>
         <label>Duyệt<select value={form.approvalStatus} onChange={event => set('approvalStatus', event.target.value)}><option value="pending">Chờ duyệt</option><option value="approved">Đã duyệt</option><option value="rejected">Từ chối</option><option value="draft">Nháp</option></select></label>
-        <label>Giá Đậu<input type="number" value={form.price} onChange={event => set('price', event.target.value)} /></label>
+        <label>Giá truyện<input type="number" value={form.price} onChange={event => set('price', event.target.value)} /></label>
+        <label>Giá chương<input type="number" value={form.chapterPrice} onChange={event => set('chapterPrice', event.target.value)} /></label>
         <label className="wide">Mô tả<textarea value={form.description} onChange={event => set('description', event.target.value)} required /></label>
         <label className="wide">Thể loại<input value={form.categories} onChange={event => set('categories', event.target.value)} placeholder={suggestions} /></label>
         <label className="wide">Tag<input value={form.tags} onChange={event => set('tags', event.target.value)} /></label>

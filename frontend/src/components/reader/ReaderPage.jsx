@@ -33,6 +33,8 @@ const spacingOptions = [['compact', 'Hẹp'], ['normal', 'Vừa'], ['wide', 'R�
 function normalizeStory(story = {}) {
   return {
     ...repairTextFields(story, ['title', 'author', 'description', 'language', 'translator', 'shortDescription']),
+    price: Number(story.price ?? 0),
+    chapterPrice: Number(story.chapterPrice ?? story.price ?? 0),
     categories: repairTextArray(story.categories)
   };
 }
@@ -70,7 +72,7 @@ function generateMockChapters(story) {
       number,
       title: `Chương ${number}: ${names[index % names.length]}`,
       isPremium: premium,
-      price: premium ? story.price || 3 : 0,
+      price: premium ? story.chapterPrice || story.price || 3 : 0,
       views: Math.max(100, Math.round(Number(story.views || 8000) / (number + 10))),
       updatedAt: story.updatedAt,
       content: [
@@ -538,10 +540,10 @@ export function ReaderPage({ apiClient, user, updateUser }) {
           <div className="rp-title-divider" aria-hidden="true"><span><Majesticon name="bookOpen" size={16} /></span></div>
 
           {!unlocked && (
-            <div className="rp-paywall">
+          <div className="rp-paywall">
               <h2>Chương VIP</h2>
               <p>Bạn đang xem bản preview. Mở khóa chương để đọc đầy đủ nội dung.</p>
-              <button type="button" onClick={unlockChapter}>Mở khóa {chapter.price || story.price || 1} Đậu</button>
+              <button type="button" onClick={unlockChapter}>Mở khóa {chapter.price || story.chapterPrice || story.price || 1} Đậu</button>
             </div>
           )}
 

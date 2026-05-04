@@ -91,6 +91,7 @@ function normalizeStoryForForm(story) {
       hidden: false,
       type: 'free',
       vipFromChapter: 1,
+      price: 3,
       chapterPrice: 3,
       comboPrice: 99
     };
@@ -112,6 +113,7 @@ function normalizeStoryForForm(story) {
     chapterCountEstimate: story.chapterCountEstimate || '',
     hidden: Boolean(story.hidden),
     type: story.type || (story.premium ? 'vip' : 'free'),
+    price: story.price ?? story.chapterPrice ?? 0,
     chapterPrice: story.chapterPrice ?? story.price ?? 0,
     vipFromChapter: story.vipFromChapter ?? (story.premium ? 1 : 0),
     comboPrice: story.comboPrice ?? 0
@@ -139,8 +141,8 @@ function buildStoryPayload(form, approvalStatus) {
     hidden: Boolean(form.hidden),
     type: form.type,
     premium,
-    price: premium ? Number(form.chapterPrice || 0) : 0,
-    chapterPrice: premium ? Number(form.chapterPrice || 0) : 0,
+    price: premium ? Number(form.price || form.chapterPrice || 0) : 0,
+    chapterPrice: premium ? Number(form.chapterPrice || form.price || 0) : 0,
     vipFromChapter: premium ? Number(form.vipFromChapter || 1) : 0,
     comboPrice: premium ? Number(form.comboPrice || 0) : 0,
     approvalStatus
@@ -679,6 +681,42 @@ export function AuthorDashboard({ user, apiClient }) {
     setToast(`Đã xóa ${uniqueIds.length} chương.`);
   }
 
+  async function saveBulkChapterPrice(ids, price) {
+    const uniqueIds = Array.from(new Set(ids || []));
+    if (!uniqueIds.length) return { updated: 0, chapters: [] };
+    const nextPrice = Number(price || 0);
+    const isPremium = nextPrice > 0;
+    if (state.usingMock || !apiClient) {
+      const timestamp = new Date().toISOString();
+      const idSet = new Set(uniqueIds);
+      const updatedChapters = state.chapters
+        .filter(chapter => idSet.has(chapter.id))
+        .map(chapter => ({
+          ...chapter,
+          access: isPremium ? 'vip' : 'free',
+          isPremium,
+          price: nextPrice,
+          updatedAt: timestamp
+        }));
+      setState(current => ({
+        ...current,
+        chapters: current.chapters.map(chapter => updatedChapters.find(item => item.id === chapter.id) || chapter)
+      }));
+      setToast(`Đã cập nhật giá ${updatedChapters.length} chương trong dữ liệu mẫu.`);
+      return { updated: updatedChapters.length, chapters: updatedChapters };
+    }
+    const result = await apiClient('/author/chapters/bulk-price', {
+      method: 'PATCH',
+      body: JSON.stringify({ ids: uniqueIds, price: nextPrice })
+    });
+    setState(current => ({
+      ...current,
+      chapters: current.chapters.map(chapter => result.chapters?.find(item => item.id === chapter.id) || chapter)
+    }));
+    setToast(`Đã cập nhật giá ${result.updated || 0} chương.`);
+    return result;
+  }
+
   async function reorderChapters(storyId, orderedChapters) {
     if (!storyId || !orderedChapters?.length) return;
     const updates = orderedChapters.map((chapter, index) => ({ id: chapter.id, number: index + 1 }));
@@ -776,7 +814,7 @@ export function AuthorDashboard({ user, apiClient }) {
       {!currentLoading && currentView === 'chapter-choice' && <ChapterMethodChooser story={editingStory} loading={Boolean(params.id && !editingStory)} />}
       {!currentLoading && currentView === 'chapter-new' && <SingleChapterPage story={editingStory} stories={state.stories} chapters={state.chapters} loading={Boolean(params.id && !editingStory)} onSave={saveChapter} />}
       {!currentLoading && currentView === 'chapter-bulk' && <BulkChapterPage story={editingStory} stories={state.stories} chapters={state.chapters} loading={Boolean(params.id && !editingStory)} apiClient={apiClient} usingMock={state.usingMock} onSaveBulk={saveBulkChapters} />}
-      {!currentLoading && currentView === 'chapters' && <ChapterManager stories={state.stories} chapters={state.chapters} apiClient={apiClient} usingMock={state.usingMock} onSave={saveChapter} onDelete={deleteChapter} onBulkDelete={deleteChapters} onReorder={reorderChapters} onUpdateStory={updateStory} />}
+      {!currentLoading && currentView === 'chapters' && <ChapterManager stories={state.stories} chapters={state.chapters} apiClient={apiClient} usingMock={state.usingMock} onSave={saveChapter} onDelete={deleteChapter} onBulkDelete={deleteChapters} onBulkPrice={saveBulkChapterPrice} onReorder={reorderChapters} onUpdateStory={updateStory} />}
       {!currentLoading && currentView === 'revenue' && <RevenueTab revenue={state.revenue} />}
       {!currentLoading && currentView === 'promotions' && <PromotionPackages stories={state.stories} promotions={state.promotions} packages={state.packages} onBuy={buyPromotion} />}
     </div>
@@ -1109,6 +1147,7 @@ export function StoryEditorForm({ story, loading, apiClient, usingMock, onSave }
             <label>Loại truyện<select value={form.type} onChange={event => setForm({ ...form, type: event.target.value })}><option value="free">Miễn phí</option><option value="vip">VIP</option><option value="mixed">Kết hợp</option></select></label>
             {(form.type === 'vip' || form.type === 'mixed') && (
               <>
+                <label>Giá truyện<input type="number" min="0" value={form.price} onChange={event => setForm({ ...form, price: event.target.value })} /></label>
                 <label>VIP từ chương<input type="number" min="1" value={form.vipFromChapter} onChange={event => setForm({ ...form, vipFromChapter: event.target.value })} /></label>
                 <label>Giá chương<input type="number" min="1" value={form.chapterPrice} onChange={event => setForm({ ...form, chapterPrice: event.target.value })} /></label>
                 <label>Giá combo<input type="number" min="1" value={form.comboPrice} onChange={event => setForm({ ...form, comboPrice: event.target.value })} /></label>
@@ -1322,7 +1361,7 @@ function StorySearchPicker({ stories, selectedStoryId, onSelect, placeholder = '
   );
 }
 
-export function ChapterManager({ stories, chapters, apiClient, usingMock, onSave, onDelete, onBulkDelete, onReorder, onUpdateStory }) {
+export function ChapterManager({ stories, chapters, apiClient, usingMock, onSave, onDelete, onBulkDelete, onBulkPrice, onReorder, onUpdateStory }) {
   const [selectedStoryId, setSelectedStoryId] = useState(stories[0]?.id || '');
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState('');
@@ -1337,6 +1376,7 @@ export function ChapterManager({ stories, chapters, apiClient, usingMock, onSave
       onSave={onSave}
       onDelete={onDelete}
       onBulkDelete={onBulkDelete}
+      onBulkPrice={onBulkPrice}
       onReorder={onReorder}
       onUpdateStory={onUpdateStory}
       initialStoryId={selectedStoryId}
@@ -1403,7 +1443,7 @@ export function ChapterManager({ stories, chapters, apiClient, usingMock, onSave
   );
 }
 
-function ChapterManagerDashboard({ stories, chapters, apiClient, usingMock, onSave, onDelete, onBulkDelete, onReorder, onUpdateStory, initialStoryId }) {
+function ChapterManagerDashboard({ stories, chapters, apiClient, usingMock, onSave, onDelete, onBulkDelete, onBulkPrice, onReorder, onUpdateStory, initialStoryId }) {
   const [selectedStoryId, setSelectedStoryId] = useState(initialStoryId || stories[0]?.id || '');
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
@@ -1578,7 +1618,11 @@ function ChapterManagerDashboard({ stories, chapters, apiClient, usingMock, onSa
     setBulkPriceError('');
     setRemoteError('');
     try {
-      await Promise.all(selectedChapters.map(chapter => onSave(buildChapterPricePayload(chapter, nextPrice), chapter.status || 'published')));
+      if (onBulkPrice) {
+        await onBulkPrice(selectedChapters.map(chapter => chapter.id), nextPrice);
+      } else {
+        await Promise.all(selectedChapters.map(chapter => onSave(buildChapterPricePayload(chapter, nextPrice), chapter.status || 'published')));
+      }
       setBulkPriceValue('');
       setBulkPriceConfirm(false);
       setSelectedIds(new Set());

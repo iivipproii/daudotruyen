@@ -300,6 +300,86 @@ async function loadRequestDb(req, pathname) {
   }
 }
 
+async function loadSupabaseDbFromQueries(queryMap = {}) {
+  const entries = await Promise.all(Object.entries(queryMap).map(async ([key, load]) => [key, await load()]));
+  return ensureDbShape(entries.reduce((acc, [key, value]) => {
+    acc[key] = value;
+    return acc;
+  }, {}));
+}
+
+async function loadSupabaseTable(table, options = {}) {
+  return dataStore.selectMappedRows(table, options);
+}
+
+async function selectSupabaseStoryBySlug(slug) {
+  return loadSupabaseTable('stories', {
+    single: true,
+    buildQuery: query => query.eq('slug', slug).limit(1)
+  });
+}
+
+function partialDbFromTables(tables = {}) {
+  return ensureDbShape(Object.entries(tables).reduce((acc, [key, value]) => {
+    acc[key] = value;
+    return acc;
+  }, {}));
+}
+
+async function requireSupabaseAdmin(req, res) {
+  const admin = await getSupabaseAuthUser(req);
+  if (!admin) {
+    unauthorized(res);
+    return null;
+  }
+  if (normalizeRole(admin.role) !== 'admin') {
+    forbidden(res);
+    return null;
+  }
+  return admin;
+}
+
+async function loadSupabaseAdminStoryDb(storyId) {
+  const [story, users, chapters, comments, ratings, bookmarks, follows, promotions] = await Promise.all([
+    loadSupabaseTable('stories', { single: true, buildQuery: query => query.eq('id', storyId).limit(1) }),
+    loadSupabaseTable('users'),
+    loadSupabaseTable('chapters', { buildQuery: query => query.eq('story_id', storyId).order('number', { ascending: true }) }),
+    loadSupabaseTable('comments', { buildQuery: query => query.eq('story_id', storyId) }),
+    loadSupabaseTable('ratings', { buildQuery: query => query.eq('story_id', storyId) }),
+    loadSupabaseTable('bookmarks', { buildQuery: query => query.eq('story_id', storyId) }),
+    loadSupabaseTable('follows', { buildQuery: query => query.eq('story_id', storyId) }),
+    loadSupabaseTable('promotions', { buildQuery: query => query.eq('story_id', storyId) })
+  ]);
+  return partialDbFromTables({
+    users,
+    stories: story ? [story] : [],
+    chapters,
+    comments,
+    ratings,
+    bookmarks,
+    follows,
+    promotions
+  });
+}
+
+async function loadSupabaseAdminChapterDb(chapterId) {
+  const chapter = await loadSupabaseTable('chapters', {
+    single: true,
+    buildQuery: query => query.eq('id', chapterId).limit(1)
+  });
+  const storyId = chapter?.storyId || '';
+  const [stories, chapters, comments, purchases, history, follows] = await Promise.all([
+    storyId ? loadSupabaseTable('stories', { buildQuery: query => query.eq('id', storyId).limit(1) }) : Promise.resolve([]),
+    storyId ? loadSupabaseTable('chapters', { buildQuery: query => query.eq('story_id', storyId).order('number', { ascending: true }) }) : Promise.resolve(chapter ? [chapter] : []),
+    storyId ? loadSupabaseTable('comments', { buildQuery: query => query.eq('story_id', storyId) }) : Promise.resolve([]),
+    loadSupabaseTable('chapter_purchases', { buildQuery: query => query.eq('chapter_id', chapterId) }),
+    loadSupabaseTable('reading_progress', { buildQuery: query => query.eq('chapter_id', chapterId) }),
+    storyId ? loadSupabaseTable('follows', { buildQuery: query => query.eq('story_id', storyId) }) : Promise.resolve([])
+  ]);
+  const mergedChapters = chapter && !chapters.some(item => item.id === chapter.id) ? [chapter, ...chapters] : chapters;
+  return partialDbFromTables({ stories, chapters: mergedChapters, comments, purchases, history, follows });
+}
+
 function clientIp(req) {
   return String(req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'local').split(',')[0].trim();
 }
@@ -2157,7 +2237,9 @@ function normalizeAuthorStoryInput(body, user, existingStory) {
   const tags = normalizeCategories(body.tags ?? existingStory?.tags ?? []);
   const type = String(body.type ?? existingStory?.type ?? (body.premium ? 'vip' : 'free')).trim();
   const premium = body.premium !== undefined ? Boolean(body.premium) : ['vip', 'mixed'].includes(type);
-  const price = parsePositiveNumber(body.price ?? body.chapterPrice ?? existingStory?.price, premium ? 1 : 0);
+  const priceInput = body.price ?? existingStory?.price ?? body.chapterPrice ?? existingStory?.chapterPrice;
+  const chapterPriceInput = body.chapterPrice ?? existingStory?.chapterPrice ?? body.price ?? existingStory?.price;
+  const price = parsePositiveNumber(priceInput, premium ? 1 : 0);
   const title = String(body.title ?? existingStory?.title ?? '').trim();
   const description = String(body.description ?? body.shortDescription ?? existingStory?.description ?? '').trim();
   const shortDescription = String(body.shortDescription ?? existingStory?.shortDescription ?? description.slice(0, 180)).trim();
@@ -2179,7 +2261,7 @@ function normalizeAuthorStoryInput(body, user, existingStory) {
     premium,
     price,
     vipFromChapter: parsePositiveNumber(body.vipFromChapter ?? existingStory?.vipFromChapter, premium ? 1 : 0),
-    chapterPrice: parsePositiveNumber(body.chapterPrice ?? existingStory?.chapterPrice ?? price, price),
+    chapterPrice: parsePositiveNumber(chapterPriceInput ?? price, price),
     comboPrice: parsePositiveNumber(body.comboPrice ?? existingStory?.comboPrice, 0),
     comboPriceChangedAt: existingStory?.comboPriceChangedAt || '',
     comboPriceLocked: Boolean(existingStory?.comboPriceLocked),
@@ -2785,6 +2867,936 @@ async function handle(req, res) {
     const targetedAuthorStoryBulkParams = match(pathname, '/api/author/stories/:id/chapters/bulk');
     if (targetedAuthorStoryBulkParams && req.method === 'POST' && dataStore.storeName() !== 'memory') {
       return await handleSupabaseAuthorStoryBulkChapters(req, res, targetedAuthorStoryBulkParams.id);
+    }
+
+    if (dataStore.storeName() !== 'memory') {
+      if (req.method === 'GET' && pathname === '/api/home') {
+        const db = await loadSupabaseDbFromQueries({
+          stories: () => loadSupabaseTable('stories'),
+          chapters: () => loadSupabaseTable('chapters'),
+          ratings: () => loadSupabaseTable('ratings'),
+          bookmarks: () => loadSupabaseTable('bookmarks'),
+          follows: () => loadSupabaseTable('follows'),
+          comments: () => loadSupabaseTable('comments'),
+          purchases: () => loadSupabaseTable('chapter_purchases'),
+          transactions: () => loadSupabaseTable('coin_transactions'),
+          promotions: () => loadSupabaseTable('promotions'),
+          viewEvents: () => loadSupabaseTable('view_events')
+        });
+        const updatedStories = queryPublicStories(db, null, { sort: 'updated', limit: 10 });
+        const popularStories = queryPublicStories(db, null, { sort: 'views', limit: 20 });
+        const completedStories = queryPublicStories(db, null, { status: 'completed', sort: 'updated', limit: 12 });
+        const featuredStories = queryPublicStories(db, null, { featured: true, sort: 'rating', limit: 24 });
+        const recommendedStories = queryPublicStories(db, null, { recommended: true, sort: 'updated', limit: 20 });
+        const banners = queryPublicStories(db, null, { banner: true, sort: 'updated', limit: MAX_HOME_BANNERS });
+        const promotedStories = promotedHomeStories(db, 24);
+        const reviewStories = reviewHomeStories(db, 12);
+        const trendingStories = trendingHomeStories(db, 10);
+        const rankingsByPeriod = RANKING_PERIODS.reduce((rankings, period) => {
+          rankings[period] = buildRankings(db, { period, metric: 'views', limit: 10 }).map(storySummary);
+          return rankings;
+        }, {});
+        const categories = Array.from(new Set(db.stories.filter(isPublicStory).flatMap(story => story.categories))).sort().slice(0, 14);
+        return sendCachedJson(req, res, 200, {
+          banners: banners.map(storySummary),
+          updatedStories: updatedStories.map(storySummary),
+          popularStories: popularStories.map(storySummary),
+          completedStories: completedStories.map(storySummary),
+          featuredStories: featuredStories.map(storySummary),
+          recommendedStories: recommendedStories.map(storySummary),
+          promotedStories: promotedStories.map(storySummary),
+          reviewStories: reviewStories.map(storySummary),
+          trendingStories: trendingStories.map(storySummary),
+          rankingsByPeriod,
+          categories
+        }, cachePolicyForPath(pathname) || publicCacheHeaders());
+      }
+
+      if (req.method === 'GET' && pathname === '/api/stories') {
+        const viewer = await getSupabaseAuthUser(req);
+        const q = (url.searchParams.get('q') || '').trim().toLowerCase();
+        const category = url.searchParams.get('category') || '';
+        const status = url.searchParams.get('status') || '';
+        const premium = url.searchParams.get('premium') || '';
+        const ageRating = url.searchParams.get('ageRating') || '';
+        const homeTrending = url.searchParams.get('homeTrending') === 'true' || url.searchParams.get('home_trending') === 'true';
+        const sort = url.searchParams.get('sort') || (homeTrending ? 'homeTrending' : 'updated');
+        const featured = url.searchParams.get('featured') === 'true';
+        const hot = url.searchParams.get('hot') === 'true' || url.searchParams.get('isHot') === 'true';
+        const recommended = url.searchParams.get('recommended') === 'true' || url.searchParams.get('isRecommended') === 'true';
+        const banner = url.searchParams.get('banner') === 'true' || url.searchParams.get('isBanner') === 'true';
+        const { page, limit } = pageParams(url);
+        const db = await loadSupabaseDbFromQueries({
+          stories: () => loadSupabaseTable('stories'),
+          chapters: () => loadSupabaseTable('chapters'),
+          ratings: () => loadSupabaseTable('ratings'),
+          bookmarks: () => loadSupabaseTable('bookmarks'),
+          follows: () => loadSupabaseTable('follows')
+        });
+        const fetchLimit = Math.min(100, page * limit);
+        const items = queryPublicStories(db, viewer && viewer.id, { q, category, status, premium, ageRating, sort, featured, hot, recommended, banner, homeTrending, limit: fetchLimit });
+        const total = items.length;
+        const start = (page - 1) * limit;
+        const pagedItems = items.slice(start, start + limit);
+        const storyListCacheHeaders = viewer || sort === 'created' || sort === 'new' ? privateCacheHeaders() : (cachePolicyForPath(pathname) || publicCacheHeaders());
+        return sendCachedJson(req, res, 200, {
+          stories: pagedItems.map(storySummary),
+          pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) }
+        }, storyListCacheHeaders);
+      }
+
+      const storyParamsFast = match(pathname, '/api/stories/:slug');
+      if (req.method === 'GET' && storyParamsFast) {
+        const viewer = await getSupabaseAuthUser(req);
+        const story = await selectSupabaseStoryBySlug(storyParamsFast.slug) || await loadSupabaseTable('stories', {
+          single: true,
+          buildQuery: query => query.eq('id', storyParamsFast.slug).limit(1)
+        });
+        if (!story) return notFound(res);
+        if (!isPublicStory(story) && (!viewer || viewer.role !== 'admin')) return notFound(res);
+        const [chapters, comments, ratings, bookmarks, follows, purchases, users] = await Promise.all([
+          loadSupabaseTable('chapters', { buildQuery: query => query.eq('story_id', story.id).order('number', { ascending: true }) }),
+          loadSupabaseTable('comments', { buildQuery: query => query.eq('story_id', story.id).order('created_at', { ascending: true }) }),
+          loadSupabaseTable('ratings', { buildQuery: query => query.eq('story_id', story.id) }),
+          loadSupabaseTable('bookmarks', { buildQuery: query => query.eq('story_id', story.id) }),
+          loadSupabaseTable('follows', { buildQuery: query => query.eq('story_id', story.id) }),
+          loadSupabaseTable('chapter_purchases', { buildQuery: query => query.eq('story_id', story.id) }),
+          loadSupabaseTable('users')
+        ]);
+        const db = partialDbFromTables({ stories: [story], chapters, comments, ratings, bookmarks, follows, purchases, users });
+        const enriched = enrichStory(db, story, viewer && viewer.id, viewer?.role === 'admin');
+        const chapterRows = chapters
+          .filter(chapter => viewer?.role === 'admin' || isPublicChapter(chapter))
+          .sort((a, b) => a.number - b.number);
+        const body = { story: enriched, chapters: chapterRows.map(chapterMetadataSummary), comments: publicCommentsForStory(db, story.id) };
+        return sendCachedJson(req, res, 200, body, viewer?.role === 'admin' || viewer ? privateCacheHeaders() : (cachePolicyForPath(pathname) || publicCacheHeaders()));
+      }
+
+      const chapterListParamsFast = match(pathname, '/api/stories/:slug/chapters');
+      if (req.method === 'GET' && chapterListParamsFast) {
+        const story = await selectSupabaseStoryBySlug(chapterListParamsFast.slug) || await loadSupabaseTable('stories', {
+          single: true,
+          buildQuery: query => query.eq('id', chapterListParamsFast.slug).limit(1)
+        });
+        if (!story) return notFound(res);
+        const viewer = await getSupabaseAuthUser(req);
+        if (!isPublicStory(story) && (!viewer || viewer.role !== 'admin')) return notFound(res);
+        const chapters = await loadSupabaseTable('chapters', { buildQuery: query => query.eq('story_id', story.id).order('number', { ascending: true }) });
+        const page = paginate(chapters.filter(chapter => viewer?.role === 'admin' || isPublicChapter(chapter)), url);
+        return sendCachedJson(req, res, 200, {
+          story: { title: repairMojibake(story.title || ''), slug: story.slug },
+          chapters: page.items.map(chapter => chapterIndexItem(story, chapter)),
+          pagination: page.pagination
+        }, viewer?.role === 'admin' || viewer ? privateCacheHeaders() : (cachePolicyForPath(pathname) || publicCacheHeaders()));
+      }
+
+      const chapterParamsFast = match(pathname, '/api/stories/:slug/chapters/:number');
+      if (req.method === 'GET' && chapterParamsFast) {
+        const viewer = await getSupabaseAuthUser(req);
+        const story = await selectSupabaseStoryBySlug(chapterParamsFast.slug) || await loadSupabaseTable('stories', {
+          single: true,
+          buildQuery: query => query.eq('id', chapterParamsFast.slug).limit(1)
+        });
+        if (!story) return notFound(res);
+        if (!isPublicStory(story) && (!viewer || viewer.role !== 'admin')) return notFound(res);
+        const chapters = await loadSupabaseTable('chapters', { buildQuery: query => query.eq('story_id', story.id).order('number', { ascending: true }) });
+        const purchases = viewer
+          ? await loadSupabaseTable('chapter_purchases', { buildQuery: query => query.eq('story_id', story.id) })
+          : [];
+        const chapter = chapters
+          .filter(item => viewer?.role === 'admin' || isPublicChapter(item))
+          .sort((a, b) => a.number - b.number)
+          .find(item => item.number === Number(chapterParamsFast.number));
+        if (!chapter) return notFound(res);
+        if (!isPublicChapter(chapter) && viewer?.role !== 'admin') return notFound(res);
+        const unlocked = !chapter.isPremium || (viewer && purchases.some(item => item.userId === viewer.id && (item.chapterId === chapter.id || (item.storyId === story.id && item.combo))));
+        chapter.views += 1;
+        story.views += 1;
+        const db = partialDbFromTables({ stories: [story], chapters, purchases, viewEvents: [], history: [] });
+        db.viewEvents.push({ id: uid('view'), storyId: story.id, chapterId: chapter.id, userId: viewer?.id || null, createdAt: now() });
+        if (viewer) {
+          upsertReadingProgress(db, { userId: viewer.id, storyId: story.id, chapterId: chapter.id, chapterNumber: chapter.number });
+          await persistDb(db, { prune: false, only: ['stories', 'chapters', 'viewEvents', 'history'] });
+        } else {
+          persistDbInBackground(db, { prune: false, only: ['stories', 'chapters', 'viewEvents'] }, 'chapter:view-track');
+        }
+        const chapterPageData = buildChapterPageData(story, chapter, chapters, Boolean(unlocked));
+        return sendCachedJson(req, res, 200, {
+          chapterPageData,
+          story: {
+            id: story.id,
+            slug: story.slug,
+            title: repairMojibake(story.title || ''),
+            cover: story.cover,
+            author: repairMojibake(story.author || ''),
+            chapterCount: chapters.filter(item => viewer?.role === 'admin' || isPublicChapter(item)).length
+          },
+          chapter: repairChapterPayload({
+            id: chapter.id,
+            number: chapter.number,
+            title: chapter.title,
+            content: chapterPageData.content,
+            preview: chapter.preview,
+            isPremium: Boolean(chapter.isPremium),
+            price: chapter.price,
+            views: chapter.views,
+            updatedAt: chapter.updatedAt
+          }),
+          unlocked,
+          prevChapterNumber: chapterPageData.prevChapterNumber,
+          nextChapterNumber: chapterPageData.nextChapterNumber
+        }, viewer?.role === 'admin' || viewer ? privateCacheHeaders() : (cachePolicyForPath(pathname) || publicCacheHeaders()));
+      }
+
+      if (req.method === 'GET' && pathname === '/api/author/stories') {
+        const user = await getSupabaseAuthUser(req);
+        if (!user || !canPostStory(user.role)) return unauthorized(res);
+        const db = await loadSupabaseDbFromQueries({
+          stories: () => loadSupabaseTable('stories'),
+          chapters: () => loadSupabaseTable('chapters'),
+          comments: () => loadSupabaseTable('comments'),
+          purchases: () => loadSupabaseTable('chapter_purchases'),
+          transactions: () => loadSupabaseTable('coin_transactions'),
+          ratings: () => loadSupabaseTable('ratings'),
+          bookmarks: () => loadSupabaseTable('bookmarks'),
+          follows: () => loadSupabaseTable('follows')
+        });
+        const stories = db.stories
+          .filter(story => getStoryOwnerId(story) === user.id)
+          .sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0))
+          .map(story => authorStorySummary(db, story, user.id));
+        return send(res, 200, { stories });
+      }
+
+      if (req.method === 'GET' && pathname === '/api/author/chapters') {
+        const user = await getSupabaseAuthUser(req);
+        if (!user || !canPostStory(user.role)) return unauthorized(res);
+        const storyId = String(url.searchParams.get('storyId') || '').trim();
+        let storyIds;
+        const stories = await loadSupabaseTable('stories');
+        if (storyId) {
+          const story = stories.find(item => item.id === storyId);
+          if (!story) return notFound(res);
+          if (!canEditStory(user, story)) return forbidden(res);
+          storyIds = new Set([story.id]);
+        } else {
+          storyIds = new Set(stories.filter(story => getStoryOwnerId(story) === user.id).map(story => story.id));
+        }
+        const chapters = await loadSupabaseTable('chapters', {
+          buildQuery: query => query.in('story_id', Array.from(storyIds))
+        });
+        const comments = await loadSupabaseTable('comments', {
+          buildQuery: query => query.in('story_id', Array.from(storyIds))
+        });
+        const purchases = await loadSupabaseTable('chapter_purchases', {
+          buildQuery: query => query.in('story_id', Array.from(storyIds))
+        });
+        const db = partialDbFromTables({ stories, chapters, comments, purchases });
+        const allOwnedChapters = db.chapters
+          .filter(chapter => storyIds.has(chapter.storyId))
+          .map(chapter => authorChapterSummary(db, chapter));
+        const stats = {
+          total: allOwnedChapters.length,
+          free: allOwnedChapters.filter(chapter => chapter.access === 'free').length,
+          vip: allOwnedChapters.filter(chapter => chapter.access === 'vip').length
+        };
+        const page = paginate(allOwnedChapters, url);
+        return send(res, 200, { chapters: page.items, pagination: page.pagination, stats });
+      }
+
+      if (req.method === 'GET' && pathname === '/api/admin/stories') {
+        const admin = await getSupabaseAuthUser(req);
+        if (!admin || normalizeRole(admin.role) !== 'admin') return unauthorized(res);
+        const db = await loadSupabaseDbFromQueries({
+          users: () => loadSupabaseTable('users'),
+          stories: () => loadSupabaseTable('stories'),
+          chapters: () => loadSupabaseTable('chapters'),
+          comments: () => loadSupabaseTable('comments'),
+          promotions: () => loadSupabaseTable('promotions'),
+          ratings: () => loadSupabaseTable('ratings'),
+          bookmarks: () => loadSupabaseTable('bookmarks'),
+          follows: () => loadSupabaseTable('follows')
+        });
+        const query = url.searchParams.get('query') || '';
+        const status = url.searchParams.get('status') || '';
+        const storyStatus = url.searchParams.get('storyStatus') || '';
+        const category = url.searchParams.get('category') || '';
+        const ownerId = url.searchParams.get('ownerId') || '';
+        const stories = db.stories.map(story => adminStorySummary(db, story, admin.id))
+          .filter(story => matchesSearch([story.title, story.author, story.description, story.ownerName], query))
+          .filter(story => !status || status === 'all' || story.status === status)
+          .filter(story => !storyStatus || storyStatus === 'all' || story.storyStatus === storyStatus)
+          .filter(story => !category || category === 'all' || (story.categories || []).includes(category))
+          .filter(story => !ownerId || ownerId === 'all' || story.owner?.id === ownerId);
+        stories.sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0));
+        const page = paginate(stories, url);
+        return send(res, 200, { stories: page.items, pagination: page.pagination });
+      }
+
+      if (req.method === 'GET' && pathname === '/api/admin/chapters') {
+        const admin = await getSupabaseAuthUser(req);
+        if (!admin || normalizeRole(admin.role) !== 'admin') return unauthorized(res);
+        const db = await loadSupabaseDbFromQueries({
+          stories: () => loadSupabaseTable('stories'),
+          chapters: () => loadSupabaseTable('chapters'),
+          comments: () => loadSupabaseTable('comments')
+        });
+        const query = url.searchParams.get('query') || '';
+        const status = url.searchParams.get('status') || '';
+        const storyId = url.searchParams.get('storyId') || '';
+        let chapters = db.chapters.map(chapter => chapterAdminSummary(db, chapter));
+        chapters = chapters.filter(chapter => matchesSearch([chapter.title, chapter.storyTitle, chapter.author], query));
+        if (status && status !== 'all') chapters = chapters.filter(chapter => chapter.status === status);
+        if (storyId && storyId !== 'all') chapters = chapters.filter(chapter => chapter.storyId === storyId);
+        chapters.sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0));
+        const page = paginate(chapters, url);
+        return send(res, 200, { chapters: page.items, pagination: page.pagination });
+      }
+
+      const adminUserParamsFast = match(pathname, '/api/admin/users/:id');
+      if (adminUserParamsFast && req.method === 'PATCH') {
+        const admin = await requireSupabaseAdmin(req, res);
+        if (!admin) return;
+        const [target, stories, reports] = await Promise.all([
+          loadSupabaseTable('users', { single: true, buildQuery: query => query.eq('id', adminUserParamsFast.id).limit(1) }),
+          loadSupabaseTable('stories', { buildQuery: query => query.eq('owner_id', adminUserParamsFast.id) }),
+          loadSupabaseTable('reports', { buildQuery: query => query.eq('user_id', adminUserParamsFast.id) })
+        ]);
+        if (!target) return notFound(res);
+        const db = partialDbFromTables({ users: [admin, target], stories, reports });
+        const body = await parseBody(req);
+        const before = adminUserSummary(db, target);
+        if (body.status !== undefined) {
+          if (!VALID_ADMIN_USER_STATUSES.includes(body.status)) return badRequest(res, 'Trang thai user khong hop le.');
+          if (target.id === admin.id && body.status === 'locked') return badRequest(res, 'Admin khong the tu khoa tai khoan cua minh.');
+          if (target.status !== body.status) target.tokenVersion = Number(target.tokenVersion || 0) + 1;
+          target.status = body.status;
+        }
+        if (body.role !== undefined) {
+          if (!VALID_MOD_MANAGEMENT_ROLES.includes(body.role)) return badRequest(res, 'Vai tro user khong hop le.');
+          const nextRole = normalizeStoredRole(body.role);
+          if (!VALID_MOD_MANAGEMENT_ROLES.includes(nextRole)) return badRequest(res, 'Vai tro user khong hop le.');
+          if (normalizeRole(target.role) !== nextRole) target.tokenVersion = Number(target.tokenVersion || 0) + 1;
+          target.role = nextRole;
+        }
+        if (body.note !== undefined) target.note = String(body.note || '').slice(0, 500);
+        target.updatedAt = now();
+        const after = adminUserSummary(db, target);
+        const action = before.status !== after.status
+          ? (after.status === 'locked' ? 'lock_user' : 'unlock_user')
+          : before.role !== after.role ? 'change_role' : 'update_user';
+        logAdminAction(db, admin, action, 'user', target.id, before, after, body.note || '');
+        await persistDb(db, { prune: false, only: ['users', 'adminLogs'] });
+        return send(res, 200, { user: after });
+      }
+
+      const adminUserRoleParamsFast = match(pathname, '/api/admin/users/:id/role');
+      if (adminUserRoleParamsFast && req.method === 'PATCH') {
+        const admin = await requireSupabaseAdmin(req, res);
+        if (!admin) return;
+        const [target, stories, reports, users] = await Promise.all([
+          loadSupabaseTable('users', { single: true, buildQuery: query => query.eq('id', adminUserRoleParamsFast.id).limit(1) }),
+          loadSupabaseTable('stories', { buildQuery: query => query.eq('owner_id', adminUserRoleParamsFast.id) }),
+          loadSupabaseTable('reports', { buildQuery: query => query.eq('user_id', adminUserRoleParamsFast.id) }),
+          loadSupabaseTable('users')
+        ]);
+        if (!target) return notFound(res);
+        const db = partialDbFromTables({ users, stories, reports });
+        const body = await parseBody(req);
+        const nextRole = normalizeStoredRole(body.role);
+        if (!VALID_MOD_MANAGEMENT_ROLES.includes(nextRole)) return badRequest(res, 'Vai tro moi chi duoc la user hoac mod.');
+        const roleCheck = canChangeUserRole(db, admin, target, nextRole);
+        if (!roleCheck.ok) return badRequest(res, roleCheck.message);
+        const before = adminUserSummary(db, target);
+        if (normalizeRole(target.role) !== nextRole) {
+          target.role = nextRole;
+          target.tokenVersion = Number(target.tokenVersion || 0) + 1;
+          target.updatedAt = now();
+        }
+        const after = adminUserSummary(db, target);
+        logAdminAction(db, admin, 'change_role', 'user', target.id, before, after, '');
+        await persistDb(db, { prune: false, only: ['users', 'adminLogs'] });
+        return send(res, 200, { user: after });
+      }
+
+      const adminAdjustBalanceParamsFast = match(pathname, '/api/admin/users/:id/adjust-balance');
+      if (adminAdjustBalanceParamsFast && req.method === 'POST') {
+        const admin = await requireSupabaseAdmin(req, res);
+        if (!admin) return;
+        const [target, stories, reports] = await Promise.all([
+          loadSupabaseTable('users', { single: true, buildQuery: query => query.eq('id', adminAdjustBalanceParamsFast.id).limit(1) }),
+          loadSupabaseTable('stories', { buildQuery: query => query.eq('owner_id', adminAdjustBalanceParamsFast.id) }),
+          loadSupabaseTable('reports', { buildQuery: query => query.eq('user_id', adminAdjustBalanceParamsFast.id) })
+        ]);
+        if (!target) return notFound(res);
+        const db = partialDbFromTables({ users: [admin, target], stories, reports });
+        const body = await parseBody(req);
+        const amount = Number(body.amount);
+        if (!Number.isFinite(amount) || amount === 0) return badRequest(res, 'So Dau dieu chinh khong hop le.');
+        const before = adminUserSummary(db, target);
+        const balanceBefore = Number(target.seeds || 0);
+        target.seeds = Math.max(0, balanceBefore + amount);
+        target.updatedAt = now();
+        const transaction = {
+          id: uid('txn'),
+          userId: target.id,
+          type: 'admin_adjustment',
+          amount,
+          balanceBefore,
+          balanceAfter: target.seeds,
+          refType: 'admin_user',
+          refId: target.id,
+          seeds: Math.abs(amount),
+          status: 'success',
+          method: 'admin',
+          note: String(body.reason || 'Admin dieu chinh so du').slice(0, 500),
+          createdBy: admin.id,
+          createdAt: now()
+        };
+        db.transactions.unshift(transaction);
+        createNotification(db, target.id, {
+          type: 'wallet',
+          title: 'So du Dau duoc dieu chinh',
+          body: `${amount > 0 ? 'Cong' : 'Tru'} ${Math.abs(amount)} Dau. Ly do: ${transaction.note}`,
+          link: '/wallet'
+        });
+        const after = adminUserSummary(db, target);
+        logAdminAction(db, admin, 'adjust_balance', 'user', target.id, before, after, transaction.note);
+        await persistDb(db, { prune: false, only: ['users', 'transactions', 'notifications', 'adminLogs'] });
+        return send(res, 200, { user: after, transaction: adminTransactionSummary(db, transaction) });
+      }
+
+      const adminCommentParamsFast = match(pathname, '/api/admin/comments/:id');
+      if (adminCommentParamsFast && ['PATCH', 'DELETE'].includes(req.method)) {
+        const admin = await requireSupabaseAdmin(req, res);
+        if (!admin) return;
+        const comment = await loadSupabaseTable('comments', { single: true, buildQuery: query => query.eq('id', adminCommentParamsFast.id).limit(1) });
+        if (!comment) return notFound(res);
+        const [users, stories] = await Promise.all([
+          loadSupabaseTable('users', { buildQuery: query => query.in('id', [admin.id, comment.userId].filter(Boolean)) }),
+          comment.storyId ? loadSupabaseTable('stories', { buildQuery: query => query.eq('id', comment.storyId).limit(1) }) : Promise.resolve([])
+        ]);
+        const db = partialDbFromTables({ users: users.some(user => user.id === admin.id) ? users : [admin, ...users], stories, comments: [comment] });
+        if (req.method === 'DELETE') {
+          logAdminAction(db, admin, 'delete_comment', 'comment', comment.id, adminCommentSummary(db, comment), null, '');
+          await dataStore.deleteRowsByColumn('comments', 'id', [comment.id]);
+          await persistDb(db, { prune: false, only: ['adminLogs'] });
+          return send(res, 200, { ok: true });
+        }
+        const body = await parseBody(req);
+        if (!VALID_COMMENT_STATUSES.includes(body.status)) return badRequest(res, 'Trang thai binh luan khong hop le.');
+        const before = adminCommentSummary(db, comment);
+        comment.status = body.status;
+        if (body.adminNote !== undefined) comment.adminNote = String(body.adminNote || '').slice(0, 500);
+        comment.updatedAt = now();
+        const after = adminCommentSummary(db, comment);
+        logAdminAction(db, admin, 'update_comment', 'comment', comment.id, before, after, comment.adminNote || '');
+        await persistDb(db, { prune: false, only: ['comments', 'adminLogs'] });
+        return send(res, 200, { comment: after });
+      }
+
+      const adminReportParamsFast = match(pathname, '/api/admin/reports/:id');
+      const adminReportActionParamsFast = match(pathname, '/api/admin/reports/:id/actions');
+      if (adminReportActionParamsFast && req.method === 'POST') {
+        const admin = await requireSupabaseAdmin(req, res);
+        if (!admin) return;
+        const report = await loadSupabaseTable('reports', { single: true, buildQuery: query => query.eq('id', adminReportActionParamsFast.id).limit(1) });
+        if (!report) return notFound(res);
+        const body = await parseBody(req);
+        if (body.status !== undefined && !VALID_REPORT_STATUSES.includes(body.status)) return badRequest(res, 'Trang thai bao cao khong hop le.');
+        const chapterId = body.targetType === 'chapter' ? body.targetId : report.chapterId;
+        const commentId = body.targetType === 'comment' ? body.targetId : report.commentId;
+        const [users, stories, chapters, comments] = await Promise.all([
+          loadSupabaseTable('users'),
+          loadSupabaseTable('stories'),
+          chapterId ? loadSupabaseTable('chapters', { buildQuery: query => query.eq('id', chapterId) }) : Promise.resolve([]),
+          commentId ? loadSupabaseTable('comments', { buildQuery: query => query.eq('id', commentId) }) : Promise.resolve([])
+        ]);
+        const db = partialDbFromTables({ users, stories, chapters, comments, reports: [report] });
+        const before = adminReportSummary(db, report);
+        const target = reportTarget(db, {
+          ...report,
+          targetType: body.targetType || report.targetType,
+          targetId: body.targetId || report.targetId
+        });
+        const note = String(body.adminNote ?? body.note ?? '').slice(0, 500);
+        if (body.hideContent) {
+          if (target.type === 'story' && target.story) {
+            const storyBefore = cloneForLog(target.story);
+            target.story.hidden = true;
+            target.story.updatedAt = now();
+            logAdminAction(db, admin, 'hide_story', 'story', target.story.id, storyBefore, target.story, note);
+          }
+          if (target.type === 'chapter' && target.chapter) {
+            const chapterBefore = cloneForLog(target.chapter);
+            target.chapter.status = 'hidden';
+            target.chapter.updatedAt = now();
+            const story = db.stories.find(item => item.id === target.chapter.storyId);
+            if (story) refreshStoryChapterMetadata(db, story);
+            logAdminAction(db, admin, 'hide_chapter', 'chapter', target.chapter.id, chapterBefore, target.chapter, note);
+          }
+          if (target.type === 'comment' && target.comment) {
+            const commentBefore = cloneForLog(target.comment);
+            target.comment.status = 'hidden';
+            target.comment.adminNote = note;
+            target.comment.updatedAt = now();
+            logAdminAction(db, admin, 'hide_comment', 'comment', target.comment.id, commentBefore, target.comment, note);
+          }
+        }
+        if (body.lockUser && target.reportedUserId) {
+          const lockedUser = db.users.find(item => item.id === target.reportedUserId);
+          if (lockedUser && lockedUser.id !== admin.id) {
+            const userBefore = adminUserSummary(db, lockedUser);
+            lockedUser.status = 'locked';
+            lockedUser.tokenVersion = Number(lockedUser.tokenVersion || 0) + 1;
+            lockedUser.updatedAt = now();
+            logAdminAction(db, admin, 'lock_user', 'user', lockedUser.id, userBefore, adminUserSummary(db, lockedUser), note);
+          }
+        }
+        report.status = body.status || report.status || 'reviewing';
+        report.adminNote = note;
+        report.resolvedBy = ['resolved', 'rejected'].includes(report.status) ? admin.id : report.resolvedBy;
+        report.resolvedAt = ['resolved', 'rejected'].includes(report.status) ? now() : report.resolvedAt;
+        report.updatedAt = now();
+        const after = adminReportSummary(db, report);
+        logAdminAction(db, admin, 'resolve_report', 'report', report.id, before, after, note);
+        await persistDb(db, { prune: false, only: ['reports', 'stories', 'chapters', 'comments', 'users', 'adminLogs'] });
+        clearHomePublicCache();
+        return send(res, 200, { report: after });
+      }
+
+      if (adminReportParamsFast && req.method === 'PATCH') {
+        const admin = await requireSupabaseAdmin(req, res);
+        if (!admin) return;
+        const report = await loadSupabaseTable('reports', { single: true, buildQuery: query => query.eq('id', adminReportParamsFast.id).limit(1) });
+        if (!report) return notFound(res);
+        const [users, stories, chapters, comments] = await Promise.all([
+          loadSupabaseTable('users'),
+          report.storyId ? loadSupabaseTable('stories', { buildQuery: query => query.eq('id', report.storyId) }) : Promise.resolve([]),
+          report.chapterId ? loadSupabaseTable('chapters', { buildQuery: query => query.eq('id', report.chapterId) }) : Promise.resolve([]),
+          report.commentId ? loadSupabaseTable('comments', { buildQuery: query => query.eq('id', report.commentId) }) : Promise.resolve([])
+        ]);
+        const db = partialDbFromTables({ users, stories, chapters, comments, reports: [report] });
+        const body = await parseBody(req);
+        if (!VALID_REPORT_STATUSES.includes(body.status)) return badRequest(res, 'Trang thai bao cao khong hop le.');
+        const before = adminReportSummary(db, report);
+        report.status = body.status;
+        if (body.adminNote !== undefined || body.note !== undefined) report.adminNote = String(body.adminNote ?? body.note ?? '').slice(0, 500);
+        if (['resolved', 'rejected'].includes(body.status)) {
+          report.resolvedBy = admin.id;
+          report.resolvedAt = now();
+        }
+        report.updatedAt = now();
+        const after = adminReportSummary(db, report);
+        logAdminAction(db, admin, 'update_report', 'report', report.id, before, after, report.adminNote || '');
+        await persistDb(db, { prune: false, only: ['reports', 'adminLogs'] });
+        return send(res, 200, { report: after });
+      }
+
+      const adminStoryApproveParamsFast = match(pathname, '/api/admin/stories/:id/approve');
+      if (adminStoryApproveParamsFast && req.method === 'PATCH') {
+        const admin = await requireSupabaseAdmin(req, res);
+        if (!admin) return;
+        const db = await loadSupabaseAdminStoryDb(adminStoryApproveParamsFast.id);
+        const story = db.stories.find(item => item.id === adminStoryApproveParamsFast.id);
+        if (!story) return notFound(res);
+        const before = adminStorySummary(db, story, admin.id);
+        story.approvalStatus = 'approved';
+        story.hidden = false;
+        story.rejectionReason = '';
+        story.updatedAt = now();
+        const after = adminStorySummary(db, story, admin.id);
+        logAdminAction(db, admin, 'approve_story', 'story', story.id, before, after, '');
+        await persistDb(db, { prune: false, only: ['stories', 'adminLogs'], relationStoryIds: [story.id] });
+        clearHomePublicCache();
+        return send(res, 200, { story: after });
+      }
+
+      const adminStoryRejectParamsFast = match(pathname, '/api/admin/stories/:id/reject');
+      if (adminStoryRejectParamsFast && req.method === 'PATCH') {
+        const admin = await requireSupabaseAdmin(req, res);
+        if (!admin) return;
+        const db = await loadSupabaseAdminStoryDb(adminStoryRejectParamsFast.id);
+        const story = db.stories.find(item => item.id === adminStoryRejectParamsFast.id);
+        if (!story) return notFound(res);
+        const body = await parseBody(req);
+        const rejectReason = String(body.rejectReason || body.rejectionReason || '').trim();
+        if (!rejectReason) return badRequest(res, 'Ly do tu choi la bat buoc.');
+        const before = adminStorySummary(db, story, admin.id);
+        story.approvalStatus = 'rejected';
+        story.hidden = true;
+        story.rejectionReason = rejectReason.slice(0, 500);
+        story.updatedAt = now();
+        const after = adminStorySummary(db, story, admin.id);
+        logAdminAction(db, admin, 'reject_story', 'story', story.id, before, after, story.rejectionReason);
+        await persistDb(db, { prune: false, only: ['stories', 'adminLogs'], relationStoryIds: [story.id] });
+        clearHomePublicCache();
+        return send(res, 200, { story: after });
+      }
+
+      const adminStoryVisibilityParamsFast = match(pathname, '/api/admin/stories/:id/visibility');
+      if (adminStoryVisibilityParamsFast && req.method === 'PATCH') {
+        const admin = await requireSupabaseAdmin(req, res);
+        if (!admin) return;
+        const db = await loadSupabaseAdminStoryDb(adminStoryVisibilityParamsFast.id);
+        const story = db.stories.find(item => item.id === adminStoryVisibilityParamsFast.id);
+        if (!story) return notFound(res);
+        const body = await parseBody(req);
+        if (body.isPublic === undefined && body.hidden === undefined) return badRequest(res, 'Thieu isPublic.');
+        const before = adminStorySummary(db, story, admin.id);
+        story.hidden = body.isPublic !== undefined ? !Boolean(body.isPublic) : Boolean(body.hidden);
+        if (!story.hidden && story.approvalStatus !== 'approved') story.approvalStatus = 'approved';
+        story.updatedAt = now();
+        const after = adminStorySummary(db, story, admin.id);
+        logAdminAction(db, admin, story.hidden ? 'hide_story' : 'show_story', 'story', story.id, before, after, '');
+        await persistDb(db, { prune: false, only: ['stories', 'adminLogs'], relationStoryIds: [story.id] });
+        clearHomePublicCache();
+        return send(res, 200, { story: after });
+      }
+
+      const adminStoryStatusParamsFast = match(pathname, '/api/admin/stories/:id/status');
+      if (adminStoryStatusParamsFast && req.method === 'PATCH') {
+        const admin = await requireSupabaseAdmin(req, res);
+        if (!admin) return;
+        const db = await loadSupabaseAdminStoryDb(adminStoryStatusParamsFast.id);
+        const story = db.stories.find(item => item.id === adminStoryStatusParamsFast.id);
+        if (!story) return notFound(res);
+        const body = await parseBody(req);
+        const before = adminStorySummary(db, story, admin.id);
+        if (body.approvalStatus !== undefined) {
+          if (!VALID_STORY_APPROVAL_STATUSES.includes(body.approvalStatus)) return badRequest(res, 'Trang thai duyet khong hop le.');
+          story.approvalStatus = body.approvalStatus;
+          if (body.approvalStatus === 'approved') {
+            if (body.hidden === undefined) story.hidden = false;
+            story.rejectionReason = '';
+          }
+          if (body.approvalStatus === 'rejected') {
+            story.hidden = true;
+            story.rejectionReason = String(body.rejectionReason || 'Can chinh sua truoc khi duyet.').slice(0, 500);
+          }
+          if (body.approvalStatus === 'pending' || body.approvalStatus === 'draft') story.hidden = true;
+        }
+        if (body.hidden !== undefined) story.hidden = Boolean(body.hidden);
+        if (body.rejectionReason !== undefined && story.approvalStatus === 'rejected') story.rejectionReason = String(body.rejectionReason || '').slice(0, 500);
+        story.updatedAt = now();
+        const after = adminStorySummary(db, story, admin.id);
+        const action = story.approvalStatus === 'rejected' ? 'reject_story' : story.hidden ? 'hide_story' : story.approvalStatus === 'approved' ? 'approve_story' : 'update_story_status';
+        logAdminAction(db, admin, action, 'story', story.id, before, after, story.rejectionReason || '');
+        await persistDb(db, { prune: false, only: ['stories', 'adminLogs'], relationStoryIds: [story.id] });
+        clearHomePublicCache();
+        return send(res, 200, { story: after });
+      }
+
+      const adminStoryFlagsParamsFast = match(pathname, '/api/admin/stories/:id/flags');
+      if (adminStoryFlagsParamsFast && req.method === 'PATCH') {
+        const admin = await requireSupabaseAdmin(req, res);
+        if (!admin) return;
+        const [db, bannerStories] = await Promise.all([
+          loadSupabaseAdminStoryDb(adminStoryFlagsParamsFast.id),
+          loadSupabaseTable('stories', { buildQuery: query => query.eq('banner', true) })
+        ]);
+        bannerStories.forEach(item => {
+          if (!db.stories.some(story => story.id === item.id)) db.stories.push(item);
+        });
+        const story = db.stories.find(item => item.id === adminStoryFlagsParamsFast.id);
+        if (!story) return notFound(res);
+        const body = await parseBody(req);
+        const before = adminStorySummary(db, story, admin.id);
+        const nextBanner = body.isBanner !== undefined ? Boolean(body.isBanner) : body.banner !== undefined ? Boolean(body.banner) : story.banner;
+        if (nextBanner && !story.banner && !canEnableHomeBanner(db, story.id)) return badRequest(res, 'Trang chu chi duoc bat toi da 6 banner. Hay tat bot 1 banner roi bat banner moi.');
+        if (body.isFeatured !== undefined) story.featured = Boolean(body.isFeatured);
+        if (body.isHot !== undefined) story.hot = Boolean(body.isHot);
+        if (body.isRecommended !== undefined) story.recommended = Boolean(body.isRecommended);
+        if (body.isBanner !== undefined) story.banner = Boolean(body.isBanner);
+        ['featured', 'hot', 'recommended', 'banner'].forEach(key => {
+          if (body[key] !== undefined) story[key] = Boolean(body[key]);
+        });
+        if (body.bannerImage !== undefined) story.bannerImage = String(body.bannerImage || '').trim();
+        if (story.banner && !String(story.bannerImage || '').trim() && story.cover) story.bannerImage = String(story.cover || '').trim();
+        if (body.isPromoted !== undefined) setManualStoryPromotion(db, story, Boolean(body.isPromoted), admin);
+        if (body.promoted !== undefined) setManualStoryPromotion(db, story, Boolean(body.promoted), admin);
+        if (body.homeTrending !== undefined) story.homeTrending = Boolean(body.homeTrending);
+        if (body.homeTrendingOrder !== undefined) story.homeTrendingOrder = Number(body.homeTrendingOrder || 0);
+        story.updatedAt = now();
+        const after = adminStorySummary(db, story, admin.id);
+        logAdminAction(db, admin, 'update_story_flags', 'story', story.id, before, after, '');
+        await persistDb(db, { prune: false, only: ['stories', 'promotions', 'adminLogs'], relationStoryIds: [story.id] });
+        clearHomePublicCache();
+        return send(res, 200, { story: after });
+      }
+
+      const adminStoryParamsFast = match(pathname, '/api/admin/stories/:id');
+      if (adminStoryParamsFast && req.method === 'PUT') {
+        const admin = await requireSupabaseAdmin(req, res);
+        if (!admin) return;
+        const [db, bannerStories] = await Promise.all([
+          loadSupabaseAdminStoryDb(adminStoryParamsFast.id),
+          loadSupabaseTable('stories', { buildQuery: query => query.eq('banner', true) })
+        ]);
+        bannerStories.forEach(item => {
+          if (!db.stories.some(story => story.id === item.id)) db.stories.push(item);
+        });
+        const story = db.stories.find(item => item.id === adminStoryParamsFast.id);
+        if (!story) return notFound(res);
+        const body = await parseBody(req);
+        const before = adminStorySummary(db, story, admin.id);
+        if (body.slug) {
+          const nextSlug = slugify(body.slug);
+          const existingSlugStory = await loadSupabaseTable('stories', { single: true, buildQuery: query => query.eq('slug', nextSlug).limit(1) });
+          if (existingSlugStory && existingSlugStory.id !== story.id) return badRequest(res, 'Slug da ton tai.');
+          story.slug = nextSlug;
+        }
+        try {
+          ['title','author','translator','cover','bannerImage','description','status','language','ageRating','type'].forEach(key => {
+            if (body[key] !== undefined) {
+              const value = String(body[key]);
+              story[key] = ['cover', 'bannerImage', 'status', 'ageRating', 'type'].includes(key) ? value.trim() : validateCleanText(value, `story.${key}`);
+            }
+          });
+        } catch (error) {
+          return badRequest(res, error.message);
+        }
+        if (body.hidden !== undefined) story.hidden = Boolean(body.hidden);
+        if (body.approvalStatus !== undefined) {
+          if (!VALID_STORY_APPROVAL_STATUSES.includes(body.approvalStatus)) return badRequest(res, 'Trang thai duyet khong hop le.');
+          story.approvalStatus = body.approvalStatus;
+          if (body.approvalStatus === 'approved') {
+            if (body.hidden === undefined) story.hidden = false;
+            story.rejectionReason = '';
+          }
+          if (body.approvalStatus === 'rejected') {
+            story.hidden = true;
+            story.rejectionReason = String(body.rejectionReason || 'Can chinh sua truoc khi duyet.').slice(0, 500);
+          }
+          if (body.approvalStatus === 'pending' || body.approvalStatus === 'draft') story.hidden = true;
+        }
+        if (body.rejectionReason !== undefined) story.rejectionReason = String(body.rejectionReason || '').slice(0, 500);
+        if (body.chapterCountEstimate !== undefined) story.chapterCountEstimate = parsePositiveNumber(body.chapterCountEstimate, story.chapterCountEstimate);
+        if (body.premium !== undefined) story.premium = Boolean(body.premium);
+        if (body.featured !== undefined) story.featured = Boolean(body.featured);
+        if (body.hot !== undefined) story.hot = Boolean(body.hot);
+        if (body.recommended !== undefined) story.recommended = Boolean(body.recommended);
+        if (body.banner !== undefined) {
+          const nextBanner = Boolean(body.banner);
+          if (nextBanner && !story.banner && !canEnableHomeBanner(db, story.id)) return badRequest(res, 'Trang chu chi duoc bat toi da 6 banner. Hay tat bot 1 banner roi bat banner moi.');
+          story.banner = nextBanner;
+        }
+        if (body.homeTrending !== undefined) story.homeTrending = Boolean(body.homeTrending);
+        if (body.homeTrendingOrder !== undefined) story.homeTrendingOrder = Number(body.homeTrendingOrder || 0);
+        if (body.price !== undefined) story.price = Number(body.price);
+        if (body.chapterPrice !== undefined) story.chapterPrice = Number(body.chapterPrice);
+        if (body.rating !== undefined) story.rating = Number(body.rating);
+        if (body.categories !== undefined) story.categories = normalizeCategories(body.categories);
+        if (body.tags !== undefined) story.tags = normalizeCategories(body.tags);
+        story.updatedAt = now();
+        ensureTaxonomy(db);
+        const after = adminStorySummary(db, story, admin.id);
+        logAdminAction(db, admin, 'update_story', 'story', story.id, before, after, '');
+        await persistDb(db, { prune: false, only: ['stories', 'adminLogs'], relationStoryIds: [story.id] });
+        clearHomePublicCache();
+        return send(res, 200, { story: after });
+      }
+
+      if (adminStoryParamsFast && req.method === 'DELETE') {
+        const admin = await requireSupabaseAdmin(req, res);
+        if (!admin) return;
+        const db = await loadSupabaseAdminStoryDb(adminStoryParamsFast.id);
+        const story = db.stories.find(item => item.id === adminStoryParamsFast.id);
+        if (!story) return notFound(res);
+        logAdminAction(db, admin, 'delete_story', 'story', story.id, story, null, '');
+        await Promise.all([
+          dataStore.deleteRowsByColumn('chapters', 'story_id', [story.id]),
+          dataStore.deleteRowsByColumn('bookmarks', 'story_id', [story.id]),
+          dataStore.deleteRowsByColumn('follows', 'story_id', [story.id]),
+          dataStore.deleteRowsByColumn('reading_progress', 'story_id', [story.id]),
+          dataStore.deleteRowsByColumn('comments', 'story_id', [story.id]),
+          dataStore.deleteRowsByColumn('ratings', 'story_id', [story.id]),
+          dataStore.deleteRowsByColumn('reports', 'story_id', [story.id]),
+          dataStore.deleteRowsByColumn('chapter_purchases', 'story_id', [story.id]),
+          dataStore.deleteRowsByColumn('promotions', 'story_id', [story.id]),
+          dataStore.deleteRowsByColumn('story_categories', 'story_id', [story.id]),
+          dataStore.deleteRowsByColumn('story_tags', 'story_id', [story.id])
+        ]);
+        await dataStore.deleteRowsByColumn('stories', 'id', [story.id]);
+        await persistDb(db, { prune: false, only: ['adminLogs'] });
+        clearHomePublicCache();
+        return send(res, 200, { ok: true });
+      }
+
+      const adminChapterParamsFast = match(pathname, '/api/admin/stories/:id/chapters');
+      if (adminChapterParamsFast && req.method === 'POST') {
+        const admin = await requireSupabaseAdmin(req, res);
+        if (!admin) return;
+        const [story, chapters, comments, follows] = await Promise.all([
+          loadSupabaseTable('stories', { single: true, buildQuery: query => query.eq('id', adminChapterParamsFast.id).limit(1) }),
+          loadSupabaseTable('chapters', { buildQuery: query => query.eq('story_id', adminChapterParamsFast.id).order('number', { ascending: true }) }),
+          loadSupabaseTable('comments', { buildQuery: query => query.eq('story_id', adminChapterParamsFast.id) }),
+          loadSupabaseTable('follows', { buildQuery: query => query.eq('story_id', adminChapterParamsFast.id) })
+        ]);
+        if (!story) return notFound(res);
+        const db = partialDbFromTables({ stories: [story], chapters, comments, follows });
+        const body = await parseBody(req);
+        const nextNumber = nextChapterNumber(db, story.id);
+        const chapterNumber = Number(body.number || nextNumber);
+        if (!Number.isFinite(chapterNumber) || chapterNumber <= 0) return badRequest(res, 'So chuong khong hop le.');
+        if (chapterNumberExists(db, story.id, chapterNumber)) return badRequest(res, 'So chuong da ton tai trong truyen nay.');
+        const status = VALID_CHAPTER_STATUSES.includes(body.status) ? body.status : 'approved';
+        const chapter = {
+          id: uid('chap'),
+          storyId: story.id,
+          number: chapterNumber,
+          title: body.title || `Chuong ${nextNumber}`,
+          content: body.content || 'Noi dung chuong dang duoc cap nhat.',
+          preview: body.preview || 'Day la doan xem truoc cua chuong.',
+          isPremium: Boolean(body.isPremium ?? body.vip),
+          price: Number(body.price || 0),
+          status,
+          rejectionReason: status === 'rejected' ? String(body.rejectionReason || '').slice(0, 500) : '',
+          scheduledAt: body.scheduledAt ? new Date(body.scheduledAt).toISOString() : '',
+          password: body.password ? String(body.password) : '',
+          wordCount: wordCount(body.content),
+          views: 0,
+          createdAt: now(),
+          updatedAt: now()
+        };
+        const inputError = validateChapterInput(chapter, status);
+        if (inputError) return badRequest(res, inputError);
+        db.chapters.push(chapter);
+        refreshStoryChapterMetadata(db, story);
+        notifyChapterPublished(db, story, chapter, admin.id);
+        logAdminAction(db, admin, 'create_chapter', 'chapter', chapter.id, null, chapterAdminSummary(db, chapter), '');
+        await persistDb(db, { prune: false, only: ['stories', 'chapters', 'notifications', 'adminLogs'] });
+        return send(res, 201, { chapter: chapterAdminSummary(db, chapter) });
+      }
+
+      const adminChapterStatusParamsFast = match(pathname, '/api/admin/chapters/:id/status');
+      if (adminChapterStatusParamsFast && req.method === 'PATCH') {
+        const admin = await requireSupabaseAdmin(req, res);
+        if (!admin) return;
+        const db = await loadSupabaseAdminChapterDb(adminChapterStatusParamsFast.id);
+        const chapter = db.chapters.find(item => item.id === adminChapterStatusParamsFast.id);
+        if (!chapter) return notFound(res);
+        const body = await parseBody(req);
+        if (!VALID_CHAPTER_STATUSES.includes(body.status)) return badRequest(res, 'Trang thai chuong khong hop le.');
+        const before = chapterAdminSummary(db, chapter);
+        const wasPublic = isPublicChapter(chapter);
+        chapter.status = body.status;
+        if (body.status === 'scheduled') {
+          if (!body.scheduledAt) return badRequest(res, 'scheduledAt la bat buoc khi len lich chuong.');
+          const scheduledAt = new Date(body.scheduledAt);
+          if (Number.isNaN(scheduledAt.getTime())) return badRequest(res, 'scheduledAt khong hop le.');
+          chapter.scheduledAt = scheduledAt.toISOString();
+        }
+        if (body.scheduledAt !== undefined && body.status !== 'scheduled') {
+          const scheduledAt = body.scheduledAt ? new Date(body.scheduledAt) : null;
+          if (scheduledAt && Number.isNaN(scheduledAt.getTime())) return badRequest(res, 'scheduledAt khong hop le.');
+          chapter.scheduledAt = scheduledAt ? scheduledAt.toISOString() : '';
+        }
+        if (body.status === 'rejected') chapter.rejectionReason = String(body.rejectionReason || 'Can chinh sua truoc khi duyet.').slice(0, 500);
+        if (['approved', 'published'].includes(body.status)) {
+          chapter.rejectionReason = '';
+          chapter.scheduledAt = '';
+        }
+        const publishError = publicChapterError(chapter, body.status);
+        if (publishError) return badRequest(res, publishError);
+        chapter.updatedAt = now();
+        const story = db.stories.find(item => item.id === chapter.storyId);
+        if (story) refreshStoryChapterMetadata(db, story);
+        if (!wasPublic && story) notifyChapterPublished(db, story, chapter, admin.id);
+        const after = chapterAdminSummary(db, chapter);
+        const action = body.status === 'rejected' ? 'reject_chapter' : body.status === 'hidden' ? 'hide_chapter' : ['approved', 'published'].includes(body.status) ? 'approve_chapter' : 'update_chapter_status';
+        logAdminAction(db, admin, action, 'chapter', chapter.id, before, after, chapter.rejectionReason || '');
+        await persistDb(db, { prune: false, only: ['stories', 'chapters', 'notifications', 'adminLogs'] });
+        return send(res, 200, { chapter: after });
+      }
+
+      const adminChapterUpdateParamsFast = match(pathname, '/api/admin/chapters/:id');
+      if (adminChapterUpdateParamsFast && req.method === 'PUT') {
+        const admin = await requireSupabaseAdmin(req, res);
+        if (!admin) return;
+        const db = await loadSupabaseAdminChapterDb(adminChapterUpdateParamsFast.id);
+        const chapter = db.chapters.find(item => item.id === adminChapterUpdateParamsFast.id);
+        if (!chapter) return notFound(res);
+        const body = await parseBody(req);
+        const story = db.stories.find(item => item.id === chapter.storyId);
+        const before = chapterAdminSummary(db, chapter);
+        if (body.number !== undefined) {
+          const nextNumber = Number(body.number);
+          if (!Number.isFinite(nextNumber) || nextNumber <= 0) return badRequest(res, 'So chuong khong hop le.');
+          if (chapterNumberExists(db, chapter.storyId, nextNumber, chapter.id)) return badRequest(res, 'So chuong da ton tai trong truyen nay.');
+          chapter.number = nextNumber;
+        }
+        try {
+          ['title','content','preview'].forEach(key => {
+            if (body[key] !== undefined) chapter[key] = validateCleanText(String(body[key]), `chapter.${key}`);
+          });
+        } catch (error) {
+          return badRequest(res, error.message);
+        }
+        if (body.isPremium !== undefined || body.vip !== undefined) chapter.isPremium = Boolean(body.isPremium ?? body.vip);
+        if (body.price !== undefined) chapter.price = Number(body.price);
+        const wasPublic = isPublicChapter(chapter);
+        if (body.status !== undefined) {
+          if (!VALID_CHAPTER_STATUSES.includes(body.status)) return badRequest(res, 'Trang thai chuong khong hop le.');
+          chapter.status = body.status;
+          if (body.status === 'rejected') chapter.rejectionReason = String(body.rejectionReason || 'Can chinh sua truoc khi duyet.').slice(0, 500);
+          if (['approved', 'published'].includes(body.status)) chapter.rejectionReason = '';
+        }
+        const publishError = publicChapterError(chapter, chapter.status);
+        if (publishError) return badRequest(res, publishError);
+        if (body.scheduledAt !== undefined) {
+          const scheduledAt = body.scheduledAt ? new Date(body.scheduledAt) : null;
+          if (scheduledAt && Number.isNaN(scheduledAt.getTime())) return badRequest(res, 'scheduledAt khong hop le.');
+          chapter.scheduledAt = scheduledAt ? scheduledAt.toISOString() : '';
+        }
+        if (body.password !== undefined) chapter.password = String(body.password || '');
+        if (body.content !== undefined) chapter.wordCount = wordCount(chapter.content);
+        chapter.updatedAt = now();
+        if (story) refreshStoryChapterMetadata(db, story);
+        if (!wasPublic && story) notifyChapterPublished(db, story, chapter, admin.id);
+        const after = chapterAdminSummary(db, chapter);
+        logAdminAction(db, admin, 'update_chapter', 'chapter', chapter.id, before, after, '');
+        await persistDb(db, { prune: false, only: ['stories', 'chapters', 'notifications', 'adminLogs'] });
+        return send(res, 200, { chapter: after });
+      }
+
+      if (adminChapterUpdateParamsFast && req.method === 'DELETE') {
+        const admin = await requireSupabaseAdmin(req, res);
+        if (!admin) return;
+        const db = await loadSupabaseAdminChapterDb(adminChapterUpdateParamsFast.id);
+        const index = db.chapters.findIndex(item => item.id === adminChapterUpdateParamsFast.id);
+        if (index === -1) return notFound(res);
+        const [chapter] = db.chapters.splice(index, 1);
+        db.purchases = db.purchases.filter(item => item.chapterId !== chapter.id);
+        db.history = db.history.filter(item => item.chapterId !== chapter.id);
+        const story = db.stories.find(item => item.id === chapter.storyId);
+        if (story) refreshStoryChapterMetadata(db, story);
+        logAdminAction(db, admin, 'delete_chapter', 'chapter', chapter.id, chapter, null, '');
+        await Promise.all([
+          dataStore.deleteRowsByColumn('chapters', 'id', [chapter.id]),
+          dataStore.deleteRowsByColumn('chapter_purchases', 'chapter_id', [chapter.id]),
+          dataStore.deleteRowsByColumn('reading_progress', 'chapter_id', [chapter.id])
+        ]);
+        await persistDb(db, { prune: false, only: ['stories', 'adminLogs'] });
+        clearHomePublicCache();
+        return send(res, 200, { ok: true });
+      }
+
+      if (req.method === 'GET' && pathname === '/api/admin/bootstrap') {
+        const admin = await getSupabaseAuthUser(req);
+        if (!admin || normalizeRole(admin.role) !== 'admin') return unauthorized(res);
+        const db = await loadSupabaseDbFromQueries({
+          users: () => loadSupabaseTable('users'),
+          stories: () => loadSupabaseTable('stories'),
+          chapters: () => loadSupabaseTable('chapters'),
+          reports: () => loadSupabaseTable('reports'),
+          transactions: () => loadSupabaseTable('coin_transactions'),
+          comments: () => loadSupabaseTable('comments'),
+          adminNotifications: () => loadSupabaseTable('admin_notifications'),
+          adminLogs: () => loadSupabaseTable('admin_logs')
+        });
+        return send(res, 200, adminBootstrapResponse(db, admin, url));
+      }
     }
 
     const runDbRequest = async () => {
@@ -3782,10 +4794,12 @@ async function handle(req, res) {
       const approvalStatus = hasApprovalInput ? authorStoryApprovalStatus(body, story.approvalStatus || 'draft') : (story.approvalStatus || 'draft');
       const role = normalizeRole(user.role);
       const hasComboPriceInput = body.comboPrice !== undefined;
+      const hasChapterPriceInput = body.chapterPrice !== undefined;
       const bodyKeys = Object.keys(body || {});
       const comboOnlyUpdate = hasComboPriceInput && bodyKeys.length > 0 && bodyKeys.every(key => key === 'comboPrice');
+      const chapterPriceOnlyUpdate = hasChapterPriceInput && bodyKeys.length > 0 && bodyKeys.every(key => key === 'chapterPrice');
       const payload = normalizeAuthorStoryInput(body, user, story);
-      const inputError = comboOnlyUpdate ? '' : validateAuthorStoryPayload(payload, approvalStatus);
+      const inputError = (comboOnlyUpdate || chapterPriceOnlyUpdate) ? '' : validateAuthorStoryPayload(payload, approvalStatus);
       if (inputError) return badRequest(res, inputError);
       if (hasComboPriceInput && role !== 'admin') {
         const currentComboPrice = Number(story.comboPrice || 0);
@@ -3802,6 +4816,15 @@ async function handle(req, res) {
         story.comboPrice = payload.comboPrice;
         story.comboPriceChangedAt = payload.comboPriceChangedAt ?? story.comboPriceChangedAt ?? '';
         story.comboPriceLocked = payload.comboPriceLocked ?? Boolean(story.comboPriceLocked);
+        story.updatedAt = now();
+        await persistDb(db, { prune: false, only: ['stories'], relationStoryIds: [story.id] });
+        requestPerf.mark('db');
+        requestPerf.log();
+        return send(res, 200, { story: authorStorySummary(db, story, user.id), user: safeUser(user) });
+      }
+      if (chapterPriceOnlyUpdate) {
+        story.chapterPrice = payload.chapterPrice;
+        story.price = payload.price ?? story.price ?? payload.chapterPrice;
         story.updatedAt = now();
         await persistDb(db, { prune: false, only: ['stories'], relationStoryIds: [story.id] });
         requestPerf.mark('db');
@@ -3929,6 +4952,31 @@ async function handle(req, res) {
       return send(res, 200, { ok: true, deleted: ids.length });
     }
 
+    if (req.method === 'PATCH' && pathname === '/api/author/chapters/bulk-price') {
+      const user = requireStoryPublisher(req, res, db);
+      if (!user) return;
+      const body = await parseBody(req);
+      const ids = Array.isArray(body.ids) ? Array.from(new Set(body.ids.map(id => String(id)))) : [];
+      const price = Number(body.price);
+      if (!ids.length) return badRequest(res, 'Danh sach chuong can cap nhat rong.');
+      if (!Number.isFinite(price) || price < 0) return badRequest(res, 'Gia Dau khong hop le.');
+      const chapters = ids.map(id => db.chapters.find(chapter => chapter.id === id));
+      if (chapters.some(chapter => !chapter)) return notFound(res);
+      if (chapters.some(chapter => !canEditChapter(db, user, chapter))) return forbidden(res);
+      const timestamp = now();
+      const isPremium = price > 0;
+      chapters.forEach(chapter => {
+        chapter.isPremium = isPremium;
+        chapter.price = price;
+        chapter.updatedAt = timestamp;
+      });
+      await persistDb(db, { prune: false, only: ['chapters'] });
+      return send(res, 200, {
+        updated: chapters.length,
+        chapters: chapters.map(chapter => authorChapterSummary(db, chapter))
+      });
+    }
+
     const authorStoryReorderParams = match(pathname, '/api/author/stories/:id/chapters/reorder');
     if (authorStoryReorderParams && req.method === 'PATCH') {
       const user = requireStoryPublisher(req, res, db);
@@ -3959,7 +5007,7 @@ async function handle(req, res) {
         chapter.number = item.number;
         chapter.updatedAt = timestamp;
       });
-      refreshStoryChapterMetadata(db, story);
+      refreshStoryChapterMetadata(db, story, { touch: false });
       if (dataStore.storeName() === 'supabase') {
         await dataStore.updateChapterOrderSafely(updates.map(item => ({ ...item, updatedAt: timestamp })));
         await persistDb(db, { prune: false, only: ['stories'], relationStoryIds: [story.id] });
