@@ -259,10 +259,22 @@ function buildEtag(payload) {
   return `"${crypto.createHash('sha1').update(payload).digest('base64url')}"`;
 }
 
+function normalizeEtag(value) {
+  return String(value || '').trim().replace(/^W\//i, '');
+}
+
+function requestHasMatchingEtag(req, etag) {
+  const expected = normalizeEtag(etag);
+  return String(req.headers['if-none-match'] || '')
+    .split(',')
+    .map(normalizeEtag)
+    .some(candidate => candidate === expected || candidate === '*');
+}
+
 function sendCachedJson(req, res, status, body, extraHeaders = {}) {
   const payload = body === undefined ? '' : JSON.stringify(body);
   const etag = buildEtag(payload);
-  if (req.headers['if-none-match'] === etag) {
+  if (requestHasMatchingEtag(req, etag)) {
     res.writeHead(304, {
       ...corsHeaders(req),
       ...defaultCacheHeaders(req),
